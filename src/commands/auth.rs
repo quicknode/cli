@@ -136,7 +136,8 @@ fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validate
         "key": redacted,
         "validated": validated,
     });
-    match global.resolve_format() {
+    let stdout_is_tty = std::io::stdout().is_terminal();
+    match global.resolve_format(stdout_is_tty) {
         crate::output::Format::Json => {
             println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }
@@ -156,4 +157,4 @@ fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validate
     }
 }
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};

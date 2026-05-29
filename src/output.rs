@@ -1,8 +1,11 @@
 //! Output rendering.
 //!
-//! Five formats, selected by the global `--format/-o` flag:
+//! Five formats, selected by the global `--format/-o` flag. When the flag and
+//! the config file both leave the format unset, the default is TTY-aware:
+//! `table` when stdout is a terminal (interactive use), `toon` otherwise
+//! (piped / agent invocations). See [`crate::context::GlobalArgs::resolve_output`].
 //!
-//! - `table` (default): comfy-table with UTF-8 borders for humans on a TTY.
+//! - `table`: comfy-table with UTF-8 borders for humans on a TTY.
 //! - `json`:  pretty-printed JSON via serde_json.
 //! - `yaml`:  YAML via serde_yml — same shape as JSON.
 //! - `md`:    GitHub-flavored markdown tables (same data, markdown borders).

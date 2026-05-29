@@ -48,11 +48,11 @@ Pick a format with `--format <FMT>` (alias `-o <FMT>`):
 
 | `--format` | Best for |
 | --- | --- |
-| `table` (default) | Humans on a TTY. Pretty UTF-8 tables with optional color. |
-| `json`            | Scripts and pipelines (`jq`, `gron`, …). |
-| `yaml`            | Same shape as JSON, easier to skim by eye. |
-| `md`              | GitHub-flavored markdown — paste into PRs, issues, docs. |
-| `toon`            | [Token-Oriented Object Notation](https://github.com/toon-format/toon-rust) — compact serialization optimized for LLM prompts. |
+| `table` | Humans on a TTY. Pretty UTF-8 tables with optional color. Default when stdout is a terminal. |
+| `json`  | Scripts and pipelines (`jq`, `gron`, …). |
+| `yaml`  | Same shape as JSON, easier to skim by eye. |
+| `md`    | GitHub-flavored markdown — paste into PRs, issues, docs. |
+| `toon`  | [Token-Oriented Object Notation](https://github.com/toon-format/toon-rust) — compact serialization optimized for LLM prompts. Default when stdout is **not** a terminal (piped / agent invocations). |
 
 Other output flags:
 
@@ -69,7 +69,7 @@ format = "yaml"   # default --format value
 wide = true       # always show extra columns in table/md output
 ```
 
-CLI flags win over config values. Built-in defaults: `format = "table"`, `wide = false`.
+CLI flags win over config values. Built-in defaults: `format = "table"` when stdout is a TTY, `"toon"` otherwise; `wide = false`.
 
 `qn` follows the [Command Line Interface Guidelines](https://clig.dev/): data on stdout, diagnostics on stderr, meaningful exit codes (0 success, 2 API error, 3 network error, 4 auth/config, 5 needs confirmation), and a documented `-h`/`--help` at every subcommand level.
 

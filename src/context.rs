@@ -3,6 +3,7 @@
 //! Builds the `QuicknodeSdk` from `GlobalArgs`, attaches an `OutputCtx`, and
 //! records where the API key came from so `qn auth whoami` can report it.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use quicknode_sdk::{
@@ -18,7 +19,8 @@ use crate::output::{Format, OutputCtx};
 pub struct GlobalArgs {
     pub api_key: Option<String>,
     /// `None` means the user didn't pass `--format`; resolve via config file
-    /// (then default `Table`) when we build the [`Ctx`].
+    /// (then the TTY-aware default: `Table` on a TTY, `Toon` off) when we
+    /// build the [`Ctx`].
     pub format: Option<Format>,
     pub wide: bool,
     pub no_color: bool,
@@ -30,34 +32,53 @@ pub struct GlobalArgs {
 }
 
 impl GlobalArgs {
-    /// Resolve the output format: CLI flag > config file > `Format::Table`.
+    /// Resolve the output format: CLI flag > config file > TTY-aware default
+    /// (`Table` on a TTY, `Toon` off).
     /// Used by [`Ctx::from_global`] and `auth` (which doesn't build a Ctx).
-    pub fn resolve_format(&self) -> Format {
-        self.resolve_output().0
+    pub fn resolve_format(&self, stdout_is_tty: bool) -> Format {
+        self.resolve_output(stdout_is_tty).0
     }
 
     /// Resolve `(format, wide)` together so we only read the config file once.
     ///
-    /// For each: CLI flag > config file > built-in default. `--wide` is purely
-    /// additive — the flag sets it true; the config file can also set it true;
-    /// otherwise it's false.
-    pub fn resolve_output(&self) -> (Format, bool) {
-        let mut format = self.format;
-        let mut wide = self.wide;
-        if format.is_none() || !wide {
-            if let Some(p) = config::config_path() {
-                if let Ok(Some(cfg)) = config::load_from(&p) {
-                    if format.is_none() {
-                        format = cfg.output.format;
-                    }
-                    if !wide {
-                        wide = cfg.output.wide;
-                    }
-                }
-            }
-        }
-        (format.unwrap_or_default(), wide)
+    /// For each: CLI flag > config file > built-in default. The format default
+    /// is TTY-aware: `Table` when stdout is a terminal, `Toon` otherwise (so
+    /// agents / piped callers get a structured format by default). `--wide` is
+    /// purely additive — the flag sets it true; the config file can also set
+    /// it true; otherwise it's false.
+    pub fn resolve_output(&self, stdout_is_tty: bool) -> (Format, bool) {
+        let (cfg_format, cfg_wide) = self.load_output_config();
+        resolve_output_inner(self.format, self.wide, cfg_format, cfg_wide, stdout_is_tty)
     }
+
+    fn load_output_config(&self) -> (Option<Format>, bool) {
+        let Some(p) = config::config_path() else {
+            return (None, false);
+        };
+        match config::load_from(&p) {
+            Ok(Some(cfg)) => (cfg.output.format, cfg.output.wide),
+            _ => (None, false),
+        }
+    }
+}
+
+/// Pure form of [`GlobalArgs::resolve_output`] — separated so it can be
+/// exhaustively unit-tested without touching the real config file. CLI values
+/// win; otherwise we fall back to config; otherwise the TTY-aware default.
+fn resolve_output_inner(
+    flag_format: Option<Format>,
+    flag_wide: bool,
+    cfg_format: Option<Format>,
+    cfg_wide: bool,
+    stdout_is_tty: bool,
+) -> (Format, bool) {
+    let format = flag_format.or(cfg_format).unwrap_or(if stdout_is_tty {
+        Format::Table
+    } else {
+        Format::Toon
+    });
+    let wide = flag_wide || cfg_wide;
+    (format, wide)
 }
 
 pub struct Ctx {
@@ -76,7 +97,8 @@ impl Ctx {
     pub fn from_global(global: GlobalArgs) -> Result<Self, CliError> {
         let config_path = config::config_path();
         let env_key = config::read_env_api_key();
-        let (format, wide) = global.resolve_output();
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let (format, wide) = global.resolve_output(stdout_is_tty);
 
         let (api_key, key_source) = config::resolve_api_key(
             global.api_key.as_deref(),
@@ -108,7 +130,16 @@ impl Ctx {
         }
 
         let sdk = QuicknodeSdk::new(&full)?;
-        let out = OutputCtx::detect(format, global.no_color, global.quiet, global.verbose, wide);
+        let out = OutputCtx::detect_with(
+            format,
+            global.no_color,
+            global.quiet,
+            global.verbose,
+            wide,
+            stdout_is_tty,
+            std::env::var_os("NO_COLOR"),
+            std::env::var("TERM").ok(),
+        );
 
         Ok(Self {
             sdk,
@@ -117,5 +148,56 @@ impl Ctx {
             key_source,
             config_path,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flag_format_wins_over_config_and_tty_default() {
+        let (f, _) =
+            resolve_output_inner(Some(Format::Json), false, Some(Format::Yaml), false, true);
+        assert_eq!(f, Format::Json);
+        let (f, _) =
+            resolve_output_inner(Some(Format::Json), false, Some(Format::Yaml), false, false);
+        assert_eq!(f, Format::Json);
+    }
+
+    #[test]
+    fn config_format_wins_over_tty_default() {
+        let (f, _) = resolve_output_inner(None, false, Some(Format::Yaml), false, true);
+        assert_eq!(f, Format::Yaml);
+        let (f, _) = resolve_output_inner(None, false, Some(Format::Yaml), false, false);
+        assert_eq!(f, Format::Yaml);
+    }
+
+    #[test]
+    fn default_is_table_when_stdout_is_a_tty() {
+        let (f, _) = resolve_output_inner(None, false, None, false, true);
+        assert_eq!(f, Format::Table);
+    }
+
+    #[test]
+    fn default_is_toon_when_stdout_is_not_a_tty() {
+        let (f, _) = resolve_output_inner(None, false, None, false, false);
+        assert_eq!(f, Format::Toon);
+    }
+
+    #[test]
+    fn wide_is_additive_between_flag_and_config() {
+        // Flag alone.
+        let (_, w) = resolve_output_inner(None, true, None, false, true);
+        assert!(w);
+        // Config alone.
+        let (_, w) = resolve_output_inner(None, false, None, true, true);
+        assert!(w);
+        // Both.
+        let (_, w) = resolve_output_inner(None, true, None, true, true);
+        assert!(w);
+        // Neither.
+        let (_, w) = resolve_output_inner(None, false, None, false, true);
+        assert!(!w);
     }
 }
