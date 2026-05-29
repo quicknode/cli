@@ -2,7 +2,7 @@
 name = "qn"
 version = "0.1.0"
 edition = "2021"
-description = "Command-line interface for the QuickNode SDK"
+description = "Command-line interface for the Quicknode SDK"
 license = "MIT"
 repository = "https://github.com/quicknode/qn"
 rust-version = "1.75"

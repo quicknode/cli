@@ -36,18 +36,19 @@ pub struct Ctx {
 
 impl Ctx {
     /// Construct the SDK + output ctx from `global`. Resolves the API key per
-    /// the documented precedence.
+    /// the documented precedence: flag > env > config file. If none of those
+    /// supply a key we return `CliError::NoApiKey` — regular commands do not
+    /// prompt; the user is directed to `qn auth login`.
     pub fn from_global(global: GlobalArgs) -> Result<Self, CliError> {
         let config_path = config::config_path();
         let env_key = config::read_env_api_key();
-        let can_prompt = !global.no_input && config::can_prompt();
 
         let (api_key, key_source) = config::resolve_api_key(
             global.api_key.as_deref(),
             env_key.as_deref(),
             config_path.as_deref(),
-            can_prompt,
-            config::prompt_for_api_key,
+            false,
+            || unreachable!("prompt disabled for non-auth commands"),
         )?;
 
         let mut full = SdkFullConfig::from_api_key(api_key);

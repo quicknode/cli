@@ -2,11 +2,13 @@
 //!
 //! Resolution order, highest to lowest precedence:
 //!   1. `--api-key` flag
-//!   2. `QN_SDK__API_KEY` env var
+//!   2. `QN_CLI__API_KEY` env var
 //!   3. config file
-//!   4. interactive prompt (TTY only, no --no-input)
 //!
-//! When all four fail we return [`CliError::NoApiKey`] which exits 4.
+//! When all three fail we return [`CliError::NoApiKey`] which exits 4 with a
+//! message directing the user to `qn auth login`. The `qn auth login` command
+//! is the only place that prompts interactively; other commands never block
+//! waiting for input.
 
 use std::fs;
 use std::io::IsTerminal;
@@ -17,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::CliError;
 
-const ENV_API_KEY: &str = "QN_SDK__API_KEY";
+const ENV_API_KEY: &str = "QN_CLI__API_KEY";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
@@ -31,7 +33,7 @@ impl KeySource {
     pub fn label(self) -> &'static str {
         match self {
             KeySource::Flag => "--api-key flag",
-            KeySource::Env => "QN_SDK__API_KEY env var",
+            KeySource::Env => "QN_CLI__API_KEY env var",
             KeySource::ConfigFile => "config file",
             KeySource::Prompt => "interactive prompt",
         }
@@ -115,11 +117,15 @@ pub fn delete_config(path: &Path) -> Result<(), CliError> {
     }
 }
 
-/// Resolves an API key per the documented precedence.
+/// Resolves an API key per the documented precedence: flag > env > config file.
+///
+/// `allow_prompt` and `prompt` exist only so `qn auth login` can opt into the
+/// interactive path. Regular commands pass `allow_prompt = false`; if the
+/// three non-interactive sources fail they get `Err(NoApiKey)`.
 ///
 /// `prompt` is supplied by the caller so tests can inject a deterministic
 /// closure instead of touching the real terminal. In production
-/// [`prompt_for_api_key`] is the implementation.
+/// [`prompt_for_api_key`] is the implementation used by `qn auth login`.
 pub fn resolve_api_key(
     flag: Option<&str>,
     env_key: Option<&str>,
@@ -163,7 +169,7 @@ pub fn can_prompt() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
-/// Reads `QN_SDK__API_KEY` from the environment.
+/// Reads `QN_CLI__API_KEY` from the environment.
 pub fn read_env_api_key() -> Option<String> {
     std::env::var(ENV_API_KEY)
         .ok()
@@ -174,7 +180,7 @@ pub fn read_env_api_key() -> Option<String> {
 pub fn prompt_for_api_key() -> Result<String, CliError> {
     use dialoguer::Password;
     Password::new()
-        .with_prompt("QuickNode API key")
+        .with_prompt("Quicknode API key")
         .interact()
         .map_err(|e| CliError::Io(std::io::Error::other(e)))
 }

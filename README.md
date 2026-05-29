@@ -1,6 +1,6 @@
-# qn — QuickNode CLI
+# qn — Quicknode CLI
 
-`qn` is a command-line interface for the [QuickNode SDK](https://crates.io/crates/quicknode-sdk). It exposes the full surface of the SDK — endpoints, streams, webhooks, KV store, teams, usage, metrics, billing — as a noun-verb CLI that's friendly to both humans and scripts.
+`qn` is a command-line interface for the [Quicknode SDK](https://crates.io/crates/quicknode-sdk). It exposes the full surface of the SDK — endpoints, streams, webhooks, KV store, teams, usage, metrics, billing — as a noun-verb CLI that's friendly to both humans and scripts.
 
 ```
 $ qn endpoint list
@@ -29,9 +29,12 @@ cargo install --path .
 `qn` resolves your API key from the first source that matches:
 
 1. `--api-key <KEY>` flag
-2. `QN_SDK__API_KEY` environment variable
+2. `QN_CLI__API_KEY` environment variable
 3. `~/.config/qn/config.toml` (managed by `qn auth login`)
-4. Interactive prompt (TTY only — `--no-input` disables it for CI)
+
+If none match, `qn` exits with code 4 and tells you to run `qn auth login`.
+Regular commands never prompt — only `qn auth login` does. This keeps scripts
+and CI deterministic.
 
 ```sh
 qn auth login      # prompts for the key, writes it to ~/.config/qn/config.toml
@@ -144,18 +147,17 @@ qn completions powershell > qn.ps1
 
 ## Configuration via environment
 
-The SDK's environment variables work directly:
-
 | Variable | Description |
 |---|---|
-| `QN_SDK__API_KEY` | Your QuickNode API key |
-| `QN_SDK__HTTP__TIMEOUT_SECS` | HTTP request timeout (default 30) |
-| `QN_SDK__ADMIN__BASE_URL` | Override admin API base URL |
-| `QN_SDK__STREAMS__BASE_URL` | Override streams base URL |
-| `QN_SDK__WEBHOOKS__BASE_URL` | Override webhooks base URL |
-| `QN_SDK__KVSTORE__BASE_URL` | Override KV store base URL |
+| `QN_CLI__API_KEY` | Your Quicknode API key |
 
-The hidden `--base-url <URL>` flag sets all four sub-client base URLs at once (used for integration tests and on-prem mirrors).
+`qn` deliberately uses its own `QN_CLI__` namespace so the CLI's env vars don't
+collide with — or silently leak into — direct use of the underlying SDK. The
+CLI hands the key to the SDK explicitly; it does not read the SDK's
+`QN_SDK__*` environment namespace.
+
+The hidden `--base-url <URL>` flag overrides the API host for all four
+sub-clients at once (used for integration tests and on-prem mirrors).
 
 ## Exit codes
 

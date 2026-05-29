@@ -10,7 +10,7 @@ use predicates::prelude::*;
 fn bin() -> Command {
     let mut c = Command::cargo_bin("qn").expect("qn binary built");
     // Make sure no inherited env hijacks the tests.
-    c.env_remove("QN_SDK__API_KEY");
+    c.env_remove("QN_CLI__API_KEY");
     c.env_remove("NO_COLOR");
     c.env_remove("HOME"); // so config lookup doesn't read a real ~/.config/qn
     c.env("HOME", std::env::temp_dir());

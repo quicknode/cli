@@ -7,7 +7,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CliError {
-    #[error("no API key found. Set QN_SDK__API_KEY or run 'qn auth login'")]
+    #[error("no API key found. Set QN_CLI__API_KEY or run 'qn auth login'")]
     NoApiKey,
 
     #[error("config file at {path} is invalid: {source}")]
@@ -77,9 +77,9 @@ pub fn render(err: &CliError, verbose: bool) -> String {
                 401 | 403 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
                 404 => "not found.".to_string(),
                 422 => "the API rejected the request as invalid.".to_string(),
-                429 => "rate limited by the QuickNode API. Try again shortly.".to_string(),
+                429 => "rate limited by the Quicknode API. Try again shortly.".to_string(),
                 500..=599 => format!(
-                    "QuickNode API is having issues (HTTP {code}). Try again or check status.quicknode.com."
+                    "Quicknode API is having issues (HTTP {code}). Try again or check status.quicknode.com."
                 ),
                 _ => format!("API returned HTTP {code}."),
             };
@@ -97,7 +97,7 @@ pub fn render(err: &CliError, verbose: bool) -> String {
                 Some(HttpKind::Connect) => {
                     "could not connect to api.quicknode.com. Check your network."
                 }
-                _ => "HTTP transport failure talking to the QuickNode API.",
+                _ => "HTTP transport failure talking to the Quicknode API.",
             };
             if verbose {
                 format!("Error: {msg}\n{sdk}")

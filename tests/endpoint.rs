@@ -42,7 +42,7 @@ async fn list_endpoints_json_output_is_valid_json() {
 
     let output = Command::cargo_bin("qn")
         .unwrap()
-        .env_remove("QN_SDK__API_KEY")
+        .env_remove("QN_CLI__API_KEY")
         .env_remove("HOME")
         .env("HOME", std::env::temp_dir())
         .args([

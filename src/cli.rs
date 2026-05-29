@@ -12,22 +12,22 @@ use crate::commands;
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
 
-/// qn — command-line interface for the QuickNode API.
+/// qn — command-line interface for the Quicknode API.
 #[derive(Debug, Parser)]
 #[command(
     name = "qn",
     version,
-    about = "Command-line interface for the QuickNode API.",
-    long_about = "qn lets you manage QuickNode endpoints, streams, webhooks, and the KV store from the terminal.\n\n\
+    about = "Command-line interface for the Quicknode API.",
+    long_about = "qn lets you manage Quicknode endpoints, streams, webhooks, and the KV store from the terminal.\n\n\
                   Use `qn <noun> --help` (e.g. `qn endpoint --help`) for command details.\n\n\
-                  Authentication is resolved in this order: --api-key flag, QN_SDK__API_KEY env var,\n\
-                  ~/.config/qn/config.toml, then an interactive prompt when stdin is a TTY.",
+                  Authentication is resolved in this order: --api-key flag, QN_CLI__API_KEY env var,\n\
+                  ~/.config/qn/config.toml. Run `qn auth login` to save a key the first time.",
     propagate_version = true,
     disable_help_subcommand = true
 )]
 pub struct Cli {
-    /// API key. Overrides QN_SDK__API_KEY and the config file.
-    #[arg(long, global = true, env = "QN_SDK__API_KEY", hide_env_values = true)]
+    /// API key. Overrides QN_CLI__API_KEY and the config file.
+    #[arg(long, global = true, env = "QN_CLI__API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,
 
     /// Emit machine-readable JSON instead of human-friendly tables.
@@ -54,7 +54,7 @@ pub struct Cli {
     #[arg(short = 'y', long = "yes", global = true, action = ArgAction::Count)]
     pub yes: u8,
 
-    /// Override the QuickNode API base URL (used for testing or on-prem mirrors).
+    /// Override the Quicknode API base URL (used for testing or on-prem mirrors).
     /// All four sub-clients (admin/streams/webhooks/kv) hang off this host.
     #[arg(long, global = true, hide = true)]
     pub base_url: Option<String>,
@@ -104,7 +104,7 @@ pub enum Command {
     #[command(visible_alias = "webhooks")]
     Webhook(commands::webhook::Args),
 
-    /// Manage the QuickNode KV store (sets and lists).
+    /// Manage the Quicknode KV store (sets and lists).
     Kv(commands::kv::Args),
 
     /// Generate shell completions.

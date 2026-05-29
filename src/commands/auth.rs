@@ -91,49 +91,33 @@ fn logout(global: GlobalArgs) -> Result<(), CliError> {
 }
 
 fn status(global: GlobalArgs) -> Result<(), CliError> {
-    let (source, redacted) = resolve_for_status(&global)?;
-    print_status(&global, source, &redacted, None);
+    let (key, source) = resolve_non_interactive(&global)?;
+    print_status(&global, source, &redact(&key), None);
     Ok(())
 }
 
 async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
-    let (source, redacted) = resolve_for_status(&global)?;
-    // Build SDK and call list_chains as a cheap "does this key work?" probe.
-    let env_key = config::read_env_api_key();
-    let path = config::config_path();
-    let allow_prompt = !global.no_input && config::can_prompt();
-    let (real_key, _src) = config::resolve_api_key(
-        global.api_key.as_deref(),
-        env_key.as_deref(),
-        path.as_deref(),
-        allow_prompt,
-        config::prompt_for_api_key,
-    )?;
-    let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(real_key))?;
+    let (key, source) = resolve_non_interactive(&global)?;
+    let redacted = redact(&key);
+    let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key))?;
     let result = sdk.admin.list_chains().await;
     let ok = result.is_ok();
     print_status(&global, source, &redacted, Some(ok));
-    if let Err(e) = result {
-        Err(e.into())
-    } else {
-        Ok(())
-    }
+    result.map(|_| ()).map_err(Into::into)
 }
 
-/// Resolves the key just like the rest of the CLI, but returns only the source
-/// + a redacted display string (so we never echo the secret to stdout).
-fn resolve_for_status(global: &GlobalArgs) -> Result<(KeySource, String), CliError> {
+/// Resolves the key just like the rest of the CLI — no prompting. Returns the
+/// raw key (callers must redact before printing) along with its source.
+fn resolve_non_interactive(global: &GlobalArgs) -> Result<(String, KeySource), CliError> {
     let env_key = config::read_env_api_key();
     let path = config::config_path();
-    let allow_prompt = !global.no_input && config::can_prompt();
-    let (key, source) = config::resolve_api_key(
+    config::resolve_api_key(
         global.api_key.as_deref(),
         env_key.as_deref(),
         path.as_deref(),
-        allow_prompt,
-        config::prompt_for_api_key,
-    )?;
-    Ok((source, redact(&key)))
+        false,
+        || unreachable!("prompt disabled for auth status/whoami"),
+    )
 }
 
 /// Show the last 4 chars only.
