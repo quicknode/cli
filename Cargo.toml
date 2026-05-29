@@ -1,0 +1,43 @@
+[package]
+name = "qn"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for the QuickNode SDK"
+license = "MIT"
+repository = "https://github.com/quicknode/qn"
+rust-version = "1.75"
+
+[[bin]]
+name = "qn"
+path = "src/main.rs"
+
+[lib]
+name = "qn"
+path = "src/lib.rs"
+
+[dependencies]
+quicknode-sdk = "0.1"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+comfy-table = { version = "7", default-features = false }
+owo-colors = { version = "4", features = ["supports-colors"] }
+supports-color = "3"
+dialoguer = "0.11"
+directories = "5"
+toml = "0.8"
+anyhow = "1"
+thiserror = "1"
+humantime = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false }
+wiremock = "0.6"
+assert_cmd = "2"
+predicates = "3"
+insta = { version = "1", features = ["yaml"] }
+tempfile = "3"
+serial_test = "3"

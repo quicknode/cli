@@ -1,0 +1,165 @@
+//! Top-level clap derive entry point.
+//!
+//! This file is the single source of truth for the CLI shape. Subcommand
+//! bodies live under `commands::*` and dispatch happens via [`Cli::run`].
+
+use std::io::Write;
+
+use clap::{ArgAction, CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+
+use crate::commands;
+use crate::context::{Ctx, GlobalArgs};
+use crate::errors::CliError;
+
+/// qn — command-line interface for the QuickNode API.
+#[derive(Debug, Parser)]
+#[command(
+    name = "qn",
+    version,
+    about = "Command-line interface for the QuickNode API.",
+    long_about = "qn lets you manage QuickNode endpoints, streams, webhooks, and the KV store from the terminal.\n\n\
+                  Use `qn <noun> --help` (e.g. `qn endpoint --help`) for command details.\n\n\
+                  Authentication is resolved in this order: --api-key flag, QN_SDK__API_KEY env var,\n\
+                  ~/.config/qn/config.toml, then an interactive prompt when stdin is a TTY.",
+    propagate_version = true,
+    disable_help_subcommand = true
+)]
+pub struct Cli {
+    /// API key. Overrides QN_SDK__API_KEY and the config file.
+    #[arg(long, global = true, env = "QN_SDK__API_KEY", hide_env_values = true)]
+    pub api_key: Option<String>,
+
+    /// Emit machine-readable JSON instead of human-friendly tables.
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Disable ANSI colors. Also honored: NO_COLOR env var, TERM=dumb, non-TTY stdout.
+    #[arg(long, global = true)]
+    pub no_color: bool,
+
+    /// Suppress non-essential output (state-change confirmations on stderr).
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
+
+    /// Verbose output: include error bodies and other details.
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
+    /// Never prompt interactively; fail with a clear message if input is needed.
+    #[arg(long, global = true)]
+    pub no_input: bool,
+
+    /// Skip confirmation prompts. Pass twice for destructive bulk operations like `stream delete-all`.
+    #[arg(short = 'y', long = "yes", global = true, action = ArgAction::Count)]
+    pub yes: u8,
+
+    /// Override the QuickNode API base URL (used for testing or on-prem mirrors).
+    /// All four sub-clients (admin/streams/webhooks/kv) hang off this host.
+    #[arg(long, global = true, hide = true)]
+    pub base_url: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Manage CLI authentication (API key).
+    Auth(commands::auth::Args),
+
+    /// Manage RPC endpoints on your account.
+    #[command(visible_alias = "endpoints")]
+    Endpoint(commands::endpoint::Args),
+
+    /// Manage account-level tags.
+    #[command(visible_alias = "tags")]
+    Tag(commands::tag::Args),
+
+    /// Manage teams.
+    #[command(visible_alias = "teams")]
+    Team(commands::team::Args),
+
+    /// View account usage.
+    Usage(commands::usage::Args),
+
+    /// View account or endpoint metrics.
+    Metrics(commands::metrics::Args),
+
+    /// List supported blockchains.
+    #[command(visible_alias = "chains")]
+    Chain(commands::chain::Args),
+
+    /// View invoices and payments.
+    Billing(commands::billing::Args),
+
+    /// Bulk operations across many endpoints.
+    Bulk(commands::bulk::Args),
+
+    /// Manage blockchain data streams.
+    #[command(visible_alias = "streams")]
+    Stream(commands::stream::Args),
+
+    /// Manage filter-template webhooks.
+    #[command(visible_alias = "webhooks")]
+    Webhook(commands::webhook::Args),
+
+    /// Manage the QuickNode KV store (sets and lists).
+    Kv(commands::kv::Args),
+
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+}
+
+impl Cli {
+    /// Build a [`GlobalArgs`] suitable for [`Ctx::from_global`].
+    pub fn global_args(&self) -> GlobalArgs {
+        GlobalArgs {
+            api_key: self.api_key.clone(),
+            json: self.json,
+            no_color: self.no_color,
+            quiet: self.quiet,
+            verbose: self.verbose,
+            no_input: self.no_input,
+            yes_count: self.yes,
+            base_url: self.base_url.clone(),
+        }
+    }
+
+    /// Dispatch the parsed command.
+    ///
+    /// Some commands (auth, completions) are handled without constructing the
+    /// SDK — they have nothing to talk to and shouldn't trigger an API-key
+    /// prompt.
+    pub async fn run(self) -> Result<(), CliError> {
+        let global = self.global_args();
+        match self.command {
+            Command::Completions { shell } => {
+                let mut cmd = <Self as CommandFactory>::command();
+                let bin_name = cmd.get_name().to_string();
+                let mut out = std::io::stdout().lock();
+                clap_complete::generate(shell, &mut cmd, bin_name, &mut out);
+                out.flush()?;
+                Ok(())
+            }
+            Command::Auth(args) => commands::auth::run(args, global).await,
+            Command::Endpoint(args) => {
+                commands::endpoint::run(args, Ctx::from_global(global)?).await
+            }
+            Command::Tag(args) => commands::tag::run(args, Ctx::from_global(global)?).await,
+            Command::Team(args) => commands::team::run(args, Ctx::from_global(global)?).await,
+            Command::Usage(args) => commands::usage::run(args, Ctx::from_global(global)?).await,
+            Command::Metrics(args) => commands::metrics::run(args, Ctx::from_global(global)?).await,
+            Command::Chain(args) => commands::chain::run(args, Ctx::from_global(global)?).await,
+            Command::Billing(args) => commands::billing::run(args, Ctx::from_global(global)?).await,
+            Command::Bulk(args) => commands::bulk::run(args, Ctx::from_global(global)?).await,
+            Command::Stream(args) => commands::stream::run(args, Ctx::from_global(global)?).await,
+            Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
+            Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
+        }
+    }
+}

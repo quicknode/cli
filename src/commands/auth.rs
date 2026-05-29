@@ -1,0 +1,166 @@
+//! `qn auth {login,logout,whoami,status}` — manage the CLI's stored API key.
+//!
+//! Login: prompts for the key (hidden input), writes `~/.config/qn/config.toml`.
+//! Logout: deletes that file.
+//! Whoami: shows where the resolved key came from, and confirms it works by
+//! calling a low-cost API (chain list).
+//! Status: same as whoami minus the network round-trip.
+
+use clap::{Args as ClapArgs, Subcommand};
+use quicknode_sdk::{QuicknodeSdk, SdkFullConfig};
+
+use crate::config::{self, KeySource};
+use crate::context::GlobalArgs;
+use crate::errors::CliError;
+
+#[derive(Debug, ClapArgs)]
+pub struct Args {
+    #[command(subcommand)]
+    pub cmd: AuthCmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCmd {
+    /// Prompt for an API key and save it to ~/.config/qn/config.toml.
+    Login(LoginArgs),
+    /// Delete the saved API key.
+    Logout,
+    /// Show where the API key would come from, and confirm it works against the API.
+    Whoami,
+    /// Show where the API key would come from (no network call).
+    Status,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct LoginArgs {
+    /// Provide the API key directly instead of being prompted. Useful for CI.
+    #[arg(long)]
+    pub api_key: Option<String>,
+}
+
+pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
+    match args.cmd {
+        AuthCmd::Login(la) => login(la, global).await,
+        AuthCmd::Logout => logout(global),
+        AuthCmd::Whoami => whoami(global).await,
+        AuthCmd::Status => status(global),
+    }
+}
+
+async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
+    let path = config::config_path().ok_or_else(|| {
+        CliError::Arg("no config directory available on this platform".to_string())
+    })?;
+
+    let key = match args.api_key.or(global.api_key) {
+        Some(k) => k.trim().to_string(),
+        None => {
+            if !config::can_prompt() || global.no_input {
+                return Err(CliError::Arg(
+                    "no TTY available; pass --api-key to log in non-interactively".to_string(),
+                ));
+            }
+            config::prompt_for_api_key()?
+        }
+    };
+
+    if key.is_empty() {
+        return Err(CliError::Arg("API key cannot be empty".to_string()));
+    }
+
+    // Quick validation against the API so we don't silently save a bogus key.
+    let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key.clone()))?;
+    sdk.admin.list_chains().await?;
+
+    config::save_api_key(&path, &key)?;
+    if !global.quiet {
+        let _ = writeln!(std::io::stderr(), "✓ Saved API key to {}", path.display());
+    }
+    Ok(())
+}
+
+fn logout(global: GlobalArgs) -> Result<(), CliError> {
+    let path = config::config_path().ok_or_else(|| {
+        CliError::Arg("no config directory available on this platform".to_string())
+    })?;
+    config::delete_config(&path)?;
+    if !global.quiet {
+        let _ = writeln!(std::io::stderr(), "✓ Removed saved API key");
+    }
+    Ok(())
+}
+
+fn status(global: GlobalArgs) -> Result<(), CliError> {
+    let (source, redacted) = resolve_for_status(&global)?;
+    print_status(&global, source, &redacted, None);
+    Ok(())
+}
+
+async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
+    let (source, redacted) = resolve_for_status(&global)?;
+    // Build SDK and call list_chains as a cheap "does this key work?" probe.
+    let env_key = config::read_env_api_key();
+    let path = config::config_path();
+    let allow_prompt = !global.no_input && config::can_prompt();
+    let (real_key, _src) = config::resolve_api_key(
+        global.api_key.as_deref(),
+        env_key.as_deref(),
+        path.as_deref(),
+        allow_prompt,
+        config::prompt_for_api_key,
+    )?;
+    let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(real_key))?;
+    let result = sdk.admin.list_chains().await;
+    let ok = result.is_ok();
+    print_status(&global, source, &redacted, Some(ok));
+    if let Err(e) = result {
+        Err(e.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Resolves the key just like the rest of the CLI, but returns only the source
+/// + a redacted display string (so we never echo the secret to stdout).
+fn resolve_for_status(global: &GlobalArgs) -> Result<(KeySource, String), CliError> {
+    let env_key = config::read_env_api_key();
+    let path = config::config_path();
+    let allow_prompt = !global.no_input && config::can_prompt();
+    let (key, source) = config::resolve_api_key(
+        global.api_key.as_deref(),
+        env_key.as_deref(),
+        path.as_deref(),
+        allow_prompt,
+        config::prompt_for_api_key,
+    )?;
+    Ok((source, redact(&key)))
+}
+
+/// Show the last 4 chars only.
+fn redact(key: &str) -> String {
+    let n = key.chars().count();
+    if n <= 4 {
+        "****".to_string()
+    } else {
+        format!("****{}", &key[key.len().saturating_sub(4)..])
+    }
+}
+
+fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validated: Option<bool>) {
+    if global.json {
+        let v = serde_json::json!({
+            "source": source.label(),
+            "key": redacted,
+            "validated": validated,
+        });
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else {
+        println!("source : {}", source.label());
+        println!("key    : {}", redacted);
+        if let Some(ok) = validated {
+            println!("status : {}", if ok { "valid" } else { "rejected by API" });
+        }
+    }
+}
+
+use std::io::Write;
