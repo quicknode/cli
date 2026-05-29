@@ -19,6 +19,26 @@ use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 pub struct EndpointsView(pub GetEndpointsResponse);
 
 impl Render for EndpointsView {
+    // SDK ships `tags: Vec<EndpointTag>` on every Endpoint. That nested struct
+    // array blocks TOON's compact tabular form. For TOON only, project tags
+    // down to their labels — `tag_id` isn't user-facing here. JSON/YAML keep
+    // the full struct via the derived `Serialize`.
+    fn toon_projection(&self) -> Option<serde_json::Value> {
+        let mut v = serde_json::to_value(&self.0).ok()?;
+        if let Some(data) = v.get_mut("data").and_then(|d| d.as_array_mut()) {
+            for ep in data {
+                if let Some(tags) = ep.get_mut("tags").and_then(|t| t.as_array_mut()) {
+                    let labels: Vec<serde_json::Value> = tags
+                        .iter()
+                        .filter_map(|t| t.get("label").cloned())
+                        .collect();
+                    *ep.get_mut("tags").unwrap() = serde_json::Value::Array(labels);
+                }
+            }
+        }
+        Some(v)
+    }
+
     fn render_table(
         &self,
         w: &mut dyn Write,
@@ -218,4 +238,95 @@ pub(crate) fn metric_series(
         t.add_row(vec![Cell::new(ts), Cell::new(v)]);
     }
     write_table(w, &t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quicknode_sdk::admin::{Endpoint, EndpointTag, Pagination};
+
+    fn fixture() -> GetEndpointsResponse {
+        GetEndpointsResponse {
+            data: vec![
+                Endpoint {
+                    id: "ep-1".into(),
+                    name: "ep-1".into(),
+                    label: Some("prod-1".into()),
+                    status: "active".into(),
+                    chain: "ethereum".into(),
+                    network: "mainnet".into(),
+                    is_dedicated: false,
+                    is_flat_rate: false,
+                    http_url: "https://ep-1.example".into(),
+                    wss_url: None,
+                    tags: vec![
+                        EndpointTag {
+                            tag_id: 1,
+                            label: "prod".into(),
+                        },
+                        EndpointTag {
+                            tag_id: 2,
+                            label: "eu".into(),
+                        },
+                    ],
+                    is_multichain: false,
+                },
+                Endpoint {
+                    id: "ep-2".into(),
+                    name: "ep-2".into(),
+                    label: None,
+                    status: "paused".into(),
+                    chain: "solana".into(),
+                    network: "mainnet".into(),
+                    is_dedicated: true,
+                    is_flat_rate: false,
+                    http_url: "https://ep-2.example".into(),
+                    wss_url: None,
+                    tags: vec![],
+                    is_multichain: false,
+                },
+            ],
+            pagination: Some(Pagination {
+                total: 2,
+                limit: 20,
+                offset: 0,
+            }),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn endpoints_view_json_keeps_full_endpoint_tag_struct() {
+        // Layer 2 must be TOON-only: JSON consumers still see `tag_id` + `label`.
+        let view = EndpointsView(fixture());
+        let json = serde_json::to_value(&view).unwrap();
+        let tags = &json["data"][0]["tags"];
+        assert!(
+            tags.is_array(),
+            "tags should still be an array, got: {tags}"
+        );
+        assert_eq!(tags[0]["tag_id"], 1);
+        assert_eq!(tags[0]["label"], "prod");
+    }
+
+    #[test]
+    fn endpoints_view_toon_projection_reduces_tags_to_labels() {
+        let view = EndpointsView(fixture());
+        let projected = view.toon_projection().expect("projection runs");
+        let tags = &projected["data"][0]["tags"];
+        assert_eq!(tags, &serde_json::json!(["prod", "eu"]));
+        // Second endpoint has no tags → still an empty array.
+        assert_eq!(projected["data"][1]["tags"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn endpoints_view_toon_snapshot() {
+        // Locks the compact tabular shape so any regression to verbose
+        // per-object output is loud.
+        let view = EndpointsView(fixture());
+        let mut json = view.toon_projection().expect("projection runs");
+        crate::output::flatten_primitive_arrays(&mut json);
+        let s = toon_format::encode_default(&json).unwrap();
+        insta::assert_snapshot!(s);
+    }
 }

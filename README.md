@@ -4,27 +4,28 @@
 
 ```
 $ qn endpoint list
-┌─────────┬─────────┬────────┬───────────────────┬───────┬───────┐
-│ ID      │ LABEL   │ STATUS │ CHAIN/NETWORK     │ TYPE  │ MULTI │
-╞═════════╪═════════╪════════╪═══════════════════╪═══════╪═══════╡
-│ ep-1234 │ prod    │ active │ ethereum/mainnet  │ shared│ no    │
-└─────────┴─────────┴────────┴───────────────────┴───────┴───────┘
+ID    LABEL       STATUS  CHAIN/NETWORK     TYPE       MULTI
+ep-1  production  active  ethereum/mainnet  shared     yes
+ep-2  —           paused  solana/mainnet    dedicated  no
+showing 1–2 of 2
+
+$ qn endpoint list --wide
+ID    LABEL       STATUS  CHAIN/NETWORK     TYPE       MULTI  HTTP                    WSS
+ep-1  production  active  ethereum/mainnet  shared     yes    https://ep-1.example    —
+ep-2  —           paused  solana/mainnet    dedicated  no     https://ep-2.example    —
+showing 1–2 of 2
 ```
 
 ## Installation
 
 ```sh
-cargo install qn
-```
-
-Or build from source:
-
-```sh
-git clone https://github.com/quicknode/qn && cd qn
+git clone git@github.com:quicknode/cli.git && cd cli
 cargo install --path .
 ```
 
 ## Authentication
+
+You will need a Quicknode API key to get started. Once you have that, you can run `qn auth login`
 
 `qn` resolves your API key from the first source that matches:
 

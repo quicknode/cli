@@ -129,6 +129,14 @@ pub trait Render: Serialize {
     /// [`new_table`] (which picks the right preset for the current `ctx.format`)
     /// for tabular data so markdown and table formats share one code path.
     fn render_table(&self, w: &mut dyn Write, ctx: &OutputCtx) -> std::io::Result<()>;
+
+    /// Override only when the default `Serialize` shape produces TOON output
+    /// that can't tabularize — typically a `Vec<struct>` field on each row of a
+    /// list response. The returned [`serde_json::Value`] is used **only** for
+    /// TOON encoding (JSON/YAML stay lossless via the default `Serialize` impl).
+    fn toon_projection(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// Top-level emit: serializes through the chosen format.
@@ -143,8 +151,20 @@ pub fn emit<T: Render>(ctx: &OutputCtx, value: &T) -> Result<(), CliError> {
             serde_yml::to_writer(&mut out, value).map_err(|e| CliError::Format(e.to_string()))?;
         }
         Format::Toon => {
+            // TOON tabularizes uniform arrays of primitives (one CSV row per
+            // record) but bails to a verbose per-object form as soon as a row
+            // has an Array or Object field. Two interventions, TOON-only:
+            //   1. Render::toon_projection lets a view project Vec<struct>
+            //      fields down to primitives (lossless JSON/YAML preserved).
+            //   2. flatten_primitive_arrays joins primitive-only arrays inside
+            //      array-of-objects so the tabular check passes.
+            let mut json = match value.toon_projection() {
+                Some(v) => v,
+                None => serde_json::to_value(value).map_err(|e| CliError::Format(e.to_string()))?,
+            };
+            flatten_primitive_arrays(&mut json);
             let s =
-                toon_format::encode_default(value).map_err(|e| CliError::Format(e.to_string()))?;
+                toon_format::encode_default(&json).map_err(|e| CliError::Format(e.to_string()))?;
             out.write_all(s.as_bytes())?;
             if !s.ends_with('\n') {
                 out.write_all(b"\n")?;
@@ -155,6 +175,69 @@ pub fn emit<T: Render>(ctx: &OutputCtx, value: &T) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Walks `value` and, for every object that lives inside an array, replaces
+/// any field whose value is a primitive-only array with a single string of the
+/// comma-joined elements. This unlocks TOON's tabular form for the common case
+/// where a row has e.g. `tags: ["prod","staging"]`.
+///
+/// Scope is deliberately narrow: only fields *inside array elements* are
+/// joined. A top-level `Value::Array` of primitives is left alone — TOON
+/// already renders that form compactly via its own primitive-array rule.
+/// Non-primitive arrays (arrays of objects, arrays of arrays) are also left
+/// alone; those need a [`Render::toon_projection`] to summarize.
+pub(crate) fn flatten_primitive_arrays(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Array(arr) => {
+            for el in arr.iter_mut() {
+                if let Value::Object(obj) = el {
+                    for v in obj.values_mut() {
+                        if let Value::Array(inner) = v {
+                            // Empty arrays count: an empty `Vec<EndpointTag>`
+                            // still blocks tabular until we collapse it.
+                            if inner.iter().all(is_json_primitive) {
+                                *v = Value::String(join_primitives(inner));
+                                continue;
+                            }
+                        }
+                        flatten_primitive_arrays(v);
+                    }
+                } else {
+                    flatten_primitive_arrays(el);
+                }
+            }
+        }
+        Value::Object(obj) => {
+            for v in obj.values_mut() {
+                flatten_primitive_arrays(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_json_primitive(v: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    )
+}
+
+fn join_primitives(arr: &[serde_json::Value]) -> String {
+    use serde_json::Value;
+    arr.iter()
+        .map(|v| match v {
+            Value::Null => String::new(),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(n) => n.to_string(),
+            Value::String(s) => s.clone(),
+            _ => unreachable!("guarded by is_json_primitive"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Builds a fresh table.
@@ -406,5 +489,76 @@ mod tests {
         assert!(Format::Toon.is_structured());
         assert!(!Format::Table.is_structured());
         assert!(!Format::Md.is_structured());
+    }
+
+    #[test]
+    fn flatten_joins_primitive_array_inside_array_element() {
+        let mut v = serde_json::json!({"data": [{"id": 1, "tags": ["a", "b", "c"]}]});
+        flatten_primitive_arrays(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({"data": [{"id": 1, "tags": "a, b, c"}]})
+        );
+    }
+
+    #[test]
+    fn flatten_collapses_empty_primitive_array_to_empty_string() {
+        let mut v = serde_json::json!({"data": [{"tags": []}]});
+        flatten_primitive_arrays(&mut v);
+        assert_eq!(v, serde_json::json!({"data": [{"tags": ""}]}));
+    }
+
+    #[test]
+    fn flatten_leaves_top_level_primitive_array_alone() {
+        // Top-level primitive arrays are TOON-friendly already (`tags[2]: a,b`),
+        // and joining them would change the semantics observed by callers.
+        let mut v = serde_json::json!({"tags": ["a", "b"]});
+        flatten_primitive_arrays(&mut v);
+        assert_eq!(v, serde_json::json!({"tags": ["a", "b"]}));
+    }
+
+    #[test]
+    fn flatten_leaves_array_of_objects_alone() {
+        // The generic walker doesn't know how to summarize an array of
+        // structs — that's `Render::toon_projection`'s job.
+        let mut v = serde_json::json!({"data": [{"tags": [{"tag_id": 1, "label": "x"}]}]});
+        flatten_primitive_arrays(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({"data": [{"tags": [{"tag_id": 1, "label": "x"}]}]})
+        );
+    }
+
+    #[test]
+    fn flatten_preserves_sibling_pagination_object() {
+        let mut v = serde_json::json!({
+            "data": [{"id": 1, "tags": ["x"]}],
+            "pagination": {"total": 1, "limit": 100, "offset": 0}
+        });
+        flatten_primitive_arrays(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "data": [{"id": 1, "tags": "x"}],
+                "pagination": {"total": 1, "limit": 100, "offset": 0}
+            })
+        );
+    }
+
+    #[test]
+    fn flatten_then_toon_emits_tabular_header() {
+        let mut v = serde_json::json!({
+            "data": [
+                {"id": 1, "name": "a", "tags": ["prod"]},
+                {"id": 2, "name": "b", "tags": []}
+            ]
+        });
+        flatten_primitive_arrays(&mut v);
+        let s = toon_format::encode_default(&v).unwrap();
+        assert!(
+            s.contains("data[2]{") && s.contains("}:"),
+            "expected tabular header, got:\n{s}"
+        );
+        assert!(s.contains("prod"), "got:\n{s}");
     }
 }
