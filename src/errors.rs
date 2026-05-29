@@ -43,6 +43,9 @@ pub enum CliError {
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    #[error("could not serialize output: {0}")]
+    Format(String),
 }
 
 /// Maps a [`CliError`] to a process exit code per the plan.

@@ -131,18 +131,27 @@ fn redact(key: &str) -> String {
 }
 
 fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validated: Option<bool>) {
-    if global.json {
-        let v = serde_json::json!({
-            "source": source.label(),
-            "key": redacted,
-            "validated": validated,
-        });
-        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-    } else {
-        println!("source : {}", source.label());
-        println!("key    : {}", redacted);
-        if let Some(ok) = validated {
-            println!("status : {}", if ok { "valid" } else { "rejected by API" });
+    let v = serde_json::json!({
+        "source": source.label(),
+        "key": redacted,
+        "validated": validated,
+    });
+    match global.resolve_format() {
+        crate::output::Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        }
+        crate::output::Format::Yaml => {
+            print!("{}", serde_yml::to_string(&v).unwrap_or_default());
+        }
+        crate::output::Format::Toon => {
+            println!("{}", toon_format::encode_default(&v).unwrap_or_default());
+        }
+        crate::output::Format::Table | crate::output::Format::Md => {
+            println!("source : {}", source.label());
+            println!("key    : {}", redacted);
+            if let Some(ok) = validated {
+                println!("status : {}", if ok { "valid" } else { "rejected by API" });
+            }
         }
     }
 }

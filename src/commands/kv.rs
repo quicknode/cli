@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, write_table, Render};
+use crate::output::{new_table, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -134,7 +134,7 @@ async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
         }
         SetCmd::Get { key } => {
             let resp = ctx.sdk.kvstore.get_set(&key).await?;
-            if ctx.out.json {
+            if ctx.out.format.is_structured() {
                 crate::output::emit(&ctx.out, &resp)?;
             } else {
                 println!("{}", resp.value);
@@ -237,7 +237,7 @@ async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
         }
         ListCmd::Contains { key, item } => {
             let resp = ctx.sdk.kvstore.list_contains_item(&key, &item).await?;
-            if ctx.out.json {
+            if ctx.out.format.is_structured() {
                 crate::output::emit(&ctx.out, &resp)?;
             } else {
                 println!("{}", if resp.exists { "true" } else { "false" });
@@ -312,10 +312,10 @@ impl Render for SetsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["KEY", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["KEY", "VALUE"]);
         for e in &self.0.data {
             t.add_row(vec![Cell::new(&e.key), Cell::new(&e.value)]);
         }
@@ -334,10 +334,10 @@ impl Render for ListsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["KEY"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["KEY"]);
         for k in &self.0.data.keys {
             t.add_row(vec![Cell::new(k)]);
         }
@@ -356,7 +356,7 @@ impl Render for ListView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        _ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         for item in &self.0.data.items {
             writeln!(w, "{item}")?;
@@ -372,7 +372,7 @@ impl Render for quicknode_sdk::GetSetResponse {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        _ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         writeln!(w, "{}", self.value)
     }
@@ -382,7 +382,7 @@ impl Render for quicknode_sdk::ListContainsItemResponse {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        _ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         writeln!(w, "{}", self.exists)
     }

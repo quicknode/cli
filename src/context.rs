@@ -11,19 +11,53 @@ use quicknode_sdk::{
 
 use crate::config::{self, KeySource};
 use crate::errors::CliError;
-use crate::output::OutputCtx;
+use crate::output::{Format, OutputCtx};
 
 /// Top-level flags inherited by every subcommand.
 #[derive(Debug, Clone, Default)]
 pub struct GlobalArgs {
     pub api_key: Option<String>,
-    pub json: bool,
+    /// `None` means the user didn't pass `--format`; resolve via config file
+    /// (then default `Table`) when we build the [`Ctx`].
+    pub format: Option<Format>,
+    pub wide: bool,
     pub no_color: bool,
     pub quiet: bool,
     pub verbose: bool,
     pub no_input: bool,
     pub yes_count: u8,
     pub base_url: Option<String>,
+}
+
+impl GlobalArgs {
+    /// Resolve the output format: CLI flag > config file > `Format::Table`.
+    /// Used by [`Ctx::from_global`] and `auth` (which doesn't build a Ctx).
+    pub fn resolve_format(&self) -> Format {
+        self.resolve_output().0
+    }
+
+    /// Resolve `(format, wide)` together so we only read the config file once.
+    ///
+    /// For each: CLI flag > config file > built-in default. `--wide` is purely
+    /// additive — the flag sets it true; the config file can also set it true;
+    /// otherwise it's false.
+    pub fn resolve_output(&self) -> (Format, bool) {
+        let mut format = self.format;
+        let mut wide = self.wide;
+        if format.is_none() || !wide {
+            if let Some(p) = config::config_path() {
+                if let Ok(Some(cfg)) = config::load_from(&p) {
+                    if format.is_none() {
+                        format = cfg.output.format;
+                    }
+                    if !wide {
+                        wide = cfg.output.wide;
+                    }
+                }
+            }
+        }
+        (format.unwrap_or_default(), wide)
+    }
 }
 
 pub struct Ctx {
@@ -42,6 +76,7 @@ impl Ctx {
     pub fn from_global(global: GlobalArgs) -> Result<Self, CliError> {
         let config_path = config::config_path();
         let env_key = config::read_env_api_key();
+        let (format, wide) = global.resolve_output();
 
         let (api_key, key_source) = config::resolve_api_key(
             global.api_key.as_deref(),
@@ -73,7 +108,7 @@ impl Ctx {
         }
 
         let sdk = QuicknodeSdk::new(&full)?;
-        let out = OutputCtx::detect(global.json, global.no_color, global.quiet, global.verbose);
+        let out = OutputCtx::detect(format, global.no_color, global.quiet, global.verbose, wide);
 
         Ok(Self {
             sdk,

@@ -13,24 +13,25 @@ use quicknode_sdk::admin::{
 };
 use serde::Serialize;
 
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Serialize)]
 pub struct EndpointsView(pub GetEndpointsResponse);
 
 impl Render for EndpointsView {
-    fn render_table(&self, w: &mut dyn Write, _: &crate::output::OutputCtx) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec![
-            "ID",
-            "LABEL",
-            "STATUS",
-            "CHAIN/NETWORK",
-            "TYPE",
-            "MULTI",
-        ]);
+    fn render_table(
+        &self,
+        w: &mut dyn Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        let mut headers = vec!["ID", "LABEL", "STATUS", "CHAIN/NETWORK", "TYPE", "MULTI"];
+        if ctx.wide {
+            headers.extend(["HTTP", "WSS"]);
+        }
+        set_header_bold(&mut t, ctx, headers);
         for e in &self.0.data {
-            t.add_row(vec![
+            let mut row = vec![
                 Cell::new(&e.id),
                 opt_cell(&e.label),
                 Cell::new(&e.status),
@@ -41,7 +42,12 @@ impl Render for EndpointsView {
                     "shared"
                 }),
                 Cell::new(if e.is_multichain { "yes" } else { "no" }),
-            ]);
+            ];
+            if ctx.wide {
+                row.push(Cell::new(&e.http_url));
+                row.push(opt_cell(&e.wss_url));
+            }
+            t.add_row(row);
         }
         write_table(w, &t)?;
         if let Some(p) = &self.0.pagination {
@@ -61,10 +67,14 @@ impl Render for EndpointsView {
 pub struct SingleEndpointView(pub SingleEndpoint);
 
 impl Render for SingleEndpointView {
-    fn render_table(&self, w: &mut dyn Write, _: &crate::output::OutputCtx) -> std::io::Result<()> {
+    fn render_table(
+        &self,
+        w: &mut dyn Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
         let e = &self.0;
-        let mut t = new_table();
-        t.set_header(vec!["FIELD", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["FIELD", "VALUE"]);
         t.add_row(vec![Cell::new("id"), Cell::new(&e.id)]);
         t.add_row(vec![Cell::new("label"), opt_cell(&e.label)]);
         t.add_row(vec![Cell::new("status"), opt_cell(&e.status)]);
@@ -91,9 +101,13 @@ impl Render for SingleEndpointView {
 pub struct EndpointUrlsView(pub GetEndpointUrlsData);
 
 impl Render for EndpointUrlsView {
-    fn render_table(&self, w: &mut dyn Write, _: &crate::output::OutputCtx) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["NETWORK", "HTTP", "WSS"]);
+    fn render_table(
+        &self,
+        w: &mut dyn Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["NETWORK", "HTTP", "WSS"]);
         t.add_row(vec![
             Cell::new("default"),
             Cell::new(&self.0.http_url),
@@ -119,9 +133,17 @@ impl Render for EndpointUrlsView {
 pub struct EndpointLogsView(pub GetEndpointLogsResponse);
 
 impl Render for EndpointLogsView {
-    fn render_table(&self, w: &mut dyn Write, _: &crate::output::OutputCtx) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["TIME", "METHOD", "STATUS", "NETWORK", "REQUEST_ID"]);
+    fn render_table(
+        &self,
+        w: &mut dyn Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["TIME", "METHOD", "STATUS", "NETWORK", "REQUEST_ID"],
+        );
         for l in &self.0.data {
             t.add_row(vec![
                 Cell::new(&l.timestamp),
@@ -143,7 +165,11 @@ impl Render for EndpointLogsView {
 pub struct LogDetailsView(pub GetLogDetailsResponse);
 
 impl Render for LogDetailsView {
-    fn render_table(&self, w: &mut dyn Write, _: &crate::output::OutputCtx) -> std::io::Result<()> {
+    fn render_table(
+        &self,
+        w: &mut dyn Write,
+        _ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
         match &self.0.data {
             Some(d) => {
                 writeln!(w, "== request ==")?;
@@ -161,23 +187,31 @@ impl Render for LogDetailsView {
 pub struct EndpointMetricsView(pub GetEndpointMetricsResponse);
 
 impl Render for EndpointMetricsView {
-    fn render_table(&self, w: &mut dyn Write, _: &crate::output::OutputCtx) -> std::io::Result<()> {
+    fn render_table(
+        &self,
+        w: &mut dyn Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
         for m in &self.0.data {
-            metric_series(w, m)?;
+            metric_series(w, m, ctx)?;
         }
         Ok(())
     }
 }
 
-pub(crate) fn metric_series(w: &mut dyn Write, m: &EndpointMetric) -> std::io::Result<()> {
+pub(crate) fn metric_series(
+    w: &mut dyn Write,
+    m: &EndpointMetric,
+    ctx: &crate::output::OutputCtx,
+) -> std::io::Result<()> {
     let label = m.tag.join("/");
     writeln!(
         w,
         "== {} ==",
         if label.is_empty() { "series" } else { &label }
     )?;
-    let mut t = new_table();
-    t.set_header(vec!["TIMESTAMP", "VALUE"]);
+    let mut t = new_table(ctx);
+    set_header_bold(&mut t, ctx, vec!["TIMESTAMP", "VALUE"]);
     for pair in &m.data {
         let ts = pair.first().copied().unwrap_or_default();
         let v = pair.get(1).copied().unwrap_or_default();

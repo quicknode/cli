@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, write_table, Render};
+use crate::output::{new_table, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -39,10 +39,10 @@ impl Render for ChainsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["CHAIN", "NETWORKS"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["CHAIN", "NETWORKS"]);
         for c in &self.0.data {
             let nets = c
                 .networks

@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -46,7 +46,7 @@ impl Render for InvoicesView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -55,15 +55,19 @@ impl Render for InvoicesView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec![
-            "ID",
-            "STATUS",
-            "REASON",
-            "AMOUNT_DUE",
-            "AMOUNT_PAID",
-            "CREATED",
-        ]);
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec![
+                "ID",
+                "STATUS",
+                "REASON",
+                "AMOUNT_DUE",
+                "AMOUNT_PAID",
+                "CREATED",
+            ],
+        );
         for i in &data.invoices {
             t.add_row(vec![
                 Cell::new(&i.id),
@@ -85,7 +89,7 @@ impl Render for PaymentsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -94,8 +98,8 @@ impl Render for PaymentsView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["CREATED", "AMOUNT", "CURRENCY", "CARD"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["CREATED", "AMOUNT", "CURRENCY", "CARD"]);
         for p in &data.payments {
             t.add_row(vec![
                 Cell::new(&p.created_at),

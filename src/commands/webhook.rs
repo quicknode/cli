@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -356,7 +356,7 @@ async fn pause(id: &str, ctx: Ctx) -> Result<(), CliError> {
 
 async fn enabled_count(ctx: Ctx) -> Result<(), CliError> {
     let resp = ctx.sdk.webhooks.get_enabled_count().await?;
-    if ctx.out.json {
+    if ctx.out.format.is_structured() {
         crate::output::emit(&ctx.out, &resp)
     } else {
         println!("{}", resp.total);
@@ -467,10 +467,14 @@ impl Render for WebhooksListView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["ID", "NAME", "STATUS", "NETWORK", "TEMPLATE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["ID", "NAME", "STATUS", "NETWORK", "TEMPLATE"],
+        );
         for h in &self.0.data {
             t.add_row(vec![
                 Cell::new(&h.id),
@@ -498,11 +502,11 @@ impl Render for WebhookView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let h = &self.0;
-        let mut t = new_table();
-        t.set_header(vec!["FIELD", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["FIELD", "VALUE"]);
         t.add_row(vec![Cell::new("id"), Cell::new(&h.id)]);
         t.add_row(vec![Cell::new("name"), Cell::new(&h.name)]);
         t.add_row(vec![Cell::new("status"), Cell::new(&h.status)]);
@@ -525,7 +529,7 @@ impl Render for quicknode_sdk::webhooks::WebhookEnabledCountResponse {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        _ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         writeln!(w, "{}", self.total)
     }

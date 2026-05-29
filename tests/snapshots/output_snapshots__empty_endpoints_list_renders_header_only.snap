@@ -2,7 +2,4 @@
 source: tests/output_snapshots.rs
 expression: out
 ---
-┌────┬───────┬────────┬───────────────┬──────┬───────┐
-│ ID ┆ LABEL ┆ STATUS ┆ CHAIN/NETWORK ┆ TYPE ┆ MULTI │
-╞════╪═══════╪════════╪═══════════════╪══════╪═══════╡
-└────┴───────┴────────┴───────────────┴──────┴───────┘
+ID  LABEL  STATUS  CHAIN/NETWORK  TYPE  MULTI

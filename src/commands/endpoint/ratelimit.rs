@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Debug, Subcommand)]
 pub enum RateLimitCmd {
@@ -208,7 +208,7 @@ impl Render for RateLimitsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -217,8 +217,12 @@ impl Render for RateLimitsView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["BUCKET", "VALUE", "SOURCE", "OVERRIDE_ID"]);
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["BUCKET", "VALUE", "SOURCE", "OVERRIDE_ID"],
+        );
         for r in &data.rate_limits {
             t.add_row(vec![
                 Cell::new(&r.bucket),
@@ -238,7 +242,7 @@ impl Render for MethodRateLimitsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -247,8 +251,12 @@ impl Render for MethodRateLimitsView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["ID", "INTERVAL", "METHODS", "RATE", "STATUS"]);
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["ID", "INTERVAL", "METHODS", "RATE", "STATUS"],
+        );
         for r in &data.rate_limiters {
             t.add_row(vec![
                 Cell::new(&r.id),

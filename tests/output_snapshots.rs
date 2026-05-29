@@ -3,7 +3,7 @@
 //! These lock in the table layout so future changes that affect rendering
 //! show up as obvious diffs in `cargo insta review`.
 
-use qn::output::{OutputCtx, Render};
+use qn::output::{Format, OutputCtx, Render};
 use quicknode_sdk::admin::{
     Endpoint, EndpointTag, GetEndpointsResponse, ListChainsResponse, Pagination,
 };
@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::io::Cursor;
 
 fn no_color_ctx() -> OutputCtx {
-    OutputCtx::detect_with(false, true, false, false, false, None, None)
+    OutputCtx::detect_with(Format::Table, true, false, false, false, false, None, None)
 }
 
 fn render_string<R: Render>(r: &R) -> String {
@@ -26,18 +26,15 @@ fn render_string<R: Render>(r: &R) -> String {
 #[derive(Serialize)]
 struct EndpointsView(GetEndpointsResponse);
 impl Render for EndpointsView {
-    fn render_table(&self, w: &mut dyn std::io::Write, _: &OutputCtx) -> std::io::Result<()> {
+    fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
         use comfy_table::Cell;
-        use qn::output::{new_table, opt_cell, write_table};
-        let mut t = new_table();
-        t.set_header(vec![
-            "ID",
-            "LABEL",
-            "STATUS",
-            "CHAIN/NETWORK",
-            "TYPE",
-            "MULTI",
-        ]);
+        use qn::output::{new_table, opt_cell, set_header_bold, write_table};
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["ID", "LABEL", "STATUS", "CHAIN/NETWORK", "TYPE", "MULTI"],
+        );
         for e in &self.0.data {
             t.add_row(vec![
                 Cell::new(&e.id),
@@ -69,11 +66,11 @@ impl Render for EndpointsView {
 #[derive(Serialize)]
 struct ChainsView(ListChainsResponse);
 impl Render for ChainsView {
-    fn render_table(&self, w: &mut dyn std::io::Write, _: &OutputCtx) -> std::io::Result<()> {
+    fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
         use comfy_table::Cell;
-        use qn::output::{new_table, write_table};
-        let mut t = new_table();
-        t.set_header(vec!["CHAIN", "NETWORKS"]);
+        use qn::output::{new_table, set_header_bold, write_table};
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["CHAIN", "NETWORKS"]);
         for c in &self.0.data {
             let nets = c
                 .networks

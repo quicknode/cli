@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 use crate::time_arg;
 
 #[derive(Debug, ClapArgs)]
@@ -98,7 +98,7 @@ impl Render for UsageSummaryView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -107,8 +107,8 @@ impl Render for UsageSummaryView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["FIELD", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["FIELD", "VALUE"]);
         t.add_row(vec![
             Cell::new("credits_used"),
             Cell::new(data.credits_used),
@@ -129,7 +129,7 @@ impl Render for UsageByEndpointView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -138,8 +138,8 @@ impl Render for UsageByEndpointView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["ENDPOINT", "CHAIN", "NETWORK", "CREDITS"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ENDPOINT", "CHAIN", "NETWORK", "CREDITS"]);
         for e in &data.endpoints {
             t.add_row(vec![
                 Cell::new(&e.name),
@@ -159,7 +159,7 @@ impl Render for UsageByMethodView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -168,8 +168,8 @@ impl Render for UsageByMethodView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["METHOD", "CREDITS", "ARCHIVE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["METHOD", "CREDITS", "ARCHIVE"]);
         for m in &data.methods {
             t.add_row(vec![
                 Cell::new(&m.method_name),
@@ -188,7 +188,7 @@ impl Render for UsageByChainView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -197,8 +197,8 @@ impl Render for UsageByChainView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["CHAIN", "CREDITS"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["CHAIN", "CREDITS"]);
         for c in &data.chains {
             t.add_row(vec![Cell::new(&c.name), Cell::new(c.credits_used)]);
         }
@@ -213,7 +213,7 @@ impl Render for UsageByTagView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -222,8 +222,8 @@ impl Render for UsageByTagView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["TAG_ID", "LABEL", "CREDITS"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["TAG_ID", "LABEL", "CREDITS"]);
         for tg in &data.tags {
             t.add_row(vec![
                 opt_cell(&tg.tag_id),

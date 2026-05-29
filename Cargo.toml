@@ -22,11 +22,12 @@ clap_complete = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-comfy-table = { version = "7", default-features = false }
+serde_yml = "0.0.12"
+toon-format = { version = "0.5", default-features = false }
+comfy-table = { version = "7", default-features = false, features = ["tty"] }
 owo-colors = { version = "4", features = ["supports-colors"] }
 supports-color = "3"
 dialoguer = "0.11"
-directories = "5"
 toml = "0.8"
 anyhow = "1"
 thiserror = "1"

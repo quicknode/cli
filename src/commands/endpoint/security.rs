@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Debug, Subcommand)]
 pub enum SecurityCmd {
@@ -417,7 +417,7 @@ impl Render for SecurityShowView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -426,8 +426,8 @@ impl Render for SecurityShowView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["FEATURE", "COUNT", "DETAIL"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["FEATURE", "COUNT", "DETAIL"]);
         let tokens = data.tokens.as_deref().unwrap_or(&[]);
         t.add_row(vec![
             Cell::new("tokens"),
@@ -502,10 +502,10 @@ impl Render for SecurityOptionsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["OPTION", "STATUS", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["OPTION", "STATUS", "VALUE"]);
         for o in &self.0.data {
             t.add_row(vec![
                 Cell::new(&o.option),
@@ -524,10 +524,10 @@ impl Render for SecurityOptionsListView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["OPTION", "STATUS", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["OPTION", "STATUS", "VALUE"]);
         for o in &self.0 {
             t.add_row(vec![
                 Cell::new(&o.option),

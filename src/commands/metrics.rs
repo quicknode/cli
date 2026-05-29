@@ -80,10 +80,10 @@ impl Render for AccountMetricsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         for m in &self.0.data {
-            super::endpoint::render::metric_series(w, m)?;
+            super::endpoint::render::metric_series(w, m, ctx)?;
         }
         Ok(())
     }
@@ -96,10 +96,10 @@ impl Render for EndpointMetricsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         for m in &self.0.data {
-            super::endpoint::render::metric_series(w, m)?;
+            super::endpoint::render::metric_series(w, m, ctx)?;
         }
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! Subprocess smoke tests for the `qn` binary.
 //!
 //! Verifies CLI guidelines compliance: --help everywhere, --version works,
-//! help-on-no-args, --json output is valid, exit codes are correct, NO_COLOR
+//! help-on-no-args, --format output is valid, exit codes are correct, NO_COLOR
 //! is honored.
 
 use assert_cmd::Command;

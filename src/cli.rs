@@ -11,6 +11,7 @@ use clap_complete::Shell;
 use crate::commands;
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
+use crate::output::Format;
 
 /// qn — command-line interface for the Quicknode API.
 #[derive(Debug, Parser)]
@@ -30,9 +31,11 @@ pub struct Cli {
     #[arg(long, global = true, env = "QN_CLI__API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,
 
-    /// Emit machine-readable JSON instead of human-friendly tables.
-    #[arg(long, global = true)]
-    pub json: bool,
+    /// Output format. `table` is the default human view; the others are
+    /// pipeline-friendly serialized forms. If unset, falls back to the
+    /// `[output] format = "…"` value in ~/.config/qn/config.toml, then `table`.
+    #[arg(short = 'o', long = "format", global = true, value_enum)]
+    pub format: Option<Format>,
 
     /// Disable ANSI colors. Also honored: NO_COLOR env var, TERM=dumb, non-TTY stdout.
     #[arg(long, global = true)]
@@ -41,6 +44,12 @@ pub struct Cli {
     /// Suppress non-essential output (state-change confirmations on stderr).
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Show additional columns in list-style tables (e.g. URLs in `endpoint list`).
+    /// Mirrors `kubectl get -o wide`. Only affects `table` and `md` formats —
+    /// `json`/`yaml`/`toon` always include everything.
+    #[arg(short = 'w', long = "wide", global = true)]
+    pub wide: bool,
 
     /// Verbose output: include error bodies and other details.
     #[arg(short, long, global = true)]
@@ -120,7 +129,10 @@ impl Cli {
     pub fn global_args(&self) -> GlobalArgs {
         GlobalArgs {
             api_key: self.api_key.clone(),
-            json: self.json,
+            format: self.format,
+            wide: self.wide,
+            // format resolved-from-config in Ctx::from_global; auth.rs falls
+            // back to Table directly if it stays None there.
             no_color: self.no_color,
             quiet: self.quiet,
             verbose: self.verbose,

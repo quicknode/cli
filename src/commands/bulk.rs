@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, write_table, Render};
+use crate::output::{new_table, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -129,7 +129,7 @@ impl Render for BulkStatusView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -143,8 +143,8 @@ impl Render for BulkStatusView {
             "total={} updated={} failed={}",
             data.total, data.updated_count, data.failed_count
         )?;
-        let mut t = new_table();
-        t.set_header(vec!["ID", "OK"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
         for r in &data.results {
             t.add_row(vec![
                 Cell::new(&r.id),
@@ -162,7 +162,7 @@ impl Render for BulkAddTagView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -176,8 +176,8 @@ impl Render for BulkAddTagView {
             "total={} updated={} failed={}",
             data.total, data.updated_count, data.failed_count
         )?;
-        let mut t = new_table();
-        t.set_header(vec!["ID", "OK"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
         for r in &data.results {
             t.add_row(vec![
                 Cell::new(&r.id),
@@ -195,7 +195,7 @@ impl Render for BulkRemoveTagView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -209,8 +209,8 @@ impl Render for BulkRemoveTagView {
             "total={} updated={} failed={}",
             data.total, data.updated_count, data.failed_count
         )?;
-        let mut t = new_table();
-        t.set_header(vec!["ID", "OK"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
         for r in &data.results {
             t.add_row(vec![
                 Cell::new(&r.id),

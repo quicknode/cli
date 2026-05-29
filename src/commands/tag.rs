@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, write_table, Render};
+use crate::output::{new_table, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -82,7 +82,7 @@ impl Render for TagsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let data = match &self.0.data {
             Some(d) => d,
@@ -91,8 +91,8 @@ impl Render for TagsView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["ID", "LABEL", "USAGE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "LABEL", "USAGE"]);
         for tg in &data.tags {
             t.add_row(vec![
                 Cell::new(tg.id),

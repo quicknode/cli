@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -477,7 +477,7 @@ async fn enabled_count(stream_type: Option<String>, ctx: Ctx) -> Result<(), CliE
         .streams
         .get_enabled_count(stream_type.as_deref())
         .await?;
-    if ctx.out.json {
+    if ctx.out.format.is_structured() {
         crate::output::emit(&ctx.out, &resp)
     } else {
         println!("{}", resp.total);
@@ -494,10 +494,14 @@ impl Render for StreamsListView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["ID", "NAME", "STATUS", "NETWORK", "DATASET", "REGION"]);
+        let mut t = new_table(ctx);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["ID", "NAME", "STATUS", "NETWORK", "DATASET", "REGION"],
+        );
         for s in &self.0.data {
             t.add_row(vec![
                 Cell::new(&s.id),
@@ -526,11 +530,11 @@ impl Render for StreamView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let s = &self.0;
-        let mut t = new_table();
-        t.set_header(vec!["FIELD", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["FIELD", "VALUE"]);
         t.add_row(vec![Cell::new("id"), Cell::new(&s.id)]);
         t.add_row(vec![Cell::new("name"), Cell::new(&s.name)]);
         t.add_row(vec![Cell::new("status"), Cell::new(&s.status)]);
@@ -553,7 +557,7 @@ impl Render for TestFilterView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        _ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         if !self.0.logs.is_empty() {
             writeln!(w, "== logs ==")?;
@@ -570,7 +574,7 @@ impl Render for quicknode_sdk::streams::EnabledCountResponse {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        _ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         writeln!(w, "{}", self.total)
     }

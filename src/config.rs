@@ -14,10 +14,10 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::CliError;
+use crate::output::Format;
 
 const ENV_API_KEY: &str = "QN_CLI__API_KEY";
 
@@ -45,6 +45,8 @@ impl KeySource {
 pub struct ConfigFile {
     #[serde(default)]
     pub api: ApiSection,
+    #[serde(default)]
+    pub output: OutputSection,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -52,14 +54,49 @@ pub struct ApiSection {
     pub key: Option<String>,
 }
 
-/// Returns the canonical config path (`~/.config/qn/config.toml` on Linux,
-/// `~/Library/Application Support/qn/config.toml` on macOS).
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct OutputSection {
+    /// Default output format when the CLI is invoked without `--format`. One
+    /// of: `table`, `json`, `yaml`, `md`, `toon`.
+    #[serde(default)]
+    pub format: Option<Format>,
+    /// Default for `--wide`. CLI flag still overrides — `--wide` alone toggles
+    /// it on, but there's no `--no-wide` (use `--format json` if you need full
+    /// data without the wide setting).
+    #[serde(default)]
+    pub wide: bool,
+}
+
+/// Returns the canonical config path: `$XDG_CONFIG_HOME/qn/config.toml` if the
+/// env var is set, otherwise `~/.config/qn/config.toml`. We use the same path
+/// on every platform — easier to document, easier to share across machines —
+/// rather than the OS-native `directories`-crate locations.
 ///
-/// Returns `None` only if the platform has no notion of a config dir — never
-/// happens on the platforms we support but the directories crate is
-/// theoretically fallible.
+/// Returns `None` only if neither `$XDG_CONFIG_HOME` nor `$HOME` is set, which
+/// would mean the user's shell environment is broken.
 pub fn config_path() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "quicknode", "qn").map(|p| p.config_dir().join("config.toml"))
+    config_dir().map(|d| d.join("qn").join("config.toml"))
+}
+
+fn config_dir() -> Option<PathBuf> {
+    resolve_config_dir(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// Pure version of [`config_dir`] for testing.
+fn resolve_config_dir(
+    xdg_config_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    if let Some(xdg) = xdg_config_home {
+        let p = PathBuf::from(xdg);
+        if p.is_absolute() {
+            return Some(p);
+        }
+    }
+    home.map(|h| PathBuf::from(h).join(".config"))
 }
 
 /// Loads the config file at `path`, returning `Ok(None)` if it doesn't exist.
@@ -77,12 +114,11 @@ pub fn load_from(path: &Path) -> Result<Option<ConfigFile>, CliError> {
 }
 
 /// Saves `api_key` to `path`, creating parent directories and writing 0600 perms on unix.
+///
+/// Preserves any existing `[output]` section by reading the current file first.
 pub fn save_api_key(path: &Path, api_key: &str) -> Result<(), CliError> {
-    let cfg = ConfigFile {
-        api: ApiSection {
-            key: Some(api_key.to_string()),
-        },
-    };
+    let mut cfg = load_from(path)?.unwrap_or_default();
+    cfg.api.key = Some(api_key.to_string());
     let text = toml::to_string_pretty(&cfg).map_err(|e| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other(e),
@@ -260,6 +296,77 @@ mod tests {
         save_api_key(&path, "round-trip-key").unwrap();
         let loaded = load_from(&path).unwrap().unwrap();
         assert_eq!(loaded.api.key.as_deref(), Some("round-trip-key"));
+    }
+
+    #[test]
+    fn config_dir_uses_xdg_when_absolute() {
+        let d = resolve_config_dir(
+            Some(std::ffi::OsString::from("/custom/xdg")),
+            Some(std::ffi::OsString::from("/home/u")),
+        )
+        .unwrap();
+        assert_eq!(d, PathBuf::from("/custom/xdg"));
+    }
+
+    #[test]
+    fn config_dir_ignores_relative_xdg() {
+        // A non-absolute XDG_CONFIG_HOME is bogus per the spec; fall through to HOME.
+        let d = resolve_config_dir(
+            Some(std::ffi::OsString::from("relative/path")),
+            Some(std::ffi::OsString::from("/home/u")),
+        )
+        .unwrap();
+        assert_eq!(d, PathBuf::from("/home/u/.config"));
+    }
+
+    #[test]
+    fn config_dir_falls_back_to_home_dot_config() {
+        let d = resolve_config_dir(None, Some(std::ffi::OsString::from("/home/u"))).unwrap();
+        assert_eq!(d, PathBuf::from("/home/u/.config"));
+    }
+
+    #[test]
+    fn config_dir_returns_none_without_home() {
+        assert!(resolve_config_dir(None, None).is_none());
+    }
+
+    #[test]
+    fn output_format_round_trips_through_config_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[api]\nkey = \"k\"\n\n[output]\nformat = \"yaml\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key.as_deref(), Some("k"));
+        assert_eq!(cfg.output.format, Some(Format::Yaml));
+    }
+
+    #[test]
+    fn output_wide_round_trips_through_config_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[output]\nwide = true\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert!(cfg.output.wide);
+    }
+
+    #[test]
+    fn output_section_is_optional() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[api]\nkey = \"k\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.output.format, None);
+    }
+
+    #[test]
+    fn save_api_key_preserves_output_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[output]\nformat = \"toon\"\n").unwrap();
+        save_api_key(&path, "new-key").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
+        assert_eq!(cfg.output.format, Some(Format::Toon));
     }
 
     #[test]

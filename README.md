@@ -30,7 +30,7 @@ cargo install --path .
 
 1. `--api-key <KEY>` flag
 2. `QN_CLI__API_KEY` environment variable
-3. `~/.config/qn/config.toml` (managed by `qn auth login`)
+3. `~/.config/qn/config.toml` — or `$XDG_CONFIG_HOME/qn/config.toml` if that env var is set. Managed by `qn auth login`.
 
 If none match, `qn` exits with code 4 and tells you to run `qn auth login`.
 Regular commands never prompt — only `qn auth login` does. This keeps scripts
@@ -44,11 +44,32 @@ qn auth logout     # removes the saved key
 
 ## Output
 
-- **Default (TTY):** pretty ASCII tables with colors.
-- **`--json`:** structured JSON — use this in scripts and pipelines.
-- **`--no-color`:** plain ASCII (also honored: `NO_COLOR` env var, `TERM=dumb`, non-TTY stdout).
+Pick a format with `--format <FMT>` (alias `-o <FMT>`):
+
+| `--format` | Best for |
+| --- | --- |
+| `table` (default) | Humans on a TTY. Pretty UTF-8 tables with optional color. |
+| `json`            | Scripts and pipelines (`jq`, `gron`, …). |
+| `yaml`            | Same shape as JSON, easier to skim by eye. |
+| `md`              | GitHub-flavored markdown — paste into PRs, issues, docs. |
+| `toon`            | [Token-Oriented Object Notation](https://github.com/toon-format/toon-rust) — compact serialization optimized for LLM prompts. |
+
+Other output flags:
+
+- **`-w` / `--wide`:** add extra columns to `table` and `md` output (e.g. HTTP/WSS URLs in `endpoint list`). Mirrors `kubectl get -o wide`. Doesn't affect `json`/`yaml`/`toon`, which always include everything.
+- **`--no-color`:** plain ASCII (also honored: `NO_COLOR` env var, `TERM=dumb`, non-TTY stdout, any non-`table` format).
 - **`--quiet`:** suppress state-change notes on stderr.
 - **`--verbose`:** include API error bodies and other detail.
+
+You can also set defaults in `~/.config/qn/config.toml`:
+
+```toml
+[output]
+format = "yaml"   # default --format value
+wide = true       # always show extra columns in table/md output
+```
+
+CLI flags win over config values. Built-in defaults: `format = "table"`, `wide = false`.
 
 `qn` follows the [Command Line Interface Guidelines](https://clig.dev/): data on stdout, diagnostics on stderr, meaningful exit codes (0 success, 2 API error, 3 network error, 4 auth/config, 5 needs confirmation), and a documented `-h`/`--help` at every subcommand level.
 
@@ -57,7 +78,7 @@ qn auth logout     # removes the saved key
 ### Endpoints
 
 ```sh
-qn endpoint list --json | jq '.data[].id'
+qn endpoint list -o json | jq '.data[].id'
 qn endpoint create --chain ethereum --network mainnet
 qn endpoint show ep-1234
 qn endpoint pause ep-1234
@@ -127,7 +148,7 @@ qn kv list get allowlist
 
 ```sh
 qn usage summary --from 7d
-qn usage by-endpoint --from 30d --json
+qn usage by-endpoint --from 30d -o yaml
 qn metrics account --period day --metric credits_over_time
 qn chain list
 qn billing invoices

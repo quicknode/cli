@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, write_table, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -221,10 +221,10 @@ impl Render for TeamsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["ID", "NAME", "MEMBERS"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "NAME", "MEMBERS"]);
         for tm in &self.0.data {
             t.add_row(vec![
                 Cell::new(tm.id),
@@ -243,7 +243,7 @@ impl Render for TeamDetailView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let detail = match &self.0.data {
             Some(d) => d,
@@ -252,8 +252,8 @@ impl Render for TeamDetailView {
                 return Ok(());
             }
         };
-        let mut t = new_table();
-        t.set_header(vec!["FIELD", "VALUE"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["FIELD", "VALUE"]);
         t.add_row(vec![Cell::new("id"), Cell::new(detail.id)]);
         t.add_row(vec![Cell::new("name"), Cell::new(&detail.name)]);
         t.add_row(vec![
@@ -271,10 +271,10 @@ impl Render for TeamEndpointsView {
     fn render_table(
         &self,
         w: &mut dyn std::io::Write,
-        _: &crate::output::OutputCtx,
+        ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
-        let mut t = new_table();
-        t.set_header(vec!["ID", "SUBDOMAIN", "CHAIN", "NETWORK"]);
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "SUBDOMAIN", "CHAIN", "NETWORK"]);
         for e in &self.0.data {
             t.add_row(vec![
                 Cell::new(e.id),
