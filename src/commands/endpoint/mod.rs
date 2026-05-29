@@ -12,7 +12,7 @@ use crate::errors::CliError;
 use crate::time_arg;
 
 mod ratelimit;
-mod render;
+pub(crate) mod render;
 mod security;
 mod tag;
 

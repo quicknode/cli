@@ -1,18 +1,57 @@
-//! `qn chain …` — stub. Will be filled in by a later stage.
+//! `qn chain …` — list supported blockchains.
 
-use clap::Args as ClapArgs;
+use clap::{Args as ClapArgs, Subcommand};
+use comfy_table::Cell;
+use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::output::{new_table, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    #[arg(hide = true)]
-    _rest: Vec<String>,
+    #[command(subcommand)]
+    pub cmd: ChainCmd,
 }
 
-pub async fn run(_args: Args, _ctx: Ctx) -> Result<(), CliError> {
-    Err(CliError::Arg(
-        "qn chain is not yet implemented in this build".to_string(),
-    ))
+#[derive(Debug, Subcommand)]
+pub enum ChainCmd {
+    /// List supported chains and their networks.
+    #[command(visible_alias = "ls")]
+    List,
+}
+
+pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
+    match args.cmd {
+        ChainCmd::List => list(ctx).await,
+    }
+}
+
+async fn list(ctx: Ctx) -> Result<(), CliError> {
+    let resp = ctx.sdk.admin.list_chains().await?;
+    crate::output::emit(&ctx.out, &ChainsView(resp))
+}
+
+#[derive(Serialize)]
+struct ChainsView(quicknode_sdk::admin::ListChainsResponse);
+
+impl Render for ChainsView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        _: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table();
+        t.set_header(vec!["CHAIN", "NETWORKS"]);
+        for c in &self.0.data {
+            let nets = c
+                .networks
+                .iter()
+                .map(|n| n.slug.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            t.add_row(vec![Cell::new(&c.slug), Cell::new(nets)]);
+        }
+        write_table(w, &t)
+    }
 }

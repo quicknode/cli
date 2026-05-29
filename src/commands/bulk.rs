@@ -1,18 +1,222 @@
-//! `qn bulk …` — stub. Will be filled in by a later stage.
+//! `qn bulk …` — bulk operations across many endpoints.
 
-use clap::Args as ClapArgs;
+use clap::{Args as ClapArgs, Subcommand, ValueEnum};
+use comfy_table::Cell;
+use quicknode_sdk::admin::{
+    BulkAddTagRequest, BulkRemoveTagRequest, BulkUpdateEndpointStatusRequest,
+};
+use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::output::{new_table, write_table, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    #[arg(hide = true)]
-    _rest: Vec<String>,
+    #[command(subcommand)]
+    pub cmd: BulkCmd,
 }
 
-pub async fn run(_args: Args, _ctx: Ctx) -> Result<(), CliError> {
-    Err(CliError::Arg(
-        "qn bulk is not yet implemented in this build".to_string(),
-    ))
+#[derive(Debug, Subcommand)]
+pub enum BulkCmd {
+    /// Activate or pause many endpoints at once.
+    Status(StatusArgs),
+    /// Manage tags on many endpoints at once.
+    #[command(subcommand)]
+    Tag(TagCmd),
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct StatusArgs {
+    /// Target status.
+    #[arg(long, value_enum)]
+    pub status: BulkStatus,
+    /// Endpoint ids.
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum BulkStatus {
+    Active,
+    Paused,
+}
+
+impl BulkStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            BulkStatus::Active => "active",
+            BulkStatus::Paused => "paused",
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TagCmd {
+    /// Apply a tag to many endpoints (creates the tag if missing).
+    Add(AddTagArgs),
+    /// Remove a tag from many endpoints (by numeric tag id).
+    Remove(RemoveTagArgs),
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct AddTagArgs {
+    /// Tag label.
+    #[arg(long)]
+    pub label: String,
+    /// Endpoint ids.
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct RemoveTagArgs {
+    /// Tag id (numeric).
+    #[arg(long)]
+    pub tag_id: i32,
+    /// Endpoint ids.
+    pub ids: Vec<String>,
+}
+
+pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
+    match args.cmd {
+        BulkCmd::Status(a) => status(a, ctx).await,
+        BulkCmd::Tag(TagCmd::Add(a)) => tag_add(a, ctx).await,
+        BulkCmd::Tag(TagCmd::Remove(a)) => tag_remove(a, ctx).await,
+    }
+}
+
+async fn status(a: StatusArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.ids.is_empty() {
+        return Err(CliError::Arg("supply at least one endpoint id".to_string()));
+    }
+    let req = BulkUpdateEndpointStatusRequest {
+        ids: a.ids,
+        status: a.status.as_str().to_string(),
+    };
+    let resp = ctx.sdk.admin.bulk_update_endpoint_status(&req).await?;
+    crate::output::emit(&ctx.out, &BulkStatusView(resp))
+}
+
+async fn tag_add(a: AddTagArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.ids.is_empty() {
+        return Err(CliError::Arg("supply at least one endpoint id".to_string()));
+    }
+    let req = BulkAddTagRequest {
+        ids: a.ids,
+        label: a.label,
+    };
+    let resp = ctx.sdk.admin.bulk_add_tag(&req).await?;
+    crate::output::emit(&ctx.out, &BulkAddTagView(resp))
+}
+
+async fn tag_remove(a: RemoveTagArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.ids.is_empty() {
+        return Err(CliError::Arg("supply at least one endpoint id".to_string()));
+    }
+    let req = BulkRemoveTagRequest {
+        ids: a.ids,
+        tag_id: a.tag_id,
+    };
+    let resp = ctx.sdk.admin.bulk_remove_tag(&req).await?;
+    crate::output::emit(&ctx.out, &BulkRemoveTagView(resp))
+}
+
+// ----- renderers ----- //
+
+#[derive(Serialize)]
+struct BulkStatusView(quicknode_sdk::admin::BulkUpdateEndpointStatusResponse);
+
+impl Render for BulkStatusView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        _: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let data = match &self.0.data {
+            Some(d) => d,
+            None => {
+                writeln!(w, "(no result)")?;
+                return Ok(());
+            }
+        };
+        writeln!(
+            w,
+            "total={} updated={} failed={}",
+            data.total, data.updated_count, data.failed_count
+        )?;
+        let mut t = new_table();
+        t.set_header(vec!["ID", "OK"]);
+        for r in &data.results {
+            t.add_row(vec![
+                Cell::new(&r.id),
+                Cell::new(if r.success { "✓" } else { "✗" }),
+            ]);
+        }
+        write_table(w, &t)
+    }
+}
+
+#[derive(Serialize)]
+struct BulkAddTagView(quicknode_sdk::admin::BulkAddTagResponse);
+
+impl Render for BulkAddTagView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        _: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let data = match &self.0.data {
+            Some(d) => d,
+            None => {
+                writeln!(w, "(no result)")?;
+                return Ok(());
+            }
+        };
+        writeln!(
+            w,
+            "total={} updated={} failed={}",
+            data.total, data.updated_count, data.failed_count
+        )?;
+        let mut t = new_table();
+        t.set_header(vec!["ID", "OK"]);
+        for r in &data.results {
+            t.add_row(vec![
+                Cell::new(&r.id),
+                Cell::new(if r.success { "✓" } else { "✗" }),
+            ]);
+        }
+        write_table(w, &t)
+    }
+}
+
+#[derive(Serialize)]
+struct BulkRemoveTagView(quicknode_sdk::admin::BulkRemoveTagResponse);
+
+impl Render for BulkRemoveTagView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        _: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let data = match &self.0.data {
+            Some(d) => d,
+            None => {
+                writeln!(w, "(no result)")?;
+                return Ok(());
+            }
+        };
+        writeln!(
+            w,
+            "total={} updated={} failed={}",
+            data.total, data.updated_count, data.failed_count
+        )?;
+        let mut t = new_table();
+        t.set_header(vec!["ID", "OK"]);
+        for r in &data.results {
+            t.add_row(vec![
+                Cell::new(&r.id),
+                Cell::new(if r.success { "✓" } else { "✗" }),
+            ]);
+        }
+        write_table(w, &t)
+    }
 }
