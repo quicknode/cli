@@ -1,6 +1,6 @@
 # qn — Quicknode CLI
 
-`qn` is a command-line interface for QuickNode, built around noun-verb commands that read naturally for both humans and agents. Manage endpoints, streams, webhooks, the KV store, teams, usage, and billing, with output in multiple formats for easy reading or scripting.
+`qn` is a command-line interface for Quicknode, built around noun-verb commands that read naturally for both humans and agents. Manage endpoints, streams, webhooks, the KV store, teams, usage, and billing, with output in multiple formats for easy reading or scripting.
 
 ```
 $ qn endpoint list
