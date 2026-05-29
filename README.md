@@ -1,6 +1,6 @@
 # qn — Quicknode CLI
 
-`qn` is a command-line interface for the [Quicknode SDK](https://crates.io/crates/quicknode-sdk). It exposes the full surface of the SDK — endpoints, streams, webhooks, KV store, teams, usage, metrics, billing — as a noun-verb CLI that's friendly to both humans and scripts.
+`qn` is a command-line interface for QuickNode, built around noun-verb commands that read naturally for both humans and agents. Manage endpoints, streams, webhooks, the KV store, teams, usage, and billing, with output in multiple formats for easy reading or scripting.
 
 ```
 $ qn endpoint list
