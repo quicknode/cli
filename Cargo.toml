@@ -32,6 +32,7 @@ anyhow = "1"
 thiserror = "1"
 humantime = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+base64 = "0.22"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false }
