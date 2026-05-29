@@ -24,6 +24,50 @@ fn endpoint_payload(id: &str) -> serde_json::Value {
     })
 }
 
+/// Subprocess test: confirms --json output is valid JSON over the wire.
+#[tokio::test]
+async fn list_endpoints_json_output_is_valid_json() {
+    use assert_cmd::Command;
+    use std::process::Stdio;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [endpoint_payload("ep-1")],
+            "pagination": { "total": 1, "limit": 20, "offset": 0 }
+        })))
+        .mount(&server)
+        .await;
+    let _ = Stdio::null();
+
+    let output = Command::cargo_bin("qn")
+        .unwrap()
+        .env_remove("QN_SDK__API_KEY")
+        .env_remove("HOME")
+        .env("HOME", std::env::temp_dir())
+        .args([
+            "--api-key",
+            "test",
+            "--base-url",
+            &server.uri(),
+            "--no-input",
+            "--json",
+            "endpoint",
+            "list",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout was:\n{stdout}"));
+    assert_eq!(v["data"][0]["id"].as_str(), Some("ep-1"));
+}
+
 #[tokio::test]
 async fn list_endpoints_happy_path() {
     let server = MockServer::start().await;

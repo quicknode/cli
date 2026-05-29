@@ -1,0 +1,11 @@
+---
+source: tests/output_snapshots.rs
+expression: out
+---
+┌──────────┬──────────────────┐
+│ CHAIN    ┆ NETWORKS         │
+╞══════════╪══════════════════╡
+│ ethereum ┆ mainnet, sepolia │
+├╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ solana   ┆ mainnet          │
+└──────────┴──────────────────┘
