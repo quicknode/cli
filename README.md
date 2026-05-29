@@ -14,6 +14,17 @@ ID    LABEL       STATUS  CHAIN/NETWORK     TYPE       MULTI  HTTP              
 ep-1  production  active  ethereum/mainnet  shared     yes    https://ep-1.example    —
 ep-2  —           paused  solana/mainnet    dedicated  no     https://ep-2.example    —
 showing 1–2 of 2
+
+# LLM-optimized TOON format (non-TTY default)
+$ qn endpoint list | cat
+data[2]{id,name,label,status,chain,network,is_dedicated,is_flat_rate,http_url,wss_url,tags,is_multichain}:
+  "ep-1","ep-1","production",active,ethereum,mainnet,false,false,"https://ep-1.example",null,"prod, eu",false
+  "ep-2","ep-2",null,paused,solana,mainnet,true,false,"https://ep-2.example",null,"",false
+pagination:
+  total: 2
+  limit: 20
+  offset: 0
+error: null
 ```
 
 ## Installation
