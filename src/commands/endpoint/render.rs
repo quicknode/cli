@@ -45,7 +45,7 @@ impl Render for EndpointsView {
         ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let mut t = new_table(ctx);
-        let mut headers = vec!["ID", "LABEL", "STATUS", "CHAIN/NETWORK", "TYPE", "MULTI"];
+        let mut headers = vec!["ID", "NAME", "LABEL", "STATUS", "CHAIN/NETWORK", "TYPE", "MULTI"];
         if ctx.wide {
             headers.extend(["HTTP", "WSS"]);
         }
@@ -53,6 +53,7 @@ impl Render for EndpointsView {
         for e in &self.0.data {
             let mut row = vec![
                 Cell::new(&e.id),
+                Cell::new(&e.name),
                 opt_cell(&e.label),
                 Cell::new(&e.status),
                 Cell::new(format!("{}/{}", e.chain, e.network)),
