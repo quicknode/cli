@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -17,5 +18,3 @@ async fn main() -> ExitCode {
         }
     }
 }
-
-use std::io::Write;

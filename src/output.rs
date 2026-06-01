@@ -307,6 +307,22 @@ pub fn write_table(w: &mut dyn Write, table: &Table) -> std::io::Result<()> {
     writeln!(w, "{table}")
 }
 
+/// Writes a `"showing X–Y of Z"` footer below a list-style table. Handles the
+/// empty-page case (`page_len == 0`) without underflowing to `"1-0 of N"`.
+pub fn write_pagination_footer(
+    w: &mut dyn Write,
+    offset: i64,
+    page_len: usize,
+    total: i64,
+) -> std::io::Result<()> {
+    if page_len == 0 {
+        writeln!(w, "showing 0 of {total}")
+    } else {
+        let end = (offset + page_len as i64).min(total);
+        writeln!(w, "showing {}–{} of {}", offset + 1, end, total)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

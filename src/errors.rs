@@ -116,6 +116,19 @@ pub fn render(err: &CliError, verbose: bool) -> String {
                     .to_string()
             }
         }
+        CliError::BadConfig { path, source } => {
+            if verbose {
+                format!(
+                    "Error: config file at {} is invalid: {source}",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "Error: config file at {} is invalid. Re-run with --verbose for details.",
+                    path.display()
+                )
+            }
+        }
         other => format!("Error: {other}"),
     }
 }

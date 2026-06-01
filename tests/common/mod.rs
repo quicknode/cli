@@ -2,10 +2,10 @@
 //!
 //! The bulk of CLI integration tests run *in-process* (no subprocess) for
 //! speed and reliability. We parse with `Cli::try_parse_from`, point the SDK
-//! at a `wiremock` server via `--base-url`, dispatch with `Cli::run()`, and
-//! capture stdout/stderr via gag.
-//!
-//! Subprocess smoke tests live in `tests/cli_smoke.rs` and use `assert_cmd`.
+//! at a `wiremock` server via `--base-url`, and dispatch with `Cli::run()`.
+//! Stdout is NOT captured by the in-process harness — assertions go through
+//! exit codes and wiremock request matchers. Tests that need to assert on
+//! rendered output live in `tests/cli_smoke.rs` and run via `assert_cmd`.
 
 #![allow(dead_code)]
 

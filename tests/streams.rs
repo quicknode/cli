@@ -51,7 +51,7 @@ async fn create_stream_webhook_destination() {
             "end_range": -1,
             "region": "usa_east",
             "destination": "webhook",
-            "destination_attributes": { "url": "https://hook.example/x" }
+            "destination_attributes": { "url": "https://hook.example/x", "compression": "none" }
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(stream_payload("s-new")))
         .mount(&server)
@@ -75,6 +75,45 @@ async fn create_stream_webhook_destination() {
             "usa-east",
             "--webhook",
             "https://hook.example/x",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn create_stream_webhook_destination_with_gzip() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/streams/rest/v1/streams"))
+        .and(body_partial_json(json!({
+            "destination": "webhook",
+            "destination_attributes": { "url": "https://hook.example/x", "compression": "gzip" }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stream_payload("s-new")))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "stream",
+            "create",
+            "--name",
+            "s1",
+            "--network",
+            "ethereum-mainnet",
+            "--dataset",
+            "block",
+            "--start",
+            "100",
+            "--end",
+            "-1",
+            "--region",
+            "usa-east",
+            "--webhook",
+            "https://hook.example/x",
+            "--compression",
+            "gzip",
         ],
     )
     .await;

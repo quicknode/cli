@@ -45,7 +45,15 @@ impl Render for EndpointsView {
         ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let mut t = new_table(ctx);
-        let mut headers = vec!["ID", "NAME", "LABEL", "STATUS", "CHAIN/NETWORK", "TYPE", "MULTI"];
+        let mut headers = vec![
+            "ID",
+            "NAME",
+            "LABEL",
+            "STATUS",
+            "CHAIN/NETWORK",
+            "TYPE",
+            "MULTI",
+        ];
         if ctx.wide {
             headers.extend(["HTTP", "WSS"]);
         }
@@ -72,13 +80,7 @@ impl Render for EndpointsView {
         }
         write_table(w, &t)?;
         if let Some(p) = &self.0.pagination {
-            writeln!(
-                w,
-                "showing {}–{} of {}",
-                p.offset + 1,
-                (p.offset as i64 + self.0.data.len() as i64).min(p.total),
-                p.total
-            )?;
+            crate::output::write_pagination_footer(w, p.offset as i64, self.0.data.len(), p.total)?;
         }
         Ok(())
     }

@@ -113,9 +113,14 @@ pub fn load_from(path: &Path) -> Result<Option<ConfigFile>, CliError> {
     Ok(Some(cfg))
 }
 
-/// Saves `api_key` to `path`, creating parent directories and writing 0600 perms on unix.
+/// Saves `api_key` to `path` atomically, with 0600 perms on Unix.
 ///
-/// Preserves any existing `[output]` section by reading the current file first.
+/// - Preserves any existing `[output]` section by reading the current file first.
+/// - Writes via a temp file in the same directory and `rename`s over the target,
+///   so a crash mid-write can never leave a truncated config behind.
+/// - On Unix, the temp file gets 0600 perms BEFORE the secret bytes are written
+///   (so the key is never world-readable, not even briefly), and the parent
+///   directory is best-effort tightened to 0700.
 pub fn save_api_key(path: &Path, api_key: &str) -> Result<(), CliError> {
     let mut cfg = load_from(path)?.unwrap_or_default();
     cfg.api.key = Some(api_key.to_string());
@@ -124,22 +129,63 @@ pub fn save_api_key(path: &Path, api_key: &str) -> Result<(), CliError> {
         source: std::io::Error::other(e),
     })?;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| CliError::ConfigWrite {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    }
-    fs::write(path, text).map_err(|source| CliError::ConfigWrite {
+    let parent = path.parent().ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other("config path has no parent directory"),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source,
     })?;
 
+    // Best-effort: tighten the parent directory perms. Users may already have
+    // a directory with different perms, and we don't want to refuse the save
+    // over a directory chmod failure.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
     }
+
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".qn-config-")
+        .tempfile_in(parent)
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    // Set 0600 BEFORE writing the secret. The umask default (often 0644) would
+    // otherwise leave a brief window where the key is world-readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600)).map_err(|source| {
+            CliError::ConfigWrite {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+
+    use std::io::Write;
+    tmp.as_file_mut()
+        .write_all(text.as_bytes())
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    tmp.as_file_mut()
+        .sync_all()
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    tmp.persist(path).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: e.error,
+    })?;
 
     Ok(())
 }
@@ -378,5 +424,33 @@ mod tests {
         delete_config(&path).unwrap();
         delete_config(&path).unwrap(); // already gone
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_api_key_writes_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_api_key(&path, "secret").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_api_key_leaves_no_temp_files_on_success() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_api_key(&path, "secret").unwrap();
+        let leftover: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".qn-config-"))
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "found tempfile leftovers: {leftover:?}"
+        );
     }
 }

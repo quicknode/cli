@@ -30,7 +30,7 @@ error: null
 ## Installation
 
 ```sh
-git clone git@github.com:quicknode/cli.git && cd cli
+git clone git@github.com:quicknode/qn.git && cd qn
 cargo install --path .
 ```
 

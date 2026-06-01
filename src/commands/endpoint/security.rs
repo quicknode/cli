@@ -351,10 +351,11 @@ async fn request_filter(cmd: RequestFilterCmd, ctx: Ctx) -> Result<(), CliError>
                 method: Some(methods),
             };
             let resp = ctx.sdk.admin.create_request_filter(&a.id, &req).await?;
-            if let Some(d) = &resp.data {
-                ctx.out
-                    .note(&format!("✓ Created request filter {} on {}", d.id, a.id));
-            }
+            let d = resp.data.as_ref().ok_or_else(|| {
+                CliError::Format("API returned success but no data; nothing was created".into())
+            })?;
+            ctx.out
+                .note(&format!("✓ Created request filter {} on {}", d.id, a.id));
         }
         RequestFilterCmd::Update(a) => {
             let mut methods = a.methods;

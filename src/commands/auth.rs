@@ -6,6 +6,8 @@
 //! calling a low-cost API (chain list).
 //! Status: same as whoami minus the network round-trip.
 
+use std::io::{IsTerminal, Write};
+
 use clap::{Args as ClapArgs, Subcommand};
 use quicknode_sdk::{QuicknodeSdk, SdkFullConfig};
 
@@ -120,13 +122,14 @@ fn resolve_non_interactive(global: &GlobalArgs) -> Result<(String, KeySource), C
     )
 }
 
-/// Show the last 4 chars only.
+/// Show the last 4 chars only. Char-based slicing — never panics on multi-byte input.
 fn redact(key: &str) -> String {
-    let n = key.chars().count();
-    if n <= 4 {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 4 {
         "****".to_string()
     } else {
-        format!("****{}", &key[key.len().saturating_sub(4)..])
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("****{tail}")
     }
 }
 
@@ -157,4 +160,27 @@ fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validate
     }
 }
 
-use std::io::{IsTerminal, Write};
+#[cfg(test)]
+mod tests {
+    use super::redact;
+
+    #[test]
+    fn redact_short_keys_returns_just_stars() {
+        assert_eq!(redact(""), "****");
+        assert_eq!(redact("abcd"), "****");
+    }
+
+    #[test]
+    fn redact_ascii_shows_last_four() {
+        assert_eq!(redact("abcdefgh"), "****efgh");
+    }
+
+    #[test]
+    fn redact_multibyte_does_not_panic() {
+        // αβγδεζη — each char is 2 bytes in UTF-8. Byte-slicing the last 4
+        // bytes would land in the middle of a char and panic.
+        let out = redact("αβγδεζη");
+        assert_eq!(out.chars().count(), 8); // "****" + last 4 chars
+        assert!(out.ends_with("δεζη"));
+    }
+}

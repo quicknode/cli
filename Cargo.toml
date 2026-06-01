@@ -5,6 +5,11 @@ edition = "2021"
 description = "Command-line interface for the Quicknode SDK"
 license = "MIT"
 repository = "https://github.com/quicknode/qn"
+homepage = "https://www.quicknode.com/docs/welcome"
+authors = ["Quicknode <support@quicknode.com>"]
+readme = "README.md"
+keywords = ["quicknode", "cli", "blockchain", "web3"]
+categories = ["command-line-utilities"]
 rust-version = "1.75"
 
 [[bin]]
@@ -25,15 +30,14 @@ serde_json = "1"
 serde_yml = "0.0.12"
 toon-format = { version = "0.5", default-features = false }
 comfy-table = { version = "7", default-features = false, features = ["tty"] }
-owo-colors = { version = "4", features = ["supports-colors"] }
-supports-color = "3"
 dialoguer = "0.11"
 toml = "0.8"
-anyhow = "1"
 thiserror = "1"
 humantime = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 base64 = "0.22"
+tempfile = "3"
+url = "2"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false }
@@ -42,4 +46,3 @@ assert_cmd = "2"
 predicates = "3"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
-serial_test = "3"

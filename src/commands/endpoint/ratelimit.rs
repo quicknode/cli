@@ -167,18 +167,24 @@ async fn method_create(a: MethodCreateArgs, ctx: Ctx) -> Result<(), CliError> {
         rate: a.rate,
     };
     let resp = ctx.sdk.admin.create_method_rate_limit(&a.id, &req).await?;
-    if let Some(d) = &resp.data {
-        ctx.out.note(&format!(
-            "✓ Created method rate limiter {} on {}",
-            d.id, a.id
-        ));
-    }
+    let d = resp.data.as_ref().ok_or_else(|| {
+        CliError::Format("API returned success but no data; nothing was created".into())
+    })?;
+    ctx.out.note(&format!(
+        "✓ Created method rate limiter {} on {}",
+        d.id, a.id
+    ));
     Ok(())
 }
 
 async fn method_update(a: MethodUpdateArgs, ctx: Ctx) -> Result<(), CliError> {
     let mut methods = a.methods;
     methods.extend(a.methods_csv);
+    if methods.is_empty() && a.status.is_none() && a.rate.is_none() {
+        return Err(CliError::Arg(
+            "supply at least one of --method, --status, --rate".into(),
+        ));
+    }
     let req = UpdateMethodRateLimitRequest {
         methods: if methods.is_empty() {
             None

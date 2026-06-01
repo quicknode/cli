@@ -1,16 +1,14 @@
 //! Runtime context shared by every command.
 //!
-//! Builds the `QuicknodeSdk` from `GlobalArgs`, attaches an `OutputCtx`, and
-//! records where the API key came from so `qn auth whoami` can report it.
+//! Builds the `QuicknodeSdk` from `GlobalArgs` and attaches an `OutputCtx`.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
 
 use quicknode_sdk::{
     AdminConfig, KvStoreConfig, QuicknodeSdk, SdkFullConfig, StreamsConfig, WebhooksConfig,
 };
 
-use crate::config::{self, KeySource};
+use crate::config;
 use crate::errors::CliError;
 use crate::output::{Format, OutputCtx};
 
@@ -85,8 +83,6 @@ pub struct Ctx {
     pub sdk: QuicknodeSdk,
     pub out: OutputCtx,
     pub global: GlobalArgs,
-    pub key_source: KeySource,
-    pub config_path: Option<PathBuf>,
 }
 
 impl Ctx {
@@ -100,7 +96,7 @@ impl Ctx {
         let stdout_is_tty = std::io::stdout().is_terminal();
         let (format, wide) = global.resolve_output(stdout_is_tty);
 
-        let (api_key, key_source) = config::resolve_api_key(
+        let (api_key, _) = config::resolve_api_key(
             global.api_key.as_deref(),
             env_key.as_deref(),
             config_path.as_deref(),
@@ -114,7 +110,8 @@ impl Ctx {
         // on-prem mirrors. Each sub-client has its own base path under the host
         // so we suffix correctly.
         if let Some(base) = &global.base_url {
-            let trimmed = base.trim_end_matches('/');
+            let trimmed = validate_base_url(base)?;
+            let trimmed = trimmed.as_str();
             full.admin = Some(AdminConfig {
                 base_url: Some(format!("{trimmed}/v0/")),
             });
@@ -141,14 +138,39 @@ impl Ctx {
             std::env::var("TERM").ok(),
         );
 
-        Ok(Self {
-            sdk,
-            out,
-            global,
-            key_source,
-            config_path,
-        })
+        Ok(Self { sdk, out, global })
     }
+}
+
+/// Validates a user-supplied `--base-url` and returns it with any trailing
+/// slash stripped. Rejects non-http(s) schemes, embedded userinfo, query/
+/// fragment, and non-root paths so we can't accidentally splice attacker-
+/// controlled segments into the SDK's hard-coded sub-client paths.
+fn validate_base_url(base: &str) -> Result<String, CliError> {
+    let parsed = url::Url::parse(base)
+        .map_err(|_| CliError::Arg(format!("--base-url '{base}' is not a valid URL")))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(CliError::Arg(format!(
+                "--base-url scheme '{other}' is not allowed; use http or https"
+            )))
+        }
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(CliError::Arg(
+            "--base-url must not contain userinfo (username/password)".into(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(CliError::Arg(
+            "--base-url must not contain a query string or fragment".into(),
+        ));
+    }
+    if !matches!(parsed.path(), "" | "/") {
+        return Err(CliError::Arg("--base-url must not contain a path".into()));
+    }
+    Ok(base.trim_end_matches('/').to_string())
 }
 
 #[cfg(test)]
@@ -199,5 +221,43 @@ mod tests {
         // Neither.
         let (_, w) = resolve_output_inner(None, false, None, false, true);
         assert!(!w);
+    }
+
+    #[test]
+    fn base_url_accepts_plain_http_and_https() {
+        assert_eq!(
+            validate_base_url("https://api.quicknode.com").unwrap(),
+            "https://api.quicknode.com"
+        );
+        assert_eq!(
+            validate_base_url("http://127.0.0.1:8080/").unwrap(),
+            "http://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn base_url_rejects_non_http_schemes() {
+        for bad in ["file:///etc/passwd", "ftp://x", "javascript:alert(1)"] {
+            assert!(validate_base_url(bad).is_err(), "should reject {bad}");
+        }
+    }
+
+    #[test]
+    fn base_url_rejects_userinfo() {
+        assert!(validate_base_url("https://user:pass@evil/").is_err());
+        assert!(validate_base_url("https://user@evil/").is_err());
+    }
+
+    #[test]
+    fn base_url_rejects_path_query_fragment() {
+        assert!(validate_base_url("https://x/extra/path").is_err());
+        assert!(validate_base_url("https://x/?q=1").is_err());
+        assert!(validate_base_url("https://x/#frag").is_err());
+    }
+
+    #[test]
+    fn base_url_rejects_garbage() {
+        assert!(validate_base_url("not a url").is_err());
+        assert!(validate_base_url("").is_err());
     }
 }

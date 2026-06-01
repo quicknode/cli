@@ -10,7 +10,7 @@
 //! - [`to_unix`] returns a Unix timestamp (seconds) — used by the usage endpoints.
 //! - [`to_rfc3339`] returns an RFC-3339 string — used by the log endpoints.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::errors::CliError;
 use time::format_description::well_known::Rfc3339;
@@ -76,10 +76,6 @@ pub fn parse_unix(input: &str) -> Result<i64, CliError> {
 pub fn parse_rfc3339(input: &str) -> Result<String, CliError> {
     parse(input).map(|p| p.to_rfc3339())
 }
-
-// Default for time::Duration not stable yet; provide a helper that yields a
-// SystemTime offset.
-fn _unused(_: Duration) {}
 
 #[cfg(test)]
 mod tests {

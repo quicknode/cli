@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, set_header_bold, write_table, Render};
+use crate::output::{new_table, set_header_bold, write_table, OutputCtx, Render};
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -122,36 +122,49 @@ async fn tag_remove(a: RemoveTagArgs, ctx: Ctx) -> Result<(), CliError> {
 
 // ----- renderers ----- //
 
+/// Shared body for all three bulk views: a summary line + an ID/OK table.
+fn render_bulk_summary<'a, I>(
+    w: &mut dyn std::io::Write,
+    ctx: &OutputCtx,
+    total: i32,
+    updated_count: i32,
+    failed_count: i32,
+    results: I,
+) -> std::io::Result<()>
+where
+    I: IntoIterator<Item = (&'a str, bool)>,
+{
+    writeln!(
+        w,
+        "total={total} updated={updated_count} failed={failed_count}"
+    )?;
+    let mut t = new_table(ctx);
+    set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
+    for (id, success) in results {
+        t.add_row(vec![
+            Cell::new(id),
+            Cell::new(if success { "✓" } else { "✗" }),
+        ]);
+    }
+    write_table(w, &t)
+}
+
 #[derive(Serialize)]
 struct BulkStatusView(quicknode_sdk::admin::BulkUpdateEndpointStatusResponse);
 
 impl Render for BulkStatusView {
-    fn render_table(
-        &self,
-        w: &mut dyn std::io::Write,
-        ctx: &crate::output::OutputCtx,
-    ) -> std::io::Result<()> {
-        let data = match &self.0.data {
-            Some(d) => d,
-            None => {
-                writeln!(w, "(no result)")?;
-                return Ok(());
-            }
+    fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
+        let Some(data) = &self.0.data else {
+            return writeln!(w, "(no result)");
         };
-        writeln!(
+        render_bulk_summary(
             w,
-            "total={} updated={} failed={}",
-            data.total, data.updated_count, data.failed_count
-        )?;
-        let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
-        for r in &data.results {
-            t.add_row(vec![
-                Cell::new(&r.id),
-                Cell::new(if r.success { "✓" } else { "✗" }),
-            ]);
-        }
-        write_table(w, &t)
+            ctx,
+            data.total,
+            data.updated_count,
+            data.failed_count,
+            data.results.iter().map(|r| (r.id.as_str(), r.success)),
+        )
     }
 }
 
@@ -159,32 +172,18 @@ impl Render for BulkStatusView {
 struct BulkAddTagView(quicknode_sdk::admin::BulkAddTagResponse);
 
 impl Render for BulkAddTagView {
-    fn render_table(
-        &self,
-        w: &mut dyn std::io::Write,
-        ctx: &crate::output::OutputCtx,
-    ) -> std::io::Result<()> {
-        let data = match &self.0.data {
-            Some(d) => d,
-            None => {
-                writeln!(w, "(no result)")?;
-                return Ok(());
-            }
+    fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
+        let Some(data) = &self.0.data else {
+            return writeln!(w, "(no result)");
         };
-        writeln!(
+        render_bulk_summary(
             w,
-            "total={} updated={} failed={}",
-            data.total, data.updated_count, data.failed_count
-        )?;
-        let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
-        for r in &data.results {
-            t.add_row(vec![
-                Cell::new(&r.id),
-                Cell::new(if r.success { "✓" } else { "✗" }),
-            ]);
-        }
-        write_table(w, &t)
+            ctx,
+            data.total,
+            data.updated_count,
+            data.failed_count,
+            data.results.iter().map(|r| (r.id.as_str(), r.success)),
+        )
     }
 }
 
@@ -192,31 +191,17 @@ impl Render for BulkAddTagView {
 struct BulkRemoveTagView(quicknode_sdk::admin::BulkRemoveTagResponse);
 
 impl Render for BulkRemoveTagView {
-    fn render_table(
-        &self,
-        w: &mut dyn std::io::Write,
-        ctx: &crate::output::OutputCtx,
-    ) -> std::io::Result<()> {
-        let data = match &self.0.data {
-            Some(d) => d,
-            None => {
-                writeln!(w, "(no result)")?;
-                return Ok(());
-            }
+    fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
+        let Some(data) = &self.0.data else {
+            return writeln!(w, "(no result)");
         };
-        writeln!(
+        render_bulk_summary(
             w,
-            "total={} updated={} failed={}",
-            data.total, data.updated_count, data.failed_count
-        )?;
-        let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
-        for r in &data.results {
-            t.add_row(vec![
-                Cell::new(&r.id),
-                Cell::new(if r.success { "✓" } else { "✗" }),
-            ]);
-        }
-        write_table(w, &t)
+            ctx,
+            data.total,
+            data.updated_count,
+            data.failed_count,
+            data.results.iter().map(|r| (r.id.as_str(), r.success)),
+        )
     }
 }
