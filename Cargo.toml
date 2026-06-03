@@ -46,3 +46,8 @@ assert_cmd = "2"
 predicates = "3"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
