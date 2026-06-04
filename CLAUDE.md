@@ -6,6 +6,8 @@ This file documents the patterns established while building `qn` so future work 
 
 Everything in this repository is — or will be — public. Treat every file, commit message, issue, and PR description as world-readable.
 
+**Brand capitalization: always `Quicknode` (capital Q, lowercase n).** Never `QuickNode`, `quickNode`, or `QUICKNODE`. This applies to every surface — code, comments, commit messages, docs, generated workflow strings, formula descriptions, package metadata, error messages, anywhere the brand name appears.
+
 - **Never commit secrets.** No API keys, tokens, account IDs, customer identifiers, internal hostnames, or non-public URLs. The CLI itself reads keys from env vars or `~/.config/qn/config.toml`; both live outside the repo. If you spot a leaked secret in a diff, stop and flag it before committing.
 - **Never include internal Quicknode information** in code, comments, commit messages, fixtures, snapshots, or test data: no internal Slack/Linear/Jira links, no employee names, no internal team structure, no unreleased product/feature names, no non-public roadmap detail, no private infrastructure details. If something would be inappropriate to post on the public crates.io page, it doesn't belong here.
 - **Test fixtures must use fake data.** Endpoint IDs like `ep-1`, wallets like `0xabc`, URLs like `https://hook.example.com`, emails like `alice@example.com`. Don't paste real responses from a real account.
