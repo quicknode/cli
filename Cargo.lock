@@ -1478,7 +1478,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "qn"
+name = "quicknode-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
