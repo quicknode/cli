@@ -510,6 +510,23 @@ async fn endpoint_create_no_flags_fails_before_api_call() {
 }
 
 #[tokio::test]
+async fn endpoint_create_only_chain_fails_before_api_call() {
+    let server = MockServer::start().await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "create", "--chain", "ethereum"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("--network") && !out.stderr.contains("--chain "),
+        "should call out --network specifically; stderr={}",
+        out.stderr
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn endpoint_update_no_flags_fails_before_api_call() {
     let server = MockServer::start().await;
     let out = run_qn(&server.uri(), &["endpoint", "update", "ep-1"]).await;
