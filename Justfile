@@ -18,20 +18,15 @@ fmt:
 
 # Release pipeline maintenance
 
-# Regenerate the dist workflow and re-apply our local overrides.
-# Run this any time you change dist-workspace.toml or upgrade cargo-dist.
+# Regenerate the dist workflow. Run this any time you change
+# dist-workspace.toml or upgrade cargo-dist.
+#
+# Note: cargo-dist's `plan` step does an internal "is the generated
+# workflow up to date" check and hard-fails CI on any divergence, so we
+# can't post-process the output here. The "axo bot" attribution on tap
+# repo commits stays as-is until upstream exposes a config knob.
 dist-regen:
-  #!/usr/bin/env bash
-  set -euo pipefail
   dist generate
-  # cargo-dist hardcodes the axo bot identity in the generated workflow.
-  # Re-brand it to Quicknode after each regeneration.
-  sed -i.bak \
-    -e 's|GITHUB_USER: "axo bot"|GITHUB_USER: "Quicknode Release Bot"|' \
-    -e 's|GITHUB_EMAIL: "admin+bot@axo.dev"|GITHUB_EMAIL: "release-bot@users.noreply.github.com"|' \
-    .github/workflows/release.yml
-  rm -f .github/workflows/release.yml.bak
-  echo "Regenerated .github/workflows/release.yml with Quicknode bot identity."
 
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
 # Each recipe is callable on its own; release-prepare orchestrates them with prompts.

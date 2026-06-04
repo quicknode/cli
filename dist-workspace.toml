@@ -19,7 +19,9 @@ hosting = "github"
 install-updater = false
 # Homebrew tap repository to publish the formula to
 tap = "quicknode/homebrew-tap"
-# Create the formula under quicknode/tap → users install via `brew install quicknode/tap/qn`
+# Override the Homebrew formula name so `brew install quicknode/tap/qn` works
+# (default would derive it from the package name `quicknode-cli`).
+formula = "qn"
 publish-jobs = ["homebrew"]
 # Emit SLSA build attestations for every binary archive. Critical for a credential-handling tool.
 github-attestations = true
