@@ -28,6 +28,19 @@ fmt:
 dist-regen:
   dist generate
 
+# Validate the crate tarball without uploading. Run before tagging to
+# catch packaging errors (missing license, README, dirty tree, etc.)
+# while there's still time to fix them.
+release-cargo-publish-check:
+  cargo publish -p quicknode-cli --dry-run
+
+# Publish the crate to crates.io. Normally invoked from CI by the
+# custom-publish-crates job in release.yml; this recipe is for manual
+# recovery if CI's publish step fails and we need to retry from a
+# clean local tree. Requires `cargo login` first.
+release-cargo-publish:
+  cargo publish -p quicknode-cli
+
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
 # Each recipe is callable on its own; release-prepare orchestrates them with prompts.
 

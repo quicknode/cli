@@ -22,6 +22,6 @@ tap = "quicknode/homebrew-tap"
 # Override the Homebrew formula name so `brew install quicknode/tap/qn` works
 # (default would derive it from the package name `quicknode-cli`).
 formula = "qn"
-publish-jobs = ["homebrew"]
+publish-jobs = ["homebrew", "./publish-crates"]
 # Emit SLSA build attestations for every binary archive. Critical for a credential-handling tool.
 github-attestations = true
