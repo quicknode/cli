@@ -16,11 +16,14 @@ on:
         required: true
         type: string
 
+# Permissions must NOT exceed what the caller (release.yml's
+# `custom-publish-docker` job) grants — reusable workflows can't widen
+# permissions. cargo-dist gives custom publish jobs id-token + packages
+# write, plus the workflow-level contents: write inherited via the
+# caller. That's enough for GHCR push and gh release download.
 permissions:
-  contents: read
   packages: write
   id-token: write
-  attestations: write
 
 env:
   REGISTRY: ghcr.io
