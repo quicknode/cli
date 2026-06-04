@@ -1,0 +1,115 @@
+name: Publish Docker image to GHCR
+
+# Reusable workflow invoked by cargo-dist's release pipeline as a
+# user_publish_job (see dist-workspace.toml `publish-jobs`).
+#
+# Builds a multi-arch (linux/amd64 + linux/arm64) image from the
+# pre-built musl binaries attached to the GitHub release, pushes
+# per-arch tags to GHCR, and stitches them into a multi-arch manifest
+# at the canonical tag. The image is published private — see Phase 2
+# of the packaging plan for the visibility flip.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist-manifest JSON for this announcement
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: quicknode/qn
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release tag from plan
+        id: meta
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          tag=$(echo "$PLAN" | jq -r '.announcement_tag')
+          version=$(echo "$PLAN" | jq -r '.releases[0].app_version')
+          is_prerelease=$(echo "$PLAN" | jq -r '.announcement_is_prerelease')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Download musl artifacts from the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          gh release download "${{ steps.meta.outputs.tag }}" \
+            --pattern '*linux-musl*.tar.xz' \
+            --dir artifacts/
+
+      - name: Stage per-arch binaries
+        run: |
+          mkdir -p build/amd64 build/arm64
+          tar -xf artifacts/quicknode-cli-x86_64-unknown-linux-musl.tar.xz \
+            --strip-components=1 -C build/amd64 \
+            --wildcards '*/qn'
+          tar -xf artifacts/quicknode-cli-aarch64-unknown-linux-musl.tar.xz \
+            --strip-components=1 -C build/arm64 \
+            --wildcards '*/qn'
+          chmod +x build/amd64/qn build/arm64/qn
+          file build/amd64/qn build/arm64/qn
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push linux/amd64
+        id: amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: build/amd64
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}-amd64
+
+      - name: Build and push linux/arm64
+        id: arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: build/arm64
+          file: Dockerfile
+          platforms: linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}-arm64
+
+      - name: Create and push multi-arch manifest for v${{ steps.meta.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.meta.outputs.version }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}-arm64
+
+      - name: Promote to :latest (skip for prereleases)
+        if: ${{ steps.meta.outputs.is_prerelease == 'false' }}
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
