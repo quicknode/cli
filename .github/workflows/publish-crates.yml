@@ -12,6 +12,14 @@ on:
         required: true
         type: string
 
+# Reusable workflows mint their own GITHUB_TOKEN with only the permissions
+# declared here (NOT inherited from the caller). On a private/internal
+# repo, actions/checkout needs `contents: read` or it gets a 404. The
+# caller must also grant this — see dist-workspace.toml's
+# github-custom-job-permissions block.
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-22.04

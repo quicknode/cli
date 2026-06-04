@@ -18,10 +18,13 @@ on:
 
 # Permissions must NOT exceed what the caller (release.yml's
 # `custom-publish-docker` job) grants — reusable workflows can't widen
-# permissions. cargo-dist gives custom publish jobs id-token + packages
-# write, plus the workflow-level contents: write inherited via the
-# caller. That's enough for GHCR push and gh release download.
+# permissions. Caller grants are configured via dist-workspace.toml's
+# github-custom-job-permissions block. `contents: read` is needed for
+# actions/checkout on this internal repo; `packages: write` is needed
+# for GHCR push; `id-token: write` is needed for OIDC-backed
+# attestations on the pushed image.
 permissions:
+  contents: read
   packages: write
   id-token: write
 

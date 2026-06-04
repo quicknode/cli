@@ -31,3 +31,12 @@ formula = "qn"
 publish-jobs = ["./publish-crates", "./publish-docker"]
 # Emit SLSA build attestations for every binary archive. Critical for a credential-handling tool.
 github-attestations = true
+
+# The repo is `internal`, so the reusable workflow's auto-minted
+# GITHUB_TOKEN needs explicit contents:read to checkout the source.
+# Without this the actions/checkout step in each publish workflow
+# fails with `Repository not found` (a 404 masquerading as a missing
+# auth claim on a private repo). Granting the permission here widens
+# the calling job's permission grant so the called workflow can also
+# declare contents:read without exceeding the caller.
+github-custom-job-permissions = { "publish-crates" = { contents = "read" }, "publish-docker" = { contents = "read", packages = "write", "id-token" = "write" } }
