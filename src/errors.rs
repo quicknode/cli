@@ -1,8 +1,10 @@
 //! Top-level error type for the CLI and the SDK→user message mapping.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use quicknode_sdk::errors::{HttpKind, SdkError};
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -69,28 +71,21 @@ pub fn exit_code_for(err: &CliError) -> i32 {
     }
 }
 
-/// Renders the error to a human-friendly single line (or two for multi-line bodies).
+/// Renders the error to a human-friendly message using the real process argv
+/// for did-you-mean suggestions. Use [`render_with_argv`] from tests where the
+/// simulated argv differs from the process argv.
 ///
 /// Verbose mode appends the underlying body / source where available.
 pub fn render(err: &CliError, verbose: bool) -> String {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    render_with_argv(err, verbose, &argv)
+}
+
+/// Like [`render`] but uses the supplied argv values for did-you-mean lookup.
+pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> String {
     match err {
         CliError::Sdk(SdkError::Api { status, body }) => {
-            let code = status.as_u16();
-            let base = match code {
-                401 | 403 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
-                404 => "not found.".to_string(),
-                422 => "the API rejected the request as invalid.".to_string(),
-                429 => "rate limited by the Quicknode API. Try again shortly.".to_string(),
-                500..=599 => format!(
-                    "Quicknode API is having issues (HTTP {code}). Try again or check status.quicknode.com."
-                ),
-                _ => format!("API returned HTTP {code}."),
-            };
-            if verbose && !body.is_empty() {
-                format!("Error: {base}\n{body}")
-            } else {
-                format!("Error: {base}")
-            }
+            render_api_error(status.as_u16(), body, verbose, argv)
         }
         CliError::Sdk(sdk @ SdkError::Http(_)) => {
             let msg = match sdk.http_kind() {
@@ -133,16 +128,315 @@ pub fn render(err: &CliError, verbose: bool) -> String {
     }
 }
 
+/// Status codes have a small set of canonical user-facing messages. Validation
+/// (400/422) gets the structured body treatment from `parse_api_body`.
+fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> String {
+    let headline = match code {
+        400 | 422 => "invalid request.".to_string(),
+        401 | 403 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
+        404 => "not found.".to_string(),
+        429 => "rate limited by the Quicknode API. Try again shortly.".to_string(),
+        500..=599 => format!(
+            "Quicknode API is having issues (HTTP {code}). Try again or check status.quicknode.com."
+        ),
+        _ => format!("API returned HTTP {code}."),
+    };
+
+    // For non-validation status codes, body is mostly noise (server stack traces,
+    // HTML error pages, etc). Only mine it for validation-class errors.
+    let parsed = if matches!(code, 400 | 422) {
+        parse_api_body(body, argv)
+    } else {
+        ParsedApiBody::default()
+    };
+
+    let mut out = format!("Error: {headline}");
+
+    if !parsed.bullets.is_empty() {
+        for bullet in &parsed.bullets {
+            out.push_str("\n  • ");
+            out.push_str(bullet);
+        }
+    } else if matches!(code, 400 | 422) && !body.is_empty() && !verbose {
+        // We tried to parse and got nothing useful; surface the raw body so
+        // the user isn't left with a bare "invalid request." line.
+        out.push('\n');
+        out.push_str(body.trim());
+    }
+
+    for hint in &parsed.hints {
+        out.push('\n');
+        out.push_str(hint);
+    }
+
+    if verbose && !body.is_empty() {
+        out.push('\n');
+        out.push_str(body);
+    } else if matches!(code, 400 | 422) && !parsed.bullets.is_empty() && !body.is_empty() {
+        out.push_str("\nRe-run with --verbose for the full response body.");
+    }
+
+    out
+}
+
+#[derive(Default)]
+struct ParsedApiBody {
+    bullets: Vec<String>,
+    hints: Vec<String>,
+}
+
+/// Parses a JSON-shaped API error body, extracting human-readable messages and
+/// (when the body contains "must be one of …" enum lists) appending
+/// did-you-mean suggestions against the user's argv.
+fn parse_api_body(body: &str, argv: &[String]) -> ParsedApiBody {
+    let mut out = ParsedApiBody::default();
+    if body.is_empty() {
+        return out;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return out;
+    };
+
+    let mut raw_strings: Vec<String> = Vec::new();
+    collect_error_strings(&value, &mut raw_strings);
+    if raw_strings.is_empty() {
+        return out;
+    }
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut fields_hinted: BTreeSet<String> = BTreeSet::new();
+
+    for s in raw_strings {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() || !seen.insert(trimmed.clone()) {
+            continue;
+        }
+        if is_generic_label(&trimmed) {
+            // Skip "Bad Request" / "Unauthorized" — these duplicate the headline.
+            continue;
+        }
+        let bullet = decorate_with_suggestion(&trimmed, argv, &mut fields_hinted);
+        out.bullets.push(bullet);
+    }
+
+    for field in &fields_hinted {
+        if let Some(hint) = field_hint(field) {
+            out.hints.push(hint.to_string());
+        }
+    }
+
+    out
+}
+
+/// Recursively walk a JSON value, pulling strings out of any key named
+/// `error`, `errors`, `message`, or `messages`. Accepts strings, arrays of
+/// strings, arrays of objects (recurse), and nested objects (recurse).
+fn collect_error_strings(value: &Value, out: &mut Vec<String>) {
+    const KEYS: &[&str] = &["errors", "error", "messages", "message"];
+    match value {
+        Value::Object(map) => {
+            for key in KEYS {
+                if let Some(v) = map.get(*key) {
+                    collect_strings_from(v, out);
+                }
+            }
+            // Also recurse into other object values so we can find nested
+            // error/message keys (e.g. NestJS wraps under `message.message`).
+            for (k, v) in map {
+                if !KEYS.contains(&k.as_str()) {
+                    collect_error_strings(v, out);
+                }
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                collect_error_strings(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Helper: when we hit one of the error keys, accept multiple shapes.
+fn collect_strings_from(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) => out.push(s.clone()),
+        Value::Array(arr) => {
+            for v in arr {
+                match v {
+                    Value::String(s) => out.push(s.clone()),
+                    Value::Object(_) => collect_error_strings(v, out),
+                    _ => {}
+                }
+            }
+        }
+        Value::Object(_) => collect_error_strings(value, out),
+        _ => {}
+    }
+}
+
+/// Returns the bullet text, possibly with a `did you mean '…'?` suffix and a
+/// `(N more)` truncation marker. Also records which fields had enum lists so
+/// the caller can attach helper hints.
+fn decorate_with_suggestion(
+    raw: &str,
+    argv: &[String],
+    fields_hinted: &mut BTreeSet<String>,
+) -> String {
+    let Some((field, candidates)) = parse_must_be_one_of(raw) else {
+        return raw.to_string();
+    };
+
+    fields_hinted.insert(field.clone());
+
+    // Find the argv value that's closest to any candidate, then attach DYM if
+    // the best match is within threshold.
+    let best = best_suggestion(argv, &candidates);
+
+    let display = truncate_candidate_list(&candidates, 5);
+    let mut bullet = format!("{field} must be one of: {display}");
+    if let Some((user_value, suggestion)) = best {
+        bullet.push_str(&format!(
+            " — did you mean '{suggestion}' (you passed '{user_value}')?"
+        ));
+    }
+    bullet
+}
+
+/// Parse `"<field> must be one of [the following values:] X, Y, Z"`.
+/// Returns the field name and the candidate list.
+fn parse_must_be_one_of(s: &str) -> Option<(String, Vec<String>)> {
+    let (field_part, rest) = s.split_once(" must be one of")?;
+    let field = field_part.trim();
+    if field.is_empty()
+        || !field
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    // After "must be one of" we accept any of: " the following values: X, Y",
+    // ": X, Y", or " X, Y" (rare but possible).
+    let list_part = rest
+        .strip_prefix(" the following values: ")
+        .or_else(|| rest.strip_prefix(": "))
+        .or_else(|| rest.strip_prefix(' '))
+        .unwrap_or(rest)
+        .trim_end_matches('.');
+    let candidates: Vec<String> = list_part
+        .split(", ")
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if candidates.len() < 2 {
+        return None;
+    }
+    Some((field.to_string(), candidates))
+}
+
+/// Find the (argv-value, candidate) pair with smallest Levenshtein distance,
+/// gated on: distance ≤ 3 AND ≥ 3 leading chars shared with the candidate.
+fn best_suggestion(argv: &[String], candidates: &[String]) -> Option<(String, String)> {
+    let mut best: Option<(usize, String, String)> = None;
+    for arg in argv {
+        // Skip flags themselves and obviously-non-value tokens.
+        if arg.starts_with('-') || arg.is_empty() || arg.len() < 2 {
+            continue;
+        }
+        for cand in candidates {
+            let d = levenshtein(arg, cand);
+            if d > 3 {
+                continue;
+            }
+            if shared_prefix_len(arg, cand) < 3 {
+                continue;
+            }
+            match best.as_ref() {
+                None => best = Some((d, arg.clone(), cand.clone())),
+                Some((cur, _, _)) if d < *cur => best = Some((d, arg.clone(), cand.clone())),
+                _ => {}
+            }
+        }
+    }
+    best.map(|(_, a, c)| (a, c))
+}
+
+fn shared_prefix_len(a: &str, b: &str) -> usize {
+    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count()
+}
+
+/// Classic O(n*m) Levenshtein distance. n,m are tiny here (≤ ~40 chars), so
+/// this is fine.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (curr[j] + 1).min(prev[j + 1] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+fn truncate_candidate_list(candidates: &[String], keep: usize) -> String {
+    if candidates.len() <= keep {
+        return candidates.join(", ");
+    }
+    let shown = candidates[..keep].join(", ");
+    let extra = candidates.len() - keep;
+    format!("{shown} ({extra} more)")
+}
+
+/// Maps known server-side field names to a follow-up command the user can run
+/// to discover valid values.
+/// Skip standard HTTP status-phrase strings that duplicate the headline.
+fn is_generic_label(s: &str) -> bool {
+    matches!(
+        s,
+        "Bad Request"
+            | "Unauthorized"
+            | "Forbidden"
+            | "Not Found"
+            | "Unprocessable Entity"
+            | "Too Many Requests"
+            | "Internal Server Error"
+            | "Service Unavailable"
+    )
+}
+
+fn field_hint(field: &str) -> Option<&'static str> {
+    match field {
+        "network" => Some("Run 'qn chain list' to see supported networks."),
+        "chain" => Some("Run 'qn chain list' to see supported chains."),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use quicknode_sdk::errors::SdkError;
 
-    fn api_err(code: u16) -> CliError {
+    fn api_err_with(code: u16, body: &str) -> CliError {
         CliError::Sdk(SdkError::Api {
             status: reqwest::StatusCode::from_u16(code).unwrap(),
-            body: "{\"message\":\"boom\"}".to_string(),
+            body: body.to_string(),
         })
+    }
+
+    fn api_err(code: u16) -> CliError {
+        api_err_with(code, "{\"message\":\"boom\"}")
     }
 
     #[test]
@@ -188,5 +482,161 @@ mod tests {
     fn non_verbose_404_omits_body() {
         let msg = render(&api_err(404), false);
         assert!(!msg.contains("boom"), "got: {msg}");
+    }
+
+    // ---- body parsing ----
+
+    #[test]
+    fn nestjs_shape_extracts_bullets() {
+        let body = r#"{"statusCode":400,"message":{"message":["network must be one of the following values: ethereum-mainnet, ethereum-sepolia, solana-mainnet","status must be one of the following values: active, paused, terminated"],"error":"Bad Request"}}"#;
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.starts_with("Error: invalid request."), "got: {msg}");
+        assert!(msg.contains("• network must be one of:"), "got: {msg}");
+        assert!(msg.contains("• status must be one of:"), "got: {msg}");
+    }
+
+    #[test]
+    fn admin_shape_extracts_error_string() {
+        let body = r#"{"data":null,"error":"undefined method `chain' for nil"}"#;
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.contains("undefined method"), "got: {msg}");
+    }
+
+    #[test]
+    fn empty_body_400_falls_through() {
+        let msg = render(&api_err_with(400, ""), false);
+        assert_eq!(msg, "Error: invalid request.");
+    }
+
+    #[test]
+    fn garbage_non_json_body_falls_back_to_raw() {
+        let body = "<html>oops</html>";
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.contains("<html>oops</html>"), "got: {msg}");
+    }
+
+    #[test]
+    fn generic_errors_array_of_strings() {
+        let body = r#"{"errors":["first thing wrong","second thing wrong"]}"#;
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.contains("• first thing wrong"), "got: {msg}");
+        assert!(msg.contains("• second thing wrong"), "got: {msg}");
+    }
+
+    #[test]
+    fn generic_errors_array_of_objects() {
+        let body = r#"{"errors":[{"message":"thing one"},{"message":"thing two"}]}"#;
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.contains("• thing one"), "got: {msg}");
+        assert!(msg.contains("• thing two"), "got: {msg}");
+    }
+
+    #[test]
+    fn dedupes_repeated_strings() {
+        let body = r#"{"error":"same thing","message":"same thing"}"#;
+        let msg = render(&api_err_with(400, body), false);
+        let count = msg.matches("same thing").count();
+        assert_eq!(count, 1, "expected dedupe, got: {msg}");
+    }
+
+    #[test]
+    fn truncates_long_enum_list() {
+        // 10 candidates, only the first 5 should render inline.
+        let body = r#"{"message":"x must be one of a, b, c, d, e, f, g, h, i, j"}"#;
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.contains("a, b, c, d, e (5 more)"), "got: {msg}");
+    }
+
+    #[test]
+    fn field_hint_appended_for_network() {
+        let body = r#"{"message":"network must be one of: ethereum-mainnet, solana-mainnet"}"#;
+        let msg = render(&api_err_with(400, body), false);
+        assert!(msg.contains("qn chain list"), "got: {msg}");
+    }
+
+    #[test]
+    fn verbose_appends_full_body() {
+        let body = r#"{"message":["network must be one of: a, b, c"]}"#;
+        let msg = render(&api_err_with(400, body), true);
+        assert!(msg.contains(body), "got: {msg}");
+    }
+
+    #[test]
+    fn levenshtein_basic() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("a", ""), 1);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("ethereum-mainnet", "ethereum-mainnet"), 0);
+        assert_eq!(levenshtein("ethereum-mainnetsds", "ethereum-mainnet"), 3);
+    }
+
+    #[test]
+    fn parse_must_be_one_of_happy_path() {
+        let (f, c) =
+            parse_must_be_one_of("network must be one of the following values: a, b, c").unwrap();
+        assert_eq!(f, "network");
+        assert_eq!(c, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_must_be_one_of_no_following_values_prefix() {
+        let (f, c) = parse_must_be_one_of("status must be one of active, paused").unwrap();
+        assert_eq!(f, "status");
+        assert_eq!(c, vec!["active", "paused"]);
+    }
+
+    #[test]
+    fn parse_must_be_one_of_rejects_unrelated_strings() {
+        assert!(parse_must_be_one_of("some random error").is_none());
+    }
+
+    #[test]
+    fn truncate_candidate_list_under_keep_returns_all() {
+        assert_eq!(
+            truncate_candidate_list(&["a".into(), "b".into()], 5),
+            "a, b"
+        );
+    }
+
+    #[test]
+    fn best_suggestion_picks_closest_within_threshold() {
+        let candidates: Vec<String> =
+            vec!["ethereum-mainnet", "ethereum-sepolia", "solana-mainnet"]
+                .into_iter()
+                .map(String::from)
+                .collect();
+        let argv = vec!["ethereum-mainnetsds".to_string()];
+        let suggestion = best_suggestion(&argv, &candidates);
+        assert_eq!(
+            suggestion,
+            Some(("ethereum-mainnetsds".into(), "ethereum-mainnet".into()))
+        );
+    }
+
+    #[test]
+    fn best_suggestion_returns_none_if_too_far() {
+        let candidates: Vec<String> = vec!["ethereum-mainnet"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let argv = vec!["sfjla".to_string()];
+        assert_eq!(best_suggestion(&argv, &candidates), None);
+    }
+
+    #[test]
+    fn best_suggestion_ignores_flag_tokens() {
+        let candidates: Vec<String> = vec!["chain"].into_iter().map(String::from).collect();
+        let argv = vec!["--chain".to_string()];
+        // "--chain" starts with "-", should be skipped.
+        assert_eq!(best_suggestion(&argv, &candidates), None);
+    }
+
+    #[test]
+    fn renders_5xx_skips_body_parsing() {
+        // We don't want stack-trace HTML on a 500 to be parsed as bullets.
+        let body = r#"{"message":"internal error"}"#;
+        let msg = render(&api_err_with(500, body), false);
+        assert!(!msg.contains("•"), "got: {msg}");
     }
 }
