@@ -29,8 +29,18 @@ error: null
 
 ## Installation
 
+### From crates.io
+
 ```sh
-git clone git@github.com:quicknode/qn.git && cd qn
+cargo install quicknode-cli
+```
+
+The crate name is `quicknode-cli` but the installed binary is `qn`.
+
+### From source
+
+```sh
+git clone git@github.com:quicknode/cli.git && cd cli
 cargo install --path .
 ```
 
