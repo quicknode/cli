@@ -17,11 +17,17 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
-# Homebrew tap repository to publish the formula to
+# Homebrew tap repository to publish the formula to. The "homebrew"
+# entry is deliberately omitted from publish-jobs until Phase 3 of the
+# packaging plan creates quicknode/homebrew-tap and adds the
+# HOMEBREW_TAP_TOKEN secret — without it, the formula push step would
+# fail CI on every release. The formula itself is still generated and
+# attached to each GitHub Release (it just doesn't get auto-committed
+# to the tap).
 tap = "quicknode/homebrew-tap"
 # Override the Homebrew formula name so `brew install quicknode/tap/qn` works
 # (default would derive it from the package name `quicknode-cli`).
 formula = "qn"
-publish-jobs = ["homebrew", "./publish-crates", "./publish-docker"]
+publish-jobs = ["./publish-crates", "./publish-docker"]
 # Emit SLSA build attestations for every binary archive. Critical for a credential-handling tool.
 github-attestations = true
