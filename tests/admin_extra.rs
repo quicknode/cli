@@ -237,3 +237,12 @@ async fn bulk_tag_add() {
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
+
+#[tokio::test]
+async fn team_set_endpoints_no_ids_fails_before_api_call() {
+    let server = MockServer::start().await;
+    let out = run_qn(&server.uri(), &["team", "set-endpoints", "7"]).await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("endpoint id"), "stderr={}", out.stderr);
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}

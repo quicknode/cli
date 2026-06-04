@@ -224,6 +224,13 @@ async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.chain.is_none() && a.network.is_none() {
+        return Err(CliError::Arg(
+            "'endpoint create' requires at least one of --chain or --network. \
+             Run 'qn chain list' to see available chains."
+                .into(),
+        ));
+    }
     let req = CreateEndpointRequest {
         chain: a.chain,
         network: a.network,
@@ -243,6 +250,9 @@ async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.label.is_none() {
+        return Err(CliError::Arg("'endpoint update' requires --label.".into()));
+    }
     let req = UpdateEndpointRequest { label: a.label };
     ctx.sdk.admin.update_endpoint(&a.id, &req).await?;
     ctx.out.note(&format!("✓ Updated endpoint {}", a.id));

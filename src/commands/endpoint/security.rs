@@ -216,6 +216,23 @@ async fn options_show(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn set_options(a: SetOptionsArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.tokens.is_none()
+        && a.referrers.is_none()
+        && a.jwts.is_none()
+        && a.ips.is_none()
+        && a.domain_masks.is_none()
+        && a.hsts.is_none()
+        && a.cors.is_none()
+        && a.request_filters.is_none()
+        && a.ip_custom_header.is_none()
+    {
+        return Err(CliError::Arg(
+            "'endpoint security set-options' requires at least one of: \
+             --tokens, --referrers, --jwts, --ips, --domain-masks, --hsts, \
+             --cors, --request-filters, --ip-custom-header."
+                .into(),
+        ));
+    }
     let options = SecurityOptionsUpdate {
         tokens: a.tokens.map(|t| t.as_str().to_string()),
         referrers: a.referrers.map(|t| t.as_str().to_string()),
