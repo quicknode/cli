@@ -491,3 +491,59 @@ async fn endpoint_ratelimit_set_omits_unset_fields() {
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
+
+// ---- Stage B: required-args pre-flight checks ---- //
+
+#[tokio::test]
+async fn endpoint_create_no_flags_fails_before_api_call() {
+    // No mocks mounted; if the CLI tries to make a request, wiremock would 404.
+    // We assert that the pre-flight check fires *before* any HTTP call.
+    let server = MockServer::start().await;
+    let out = run_qn(&server.uri(), &["endpoint", "create"]).await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("--chain") && out.stderr.contains("--network"),
+        "stderr={}",
+        out.stderr
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn endpoint_create_only_chain_fails_before_api_call() {
+    let server = MockServer::start().await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "create", "--chain", "ethereum"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("--network") && !out.stderr.contains("--chain "),
+        "should call out --network specifically; stderr={}",
+        out.stderr
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn endpoint_update_no_flags_fails_before_api_call() {
+    let server = MockServer::start().await;
+    let out = run_qn(&server.uri(), &["endpoint", "update", "ep-1"]).await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("--label"), "stderr={}", out.stderr);
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn endpoint_security_set_options_no_flags_fails_before_api_call() {
+    let server = MockServer::start().await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "set-options", "ep-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("--tokens"), "stderr={}", out.stderr);
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}

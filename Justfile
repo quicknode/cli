@@ -110,6 +110,11 @@ release-bump version:
     echo "Error: working tree is not clean. Commit or stash changes before bumping." >&2
     exit 1
   fi
+  current_version=$(sed -nE 's/^version = "(.+)"/\1/p' Cargo.toml | head -1)
+  if [[ "$current_version" == "{{version}}" ]]; then
+    echo "Cargo.toml is already at {{version}}. No bump needed — skip to: just release-tag-main {{version}}" >&2
+    exit 0
+  fi
   git checkout -b "release/v{{version}}"
   sed -i.bak 's/^version = ".*"/version = "{{version}}"/' Cargo.toml && rm Cargo.toml.bak
   # Refresh Cargo.lock so it matches the new version.

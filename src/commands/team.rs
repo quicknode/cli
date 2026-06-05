@@ -165,6 +165,11 @@ async fn endpoints(id: i64, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn set_endpoints(a: SetEndpointsArgs, ctx: Ctx) -> Result<(), CliError> {
+    if a.endpoint_ids.is_empty() {
+        return Err(CliError::Arg(
+            "'team set-endpoints' requires at least one endpoint id.".into(),
+        ));
+    }
     let req = UpdateTeamEndpointsRequest {
         endpoint_ids: a.endpoint_ids.clone(),
     };

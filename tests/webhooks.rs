@@ -196,3 +196,109 @@ async fn webhook_create_missing_wallets_errors() {
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
     assert!(out.stderr.contains("--wallet"), "stderr={}", out.stderr);
 }
+
+// ---- 400 error rendering ---- //
+
+/// A close-to-real NestJS validator 400 from the webhooks service.
+fn nestjs_network_400() -> serde_json::Value {
+    json!({
+        "statusCode": 400,
+        "timestamp": "2026-06-04T14:45:19.326Z",
+        "path": "/webhooks/rest/v1/webhooks/template/evmWalletFilter",
+        "message": {
+            "message": [
+                "network must be one of the following values: ethereum-mainnet, ethereum-sepolia, solana-mainnet, solana-devnet, base-mainnet, base-sepolia, polygon-mainnet, polygon-amoy"
+            ],
+            "error": "Bad Request",
+            "statusCode": 400
+        }
+    })
+}
+
+#[tokio::test]
+async fn create_webhook_400_renders_bullets_with_typo_suggestion() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhooks/rest/v1/webhooks/template/evmWalletFilter"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(nestjs_network_400()))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "webhook",
+            "create",
+            "--name",
+            "w1",
+            "--network",
+            "ethereum-mainnetsds",
+            "--url",
+            "https://hook.example/x",
+            "--template",
+            "evm-wallet",
+            "--wallet",
+            "0xabc",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("invalid request"),
+        "stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("network must be one of"),
+        "stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("did you mean 'ethereum-mainnet'"),
+        "stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("qn chain list"),
+        "stderr={}",
+        out.stderr
+    );
+}
+
+#[tokio::test]
+async fn create_webhook_400_far_typo_no_suggestion() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhooks/rest/v1/webhooks/template/evmWalletFilter"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(nestjs_network_400()))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "webhook",
+            "create",
+            "--name",
+            "w1",
+            "--network",
+            "sfjla",
+            "--url",
+            "https://hook.example/x",
+            "--template",
+            "evm-wallet",
+            "--wallet",
+            "0xabc",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("network must be one of"),
+        "stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("did you mean"),
+        "should not suggest for 'sfjla'; stderr={}",
+        out.stderr
+    );
+}
