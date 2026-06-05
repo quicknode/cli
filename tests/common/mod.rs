@@ -11,7 +11,7 @@
 
 use clap::Parser;
 use qn::cli::Cli;
-use qn::errors::{exit_code_for, render};
+use qn::errors::{exit_code_for, render_with_argv};
 
 /// Result of dispatching a CLI invocation in-process.
 pub struct RunOutput {
@@ -52,6 +52,9 @@ pub async fn run_qn(base_url: &str, extra_args: &[&str]) -> RunOutput {
     };
 
     let verbose = cli.verbose;
+    // Use the simulated argv (skip the leading "qn" token) so did-you-mean
+    // suggestions can see what the test "user" passed.
+    let argv_for_render: Vec<String> = argv.iter().skip(1).cloned().collect();
     match cli.run().await {
         Ok(()) => RunOutput {
             stdout: String::new(),
@@ -60,7 +63,7 @@ pub async fn run_qn(base_url: &str, extra_args: &[&str]) -> RunOutput {
         },
         Err(e) => RunOutput {
             stdout: String::new(),
-            stderr: render(&e, verbose),
+            stderr: render_with_argv(&e, verbose, &argv_for_render),
             exit_code: exit_code_for(&e),
         },
     }
