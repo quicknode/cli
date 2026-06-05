@@ -51,3 +51,24 @@ tempfile = "3"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# cargo-deb metadata. CI's publish-deb workflow packages the prebuilt
+# linux-gnu binary into a .deb per arch and attaches each to the
+# GitHub Release. `name` makes the deb filename match the binary name
+# (qn_X.Y.Z_amd64.deb) instead of the crate name (quicknode-cli_X.Y.Z…).
+[package.metadata.deb]
+name = "qn"
+maintainer = "Quicknode <support@quicknode.com>"
+copyright = "2026 Quicknode"
+extended-description = """
+qn is a command-line interface for Quicknode, built around noun-verb
+commands that read naturally for both humans and agents. Manage endpoints,
+streams, webhooks, the KV store, teams, usage, and billing.
+"""
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/qn", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/qn/README", "644"],
+  ["LICENSE", "usr/share/doc/qn/LICENSE", "644"],
+]

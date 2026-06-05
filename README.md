@@ -37,6 +37,12 @@ cargo install quicknode-cli
 
 The crate name is `quicknode-cli` but the installed binary is `qn`.
 
+### Homebrew (macOS, Linux)
+
+```sh
+brew install quicknode/tap/qn
+```
+
 ### From source
 
 ```sh

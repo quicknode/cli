@@ -41,6 +41,49 @@ release-cargo-publish-check:
 release-cargo-publish:
   cargo publish -p quicknode-cli
 
+# Manually update the Homebrew tap with the formula attached to a given
+# release. Use this until we have a HOMEBREW_TAP_TOKEN secret and can
+# add "homebrew" to publish-jobs in dist-workspace.toml — at which
+# point the cargo-dist workflow takes over and this recipe becomes
+# obsolete.
+#
+# Usage: just release-update-homebrew-tap 0.1.0 ~/qn/homebrew-tap
+#
+# Precondition: tap_path is a clean local clone of quicknode/homebrew-tap.
+release-update-homebrew-tap version tap_path:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ ! -d "{{tap_path}}/.git" ]]; then
+    echo "Error: {{tap_path}} is not a git checkout. Clone quicknode/homebrew-tap there first." >&2
+    exit 1
+  fi
+  if ! git -C "{{tap_path}}" diff --quiet || ! git -C "{{tap_path}}" diff --cached --quiet; then
+    echo "Error: {{tap_path}} has uncommitted changes. Commit or stash them first." >&2
+    exit 1
+  fi
+  formula_url="https://github.com/quicknode/cli/releases/download/v{{version}}/qn.rb"
+  if ! curl -sfL "$formula_url" -o /tmp/qn.rb; then
+    echo "Error: could not download $formula_url (does the release exist?)" >&2
+    exit 1
+  fi
+  mkdir -p "{{tap_path}}/Formula"
+  cp /tmp/qn.rb "{{tap_path}}/Formula/qn.rb"
+  rm /tmp/qn.rb
+  cd "{{tap_path}}"
+  if git diff --quiet Formula/qn.rb && ! git ls-files --error-unmatch Formula/qn.rb >/dev/null 2>&1; then
+    # New file
+    git add Formula/qn.rb
+  elif git diff --quiet Formula/qn.rb; then
+    echo "Formula/qn.rb is already at v{{version}}. Nothing to commit."
+    exit 0
+  else
+    git add Formula/qn.rb
+  fi
+  git commit -m "qn {{version}}"
+  echo
+  echo "Committed qn {{version}} to {{tap_path}}. To publish:"
+  echo "  git -C {{tap_path}} push"
+
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
 # Each recipe is callable on its own; release-prepare orchestrates them with prompts.
 

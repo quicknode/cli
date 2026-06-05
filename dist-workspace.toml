@@ -18,17 +18,17 @@ hosting = "github"
 # Whether to install an updater program
 install-updater = false
 # Homebrew tap repository to publish the formula to. The "homebrew"
-# entry is deliberately omitted from publish-jobs until Phase 3 of the
-# packaging plan creates quicknode/homebrew-tap and adds the
+# entry is deliberately omitted from publish-jobs until we have a
 # HOMEBREW_TAP_TOKEN secret — without it, the formula push step would
 # fail CI on every release. The formula itself is still generated and
-# attached to each GitHub Release (it just doesn't get auto-committed
-# to the tap).
+# attached to each GitHub Release. Until the token exists, run
+# `just release-update-homebrew-tap VERSION TAP_PATH` to push the
+# formula to quicknode/homebrew-tap manually.
 tap = "quicknode/homebrew-tap"
 # Override the Homebrew formula name so `brew install quicknode/tap/qn` works
 # (default would derive it from the package name `quicknode-cli`).
 formula = "qn"
-publish-jobs = ["./publish-crates", "./publish-docker"]
+publish-jobs = ["./publish-crates", "./publish-docker", "./publish-deb"]
 # Emit SLSA build attestations for every binary archive. Critical for a credential-handling tool.
 github-attestations = true
 
@@ -38,5 +38,6 @@ github-attestations = true
 # fails with `Repository not found` (a 404 masquerading as a missing
 # auth claim on a private repo). Granting the permission here widens
 # the calling job's permission grant so the called workflow can also
-# declare contents:read without exceeding the caller.
-github-custom-job-permissions = { "publish-crates" = { contents = "read" }, "publish-docker" = { contents = "read", packages = "write", "id-token" = "write" } }
+# declare contents:read without exceeding the caller. publish-deb
+# needs contents: write so it can `gh release upload` the .deb files.
+github-custom-job-permissions = { "publish-crates" = { contents = "read" }, "publish-docker" = { contents = "read", packages = "write", "id-token" = "write" }, "publish-deb" = { contents = "write" } }
