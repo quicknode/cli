@@ -171,9 +171,11 @@ release-tag-main version:
   git tag "v{{version}}"
   git push origin "v{{version}}"
 
-# Create the GitHub release for the pushed tag, generating notes from commits.
-# The tag push above already started release.yml; this just publishes the
-# release object so cargo-dist can attach artifacts to it.
+# Manual recovery only. Normally cargo-dist's `host` job in release.yml creates
+# the GitHub release as part of its upload step; calling this from release-prepare
+# would race that job ("release with the same tag name already exists"). Use this
+# only when cargo-dist's host job didn't create the release (e.g. CI was disabled
+# or failed before the host step).
 release-create-tag version:
   gh release create v{{version}} --generate-notes --target main --title "v{{version}}"
 
@@ -211,8 +213,7 @@ release-prepare version yes="0":
     echo "  3. Push branch + open PR (review checkpoint)"
     echo "  4. Merge PR via 'gh pr merge --squash --delete-branch'"
     echo "  5. Tag the merge commit on main and push the tag"
-    echo "  6. Create GitHub release v{{version}}"
-    echo "  7. Wait for release.yml CI to attach artifacts"
+    echo "  6. Wait for release.yml CI (cargo-dist creates the GitHub release + attaches artifacts)"
     echo
     read -r -p "Continue? [y/N] " response
     [[ "$response" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
@@ -237,7 +238,6 @@ release-prepare version yes="0":
   just release-open-pr {{version}}
   just release-merge-pr {{version}}
   just release-tag-main {{version}}
-  just release-create-tag {{version}}
   just release-wait-ci {{version}}
   echo
   echo "Phase 1 complete. Inspect the release at:"
