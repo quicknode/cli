@@ -83,12 +83,6 @@ release-update-homebrew-tap version tap_path:
   echo
   echo "Committed qn {{version}} to {{tap_path}}. To publish:"
   echo "  git -C {{tap_path}} push"
-  echo
-  echo "After pushing, document the install path in README.md under ## Installation:"
-  echo "  ### Homebrew (macOS, Linux)"
-  echo "  \`\`\`sh"
-  echo "  brew install quicknode/tap/qn"
-  echo "  \`\`\`"
 
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
 # Each recipe is callable on its own; release-prepare orchestrates them with prompts.
