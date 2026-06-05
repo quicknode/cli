@@ -16,11 +16,16 @@ on:
         required: true
         type: string
 
+# Permissions must NOT exceed what the caller grants. cargo-dist's
+# github-custom-job-permissions in dist-workspace.toml controls what
+# the caller grants — keep these in sync. `contents: read` is needed
+# for actions/checkout on this internal repo; `packages: write` is
+# needed for GHCR push; `id-token: write` enables OIDC-backed
+# attestations on the pushed image.
 permissions:
   contents: read
   packages: write
   id-token: write
-  attestations: write
 
 env:
   REGISTRY: ghcr.io

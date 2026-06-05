@@ -1,0 +1,93 @@
+name: Publish Debian packages
+
+# Reusable workflow invoked by cargo-dist's release pipeline as a
+# user_publish_job (see dist-workspace.toml `publish-jobs`).
+#
+# Packages the prebuilt linux-gnu binaries from the GitHub release
+# into .deb files (amd64 + arm64) and uploads each as a release asset.
+#
+# v1 ships .deb files attached to releases — users install via
+# `dpkg -i ./qn_X.Y.Z_amd64.deb` or `apt install ./qn_X.Y.Z_amd64.deb`.
+# A hosted apt repo (aptly/reprepro + GPG) is out of scope.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist-manifest JSON for this announcement
+        required: true
+        type: string
+
+# contents: write is needed for `gh release upload`. The caller
+# (custom-publish-deb in release.yml) must grant this via
+# dist-workspace.toml's github-custom-job-permissions block.
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rust_target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+          - rust_target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release tag from plan
+        id: meta
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          tag=$(echo "$PLAN" | jq -r '.announcement_tag')
+          version=$(echo "$PLAN" | jq -r '.releases[0].app_version')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Download linux-gnu archive for ${{ matrix.deb_arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloads
+          gh release download "${{ steps.meta.outputs.tag }}" \
+            --pattern 'quicknode-cli-${{ matrix.rust_target }}.tar.xz' \
+            --dir downloads/
+
+      - name: Stage binary at target/${{ matrix.rust_target }}/release/qn
+        run: |
+          # cargo-deb --no-build --target X expects the binary at
+          # target/X/release/qn. Extract the prebuilt qn from the
+          # release tarball into that path.
+          mkdir -p target/${{ matrix.rust_target }}/release
+          tar -xJf downloads/quicknode-cli-${{ matrix.rust_target }}.tar.xz \
+            --strip-components=1 \
+            -C target/${{ matrix.rust_target }}/release \
+            --wildcards '*/qn'
+          chmod +x target/${{ matrix.rust_target }}/release/qn
+          file target/${{ matrix.rust_target }}/release/qn
+
+      - name: Build .deb
+        run: |
+          # --no-build: don't recompile, use the staged binary.
+          # --no-strip: cargo-dist already stripped the binary upstream.
+          # --target: tells cargo-deb where to find the binary AND
+          #   what dpkg arch to label the package as.
+          cargo deb --no-build --no-strip \
+            --target ${{ matrix.rust_target }} \
+            --output qn_${{ steps.meta.outputs.version }}_${{ matrix.deb_arch }}.deb
+
+      - name: Upload .deb to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.meta.outputs.tag }}" \
+            qn_${{ steps.meta.outputs.version }}_${{ matrix.deb_arch }}.deb \
+            --clobber
