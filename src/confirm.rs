@@ -1,7 +1,7 @@
 //! Destructive-action confirmation helpers.
 //!
 //! Two levels:
-//! - **mild** (e.g. `endpoint archive`, `tag delete`): one y/N prompt; --yes skips.
+//! - **mild** (e.g. `endpoint archive`, `endpoint tag delete`): one y/N prompt; --yes skips.
 //! - **severe** (e.g. `stream delete-all`): typed-word confirmation; --yes --yes (twice) skips.
 //!
 //! On a non-TTY, mild requires `--yes` and severe requires `--yes --yes` — never

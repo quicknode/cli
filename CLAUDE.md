@@ -43,7 +43,7 @@ src/
     │   ├── security.rs
     │   ├── ratelimit.rs
     │   └── tag.rs
-    └── {tag,team,usage,metrics,chain,billing,bulk,stream,webhook,kv}.rs
+    └── {team,usage,metrics,chain,billing,stream,webhook,kv}.rs
 ```
 
 ## Adding a new subcommand: the playbook

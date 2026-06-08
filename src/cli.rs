@@ -81,10 +81,6 @@ pub enum Command {
     #[command(visible_alias = "endpoints")]
     Endpoint(commands::endpoint::Args),
 
-    /// Manage account-level tags.
-    #[command(visible_alias = "tags")]
-    Tag(commands::tag::Args),
-
     /// Manage teams.
     #[command(visible_alias = "teams")]
     Team(commands::team::Args),
@@ -101,9 +97,6 @@ pub enum Command {
 
     /// View invoices and payments.
     Billing(commands::billing::Args),
-
-    /// Bulk operations across many endpoints.
-    Bulk(commands::bulk::Args),
 
     /// Manage blockchain data streams.
     #[command(visible_alias = "streams")]
@@ -162,13 +155,11 @@ impl Cli {
             Command::Endpoint(args) => {
                 commands::endpoint::run(args, Ctx::from_global(global)?).await
             }
-            Command::Tag(args) => commands::tag::run(args, Ctx::from_global(global)?).await,
             Command::Team(args) => commands::team::run(args, Ctx::from_global(global)?).await,
             Command::Usage(args) => commands::usage::run(args, Ctx::from_global(global)?).await,
             Command::Metrics(args) => commands::metrics::run(args, Ctx::from_global(global)?).await,
             Command::Chain(args) => commands::chain::run(args, Ctx::from_global(global)?).await,
             Command::Billing(args) => commands::billing::run(args, Ctx::from_global(global)?).await,
-            Command::Bulk(args) => commands::bulk::run(args, Ctx::from_global(global)?).await,
             Command::Stream(args) => commands::stream::run(args, Ctx::from_global(global)?).await,
             Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
             Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
