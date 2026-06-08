@@ -13,7 +13,7 @@ use quicknode_sdk::admin::{
 };
 use serde::Serialize;
 
-use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::output::{bool_cell, new_table, opt_cell, set_header_bold, write_table, Render};
 
 #[derive(Serialize)]
 pub struct EndpointsView(pub GetEndpointsResponse);
@@ -51,11 +51,10 @@ impl Render for EndpointsView {
             "LABEL",
             "STATUS",
             "CHAIN/NETWORK",
-            "TYPE",
-            "MULTI",
+            "MULTICHAIN",
         ];
         if ctx.wide {
-            headers.extend(["HTTP", "WSS"]);
+            headers.extend(["HTTP", "WSS", "DEDICATED"]);
         }
         set_header_bold(&mut t, ctx, headers);
         for e in &self.0.data {
@@ -65,16 +64,12 @@ impl Render for EndpointsView {
                 opt_cell(&e.label),
                 Cell::new(&e.status),
                 Cell::new(format!("{}/{}", e.chain, e.network)),
-                Cell::new(if e.is_dedicated {
-                    "dedicated"
-                } else {
-                    "shared"
-                }),
-                Cell::new(if e.is_multichain { "yes" } else { "no" }),
+                bool_cell(Some(e.is_multichain)),
             ];
             if ctx.wide {
                 row.push(Cell::new(&e.http_url));
                 row.push(opt_cell(&e.wss_url));
+                row.push(bool_cell(Some(e.is_dedicated)));
             }
             t.add_row(row);
         }

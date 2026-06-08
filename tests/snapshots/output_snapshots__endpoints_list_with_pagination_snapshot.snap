@@ -2,7 +2,7 @@
 source: tests/output_snapshots.rs
 expression: out
 ---
-ID    LABEL       STATUS  CHAIN/NETWORK     TYPE       MULTI  
-ep-1  production  active  ethereum/mainnet  shared     yes    
-ep-2  —           paused  solana/mainnet    dedicated  no     
+ID    LABEL       STATUS  CHAIN/NETWORK     MULTICHAIN  
+ep-1  production  active  ethereum/mainnet  ✓           
+ep-2  —           paused  solana/mainnet    ✗           
 showing 1–2 of 2
