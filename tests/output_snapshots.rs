@@ -28,12 +28,12 @@ struct EndpointsView(GetEndpointsResponse);
 impl Render for EndpointsView {
     fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
         use comfy_table::Cell;
-        use qn::output::{new_table, opt_cell, set_header_bold, write_table};
+        use qn::output::{bool_cell, new_table, opt_cell, set_header_bold, write_table};
         let mut t = new_table(ctx);
         set_header_bold(
             &mut t,
             ctx,
-            vec!["ID", "LABEL", "STATUS", "CHAIN/NETWORK", "TYPE", "MULTI"],
+            vec!["ID", "LABEL", "STATUS", "CHAIN/NETWORK", "MULTICHAIN"],
         );
         for e in &self.0.data {
             t.add_row(vec![
@@ -41,12 +41,7 @@ impl Render for EndpointsView {
                 opt_cell(&e.label),
                 Cell::new(&e.status),
                 Cell::new(format!("{}/{}", e.chain, e.network)),
-                Cell::new(if e.is_dedicated {
-                    "dedicated"
-                } else {
-                    "shared"
-                }),
-                Cell::new(if e.is_multichain { "yes" } else { "no" }),
+                bool_cell(Some(e.is_multichain)),
             ]);
         }
         write_table(w, &t)?;

@@ -14,3 +14,7 @@
 
 # Logs
 *.log
+docs/agents/
+
+# Local Claude notes (gitignored per-repo configuration)
+CLAUDE.local.md
