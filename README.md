@@ -180,8 +180,8 @@ qn usage by-endpoint --from 30d -o yaml
 qn metrics account --period day --metric credits_over_time
 qn chain list
 qn billing invoices
-qn bulk status --status paused ep-1 ep-2 ep-3
-qn tag list
+qn endpoint bulk pause ep-1 ep-2 ep-3
+qn endpoint tag list
 qn team list
 ```
 

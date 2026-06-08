@@ -1,5 +1,5 @@
-//! Stage-3 admin-surface integration tests (tags, teams, usage, metrics, chain,
-//! billing, bulk).
+//! Stage-3 admin-surface integration tests (endpoint tags/bulk, teams, usage,
+//! metrics, chain, billing).
 
 mod common;
 
@@ -18,7 +18,12 @@ async fn tag_list() {
         })))
         .mount(&server)
         .await;
-    assert_eq!(run_qn(&server.uri(), &["tag", "list"]).await.exit_code, 0);
+    assert_eq!(
+        run_qn(&server.uri(), &["endpoint", "tag", "list"])
+            .await
+            .exit_code,
+        0
+    );
 }
 
 #[tokio::test]
@@ -32,7 +37,11 @@ async fn tag_rename_sends_label() {
         })))
         .mount(&server)
         .await;
-    let out = run_qn(&server.uri(), &["tag", "rename", "42", "staging"]).await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "tag", "rename", "42", "staging"],
+    )
+    .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
@@ -46,9 +55,9 @@ async fn tag_delete_needs_yes() {
         })))
         .mount(&server)
         .await;
-    let no = run_qn(&server.uri(), &["tag", "delete", "42"]).await;
+    let no = run_qn(&server.uri(), &["endpoint", "tag", "delete", "42"]).await;
     assert_eq!(no.exit_code, 5);
-    let yes = run_qn(&server.uri(), &["tag", "delete", "42", "--yes"]).await;
+    let yes = run_qn(&server.uri(), &["endpoint", "tag", "delete", "42", "--yes"]).await;
     assert_eq!(yes.exit_code, 0, "stderr={}", yes.stderr);
 }
 
@@ -213,7 +222,7 @@ async fn bulk_status_paused() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["bulk", "status", "--status", "paused", "ep-1", "ep-2"],
+        &["endpoint", "bulk", "pause", "ep-1", "ep-2"],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -232,7 +241,7 @@ async fn bulk_tag_add() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["bulk", "tag", "add", "--label", "prod", "ep-1"],
+        &["endpoint", "bulk", "tag", "add", "--label", "prod", "ep-1"],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);

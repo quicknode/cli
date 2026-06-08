@@ -1,6 +1,12 @@
-//! `qn bulk …` — bulk operations across many endpoints.
+//! `qn endpoint bulk …` — bulk operations across many endpoints.
+//!
+//! Note on the SDK mapping: the SDK exposes a single
+//! `bulk_update_endpoint_status(ids, status)` call where `status` is a free-form
+//! string. We split this into two CLI verbs (`pause` / `resume`) to mirror the
+//! single-endpoint `qn endpoint pause` / `qn endpoint resume` verbs. The mapping is:
+//! `pause -> "paused"`, `resume -> "active"`.
 
-use clap::{Args as ClapArgs, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Subcommand};
 use comfy_table::Cell;
 use quicknode_sdk::admin::{
     BulkAddTagRequest, BulkRemoveTagRequest, BulkUpdateEndpointStatusRequest,
@@ -11,47 +17,25 @@ use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, write_table, OutputCtx, Render};
 
-#[derive(Debug, ClapArgs)]
-pub struct Args {
-    #[command(subcommand)]
-    pub cmd: BulkCmd,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum BulkCmd {
-    /// Activate or pause many endpoints at once.
-    Status(StatusArgs),
+    /// Pause many endpoints at once.
+    Pause(IdsArgs),
+    /// Resume (activate) many endpoints at once.
+    Resume(IdsArgs),
     /// Manage tags on many endpoints at once.
     #[command(subcommand)]
-    Tag(TagCmd),
+    Tag(BulkTagCmd),
 }
 
 #[derive(Debug, ClapArgs)]
-pub struct StatusArgs {
-    /// Target status.
-    #[arg(long, value_enum)]
-    pub status: BulkStatus,
+pub struct IdsArgs {
     /// Endpoint ids.
     pub ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum BulkStatus {
-    Active,
-    Paused,
-}
-
-impl BulkStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            BulkStatus::Active => "active",
-            BulkStatus::Paused => "paused",
-        }
-    }
-}
-
 #[derive(Debug, Subcommand)]
-pub enum TagCmd {
+pub enum BulkTagCmd {
     /// Apply a tag to many endpoints (creates the tag if missing).
     Add(AddTagArgs),
     /// Remove a tag from many endpoints (by numeric tag id).
@@ -76,21 +60,22 @@ pub struct RemoveTagArgs {
     pub ids: Vec<String>,
 }
 
-pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
-    match args.cmd {
-        BulkCmd::Status(a) => status(a, ctx).await,
-        BulkCmd::Tag(TagCmd::Add(a)) => tag_add(a, ctx).await,
-        BulkCmd::Tag(TagCmd::Remove(a)) => tag_remove(a, ctx).await,
+pub async fn run(cmd: BulkCmd, ctx: Ctx) -> Result<(), CliError> {
+    match cmd {
+        BulkCmd::Pause(a) => set_status(a, "paused", ctx).await,
+        BulkCmd::Resume(a) => set_status(a, "active", ctx).await,
+        BulkCmd::Tag(BulkTagCmd::Add(a)) => tag_add(a, ctx).await,
+        BulkCmd::Tag(BulkTagCmd::Remove(a)) => tag_remove(a, ctx).await,
     }
 }
 
-async fn status(a: StatusArgs, ctx: Ctx) -> Result<(), CliError> {
+async fn set_status(a: IdsArgs, status: &str, ctx: Ctx) -> Result<(), CliError> {
     if a.ids.is_empty() {
         return Err(CliError::Arg("supply at least one endpoint id".to_string()));
     }
     let req = BulkUpdateEndpointStatusRequest {
         ids: a.ids,
-        status: a.status.as_str().to_string(),
+        status: status.to_string(),
     };
     let resp = ctx.sdk.admin.bulk_update_endpoint_status(&req).await?;
     crate::output::emit(&ctx.out, &BulkStatusView(resp))

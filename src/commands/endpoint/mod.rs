@@ -11,11 +11,13 @@ use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::time_arg;
 
+mod bulk;
 mod ratelimit;
 pub(crate) mod render;
 mod security;
 mod tag;
 
+pub use bulk::BulkCmd;
 pub use ratelimit::RateLimitCmd;
 pub use security::SecurityCmd;
 pub use tag::TagCmd;
@@ -61,8 +63,8 @@ pub enum EndpointCmd {
     /// Disable multichain on an endpoint.
     DisableMultichain { id: String },
 
-    /// Manage tags on an endpoint (use `qn tag` for account-wide tag management).
-    #[command(subcommand)]
+    /// Manage endpoint tags (per-endpoint add/remove and account-wide list/rename/delete).
+    #[command(subcommand, visible_alias = "tags")]
     Tag(TagCmd),
 
     /// Manage endpoint security settings (tokens, referrers, IPs, JWTs, ...).
@@ -72,6 +74,10 @@ pub enum EndpointCmd {
     /// Manage rate limits on an endpoint.
     #[command(subcommand)]
     RateLimit(RateLimitCmd),
+
+    /// Bulk operations across many endpoints.
+    #[command(subcommand)]
+    Bulk(BulkCmd),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -190,6 +196,7 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         EndpointCmd::Tag(c) => tag::run(c, ctx).await,
         EndpointCmd::Security(c) => security::run(c, ctx).await,
         EndpointCmd::RateLimit(c) => ratelimit::run(c, ctx).await,
+        EndpointCmd::Bulk(c) => bulk::run(c, ctx).await,
     }
 }
 
