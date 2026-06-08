@@ -6,7 +6,7 @@ use quicknode_sdk::admin::{
     UpdateEndpointRequest, UpdateEndpointStatusRequest,
 };
 
-use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
+use crate::confirm;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::time_arg;
@@ -266,18 +266,7 @@ async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn archive(a: ArchiveArgs, ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(&format!("Archive endpoint {}?", a.id))?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
+    confirm::mild(&ctx, &format!("Archive endpoint {}?", a.id))?;
     ctx.sdk.admin.archive_endpoint(&a.id).await?;
     ctx.out.note(&format!("✓ Archived endpoint {}", a.id));
     Ok(())

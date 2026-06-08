@@ -5,8 +5,8 @@ use comfy_table::Cell;
 use quicknode_sdk::admin::RenameTagRequest;
 use serde::Serialize;
 
-use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
+use crate::destroy;
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, write_table, Render};
 
@@ -58,21 +58,11 @@ async fn rename(tag_id: i32, label: String, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn delete(id: i32, ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(&format!("Delete tag {id}?"))?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.admin.delete_account_tag(id).await?;
-    ctx.out.note(&format!("✓ Deleted tag {id}"));
-    Ok(())
+    let admin = &ctx.sdk.admin;
+    destroy::single(&ctx, "tag", &id.to_string(), || {
+        admin.delete_account_tag(id)
+    })
+    .await
 }
 
 #[derive(Serialize)]

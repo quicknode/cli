@@ -11,6 +11,7 @@ pub(crate) mod commands;
 pub(crate) mod config;
 pub(crate) mod confirm;
 pub(crate) mod context;
+pub(crate) mod destroy;
 pub(crate) mod time_arg;
 
 pub use cli::Cli;

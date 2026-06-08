@@ -7,7 +7,6 @@ use std::io::{IsTerminal, Read};
 
 use clap::{Args as ClapArgs, Subcommand};
 
-use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
 
@@ -112,22 +111,6 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         KvCmd::Set(c) => actions::set(c, ctx).await,
         KvCmd::List(c) => actions::list(c, ctx).await,
     }
-}
-
-fn confirm_mild(ctx: &Ctx, prompt: &str) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(prompt)?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    Ok(())
 }
 
 fn read_stdin() -> Result<String, CliError> {

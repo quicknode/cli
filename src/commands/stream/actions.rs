@@ -9,8 +9,8 @@ use quicknode_sdk::streams::{
 
 use super::render::{StreamView, StreamsListView, TestFilterView};
 use super::{CreateArgs, ListArgs, TestFilterArgs, UpdateArgs};
-use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
+use crate::destroy;
 use crate::errors::CliError;
 
 pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
@@ -130,42 +130,13 @@ pub(super) async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 pub(super) async fn delete(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(&format!("Delete stream {id}?"))?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.streams.delete_stream(id).await?;
-    ctx.out.note(&format!("✓ Deleted stream {id}"));
-    Ok(())
+    let streams = &ctx.sdk.streams;
+    destroy::single(&ctx, "stream", id, || streams.delete_stream(id)).await
 }
 
 pub(super) async fn delete_all(ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Severe, cfg)? {
-        true => true,
-        false => prompt_typed(
-            "Type 'delete-all' to delete EVERY stream on the account",
-            "delete-all",
-        )?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.streams.delete_all_streams().await?;
-    ctx.out.note("✓ Deleted all streams");
-    Ok(())
+    let streams = &ctx.sdk.streams;
+    destroy::all(&ctx, "stream", "streams", || streams.delete_all_streams()).await
 }
 
 pub(super) async fn activate(id: &str, ctx: Ctx) -> Result<(), CliError> {

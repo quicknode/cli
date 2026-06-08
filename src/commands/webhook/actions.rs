@@ -12,8 +12,8 @@ use quicknode_sdk::webhooks::{
 
 use super::render::{WebhookView, WebhooksListView};
 use super::{ActivateArgs, CreateArgs, ListArgs, TemplateKind, UpdateArgs, UpdateTemplateArgs};
-use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
+use crate::destroy;
 use crate::errors::CliError;
 
 pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
@@ -126,42 +126,16 @@ pub(super) async fn update_template(a: UpdateTemplateArgs, ctx: Ctx) -> Result<(
 }
 
 pub(super) async fn delete(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(&format!("Delete webhook {id}?"))?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.webhooks.delete_webhook(id).await?;
-    ctx.out.note(&format!("✓ Deleted webhook {id}"));
-    Ok(())
+    let webhooks = &ctx.sdk.webhooks;
+    destroy::single(&ctx, "webhook", id, || webhooks.delete_webhook(id)).await
 }
 
 pub(super) async fn delete_all(ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Severe, cfg)? {
-        true => true,
-        false => prompt_typed(
-            "Type 'delete-all' to delete EVERY webhook on the account",
-            "delete-all",
-        )?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.webhooks.delete_all_webhooks().await?;
-    ctx.out.note("✓ Deleted all webhooks");
-    Ok(())
+    let webhooks = &ctx.sdk.webhooks;
+    destroy::all(&ctx, "webhook", "webhooks", || {
+        webhooks.delete_all_webhooks()
+    })
+    .await
 }
 
 pub(super) async fn activate(a: ActivateArgs, ctx: Ctx) -> Result<(), CliError> {

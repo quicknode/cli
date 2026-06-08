@@ -7,8 +7,8 @@ use quicknode_sdk::admin::{
 };
 use serde::Serialize;
 
-use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
+use crate::destroy;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
 
@@ -142,21 +142,8 @@ async fn show(id: i64, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn delete(id: i64, ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(&format!("Delete team {id}?"))?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.admin.delete_team(id).await?;
-    ctx.out.note(&format!("✓ Deleted team {id}"));
-    Ok(())
+    let admin = &ctx.sdk.admin;
+    destroy::single(&ctx, "team", &id.to_string(), || admin.delete_team(id)).await
 }
 
 async fn endpoints(id: i64, ctx: Ctx) -> Result<(), CliError> {

@@ -49,9 +49,11 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
             crate::output::emit(&ctx.out, &SetsView(resp))?;
         }
         SetCmd::Delete { key } => {
-            super::confirm_mild(&ctx, &format!("Delete set {key:?}?"))?;
-            ctx.sdk.kvstore.delete_set(&key).await?;
-            ctx.out.note(&format!("✓ Deleted set {key:?}"));
+            let kvstore = &ctx.sdk.kvstore;
+            crate::destroy::single(&ctx, "set", &format!("{key:?}"), || {
+                kvstore.delete_set(&key)
+            })
+            .await?;
         }
         SetCmd::Bulk(a) => {
             if a.add.is_empty() && a.delete.is_empty() {
@@ -165,9 +167,11 @@ pub(super) async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Updated list {:?}", a.key));
         }
         ListCmd::Delete { key } => {
-            super::confirm_mild(&ctx, &format!("Delete list {key:?}?"))?;
-            ctx.sdk.kvstore.delete_list(&key).await?;
-            ctx.out.note(&format!("✓ Deleted list {key:?}"));
+            let kvstore = &ctx.sdk.kvstore;
+            crate::destroy::single(&ctx, "list", &format!("{key:?}"), || {
+                kvstore.delete_list(&key)
+            })
+            .await?;
         }
     }
     Ok(())
