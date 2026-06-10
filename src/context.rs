@@ -29,6 +29,9 @@ pub struct GlobalArgs {
     pub verbose: bool,
     pub no_input: bool,
     pub yes_count: u8,
+    /// Max automatic retries for read-only API calls (see `crate::retry`).
+    /// `Default` yields 0 (no retries) — the CLI default of 3 comes from clap.
+    pub retries: u32,
     pub base_url: Option<String>,
 }
 

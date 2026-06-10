@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, write_table, Render};
+use crate::retry::retrying;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -28,7 +29,7 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn list(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_chains().await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.list_chains()).await?;
     crate::output::emit(&ctx.out, &ChainsView(resp))
 }
 

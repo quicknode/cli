@@ -8,6 +8,7 @@ use serde::Serialize;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::retry::retrying;
 use crate::time_arg;
 
 #[derive(Debug, ClapArgs)]
@@ -61,31 +62,40 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
 
 async fn summary(r: Range, ctx: Ctx) -> Result<(), CliError> {
     let req = r.into_request()?;
-    let resp = ctx.sdk.admin.get_usage(&req).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_usage(&req)).await?;
     crate::output::emit(&ctx.out, &UsageSummaryView(resp))
 }
 
 async fn by_endpoint(r: Range, ctx: Ctx) -> Result<(), CliError> {
     let req = r.into_request()?;
-    let resp = ctx.sdk.admin.get_usage_by_endpoint(&req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_usage_by_endpoint(&req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &UsageByEndpointView(resp))
 }
 
 async fn by_method(r: Range, ctx: Ctx) -> Result<(), CliError> {
     let req = r.into_request()?;
-    let resp = ctx.sdk.admin.get_usage_by_method(&req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_usage_by_method(&req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &UsageByMethodView(resp))
 }
 
 async fn by_chain(r: Range, ctx: Ctx) -> Result<(), CliError> {
     let req = r.into_request()?;
-    let resp = ctx.sdk.admin.get_usage_by_chain(&req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_usage_by_chain(&req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &UsageByChainView(resp))
 }
 
 async fn by_tag(r: Range, ctx: Ctx) -> Result<(), CliError> {
     let req = r.into_request()?;
-    let resp = ctx.sdk.admin.get_usage_by_tag(&req).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_usage_by_tag(&req)).await?;
     crate::output::emit(&ctx.out, &UsageByTagView(resp))
 }
 

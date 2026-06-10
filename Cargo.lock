@@ -1487,6 +1487,7 @@ dependencies = [
  "clap_complete",
  "comfy-table",
  "dialoguer",
+ "fastrand",
  "humantime",
  "insta",
  "predicates",

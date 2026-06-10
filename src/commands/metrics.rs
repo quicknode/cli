@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::Render;
+use crate::retry::retrying;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -60,7 +61,10 @@ async fn account(a: AccountArgs, ctx: Ctx) -> Result<(), CliError> {
         metric: a.metric,
         percentile: a.percentile,
     };
-    let resp = ctx.sdk.admin.get_account_metrics(&req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_account_metrics(&req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &AccountMetricsView(resp))
 }
 
@@ -69,7 +73,10 @@ async fn endpoint(a: EndpointArgs, ctx: Ctx) -> Result<(), CliError> {
         period: a.period,
         metric: a.metric,
     };
-    let resp = ctx.sdk.admin.get_endpoint_metrics(&a.id, &req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &EndpointMetricsView(resp))
 }
 

@@ -58,7 +58,7 @@ pub async fn run(cmd: TagCmd, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn list(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_tags().await?;
+    let resp = crate::retry::retrying(ctx.global.retries, || ctx.sdk.admin.list_tags()).await?;
     crate::output::emit(&ctx.out, &TagsView(resp))
 }
 

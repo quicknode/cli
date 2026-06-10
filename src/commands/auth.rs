@@ -72,7 +72,7 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
 
     // Quick validation against the API so we don't silently save a bogus key.
     let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key.clone()))?;
-    sdk.admin.list_chains().await?;
+    crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await?;
 
     config::save_api_key(&path, &key)?;
     if !global.quiet {
@@ -102,7 +102,7 @@ async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
     let (key, source) = resolve_non_interactive(&global)?;
     let redacted = redact(&key);
     let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key))?;
-    let result = sdk.admin.list_chains().await;
+    let result = crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await;
     let ok = result.is_ok();
     print_status(&global, source, &redacted, Some(ok));
     result.map(|_| ()).map_err(Into::into)

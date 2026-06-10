@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::retry::retrying;
 
 #[derive(Debug, Subcommand)]
 pub enum RateLimitCmd {
@@ -128,7 +129,7 @@ pub async fn run(cmd: RateLimitCmd, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn get(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_rate_limits(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_rate_limits(id)).await?;
     crate::output::emit(&ctx.out, &RateLimitsView(resp))
 }
 
@@ -151,7 +152,10 @@ async fn set(a: SetArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn method_list(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_method_rate_limits(id).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_method_rate_limits(id)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &MethodRateLimitsView(resp))
 }
 

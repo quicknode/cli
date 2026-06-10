@@ -12,6 +12,7 @@ use super::{CreateArgs, ListArgs, TestFilterArgs, UpdateArgs};
 use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 
 pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
     let params = ListStreamsParams {
@@ -21,7 +22,7 @@ pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
         order_by: a.order_by,
         order_direction: a.order_direction,
     };
-    let resp = ctx.sdk.streams.list_streams(&params).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.streams.list_streams(&params)).await?;
     crate::output::emit(&ctx.out, &StreamsListView(resp))
 }
 
@@ -108,7 +109,7 @@ fn build_create_params(a: CreateArgs) -> Result<CreateStreamParams, CliError> {
 }
 
 pub(super) async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let s = ctx.sdk.streams.get_stream(id).await?;
+    let s = retrying(ctx.global.retries, || ctx.sdk.streams.get_stream(id)).await?;
     crate::output::emit(&ctx.out, &StreamView(s))
 }
 
@@ -201,16 +202,17 @@ pub(super) async fn test_filter(a: TestFilterArgs, ctx: Ctx) -> Result<(), CliEr
         filter_language: a.filter_language.map(Into::into),
         address_book_config: None,
     };
-    let resp = ctx.sdk.streams.test_filter(&params).await?;
+    // POST, but read-only: it evaluates a filter against historical data and
+    // changes nothing, so it's safe to retry.
+    let resp = retrying(ctx.global.retries, || ctx.sdk.streams.test_filter(&params)).await?;
     crate::output::emit(&ctx.out, &TestFilterView(resp))
 }
 
 pub(super) async fn enabled_count(stream_type: Option<String>, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx
-        .sdk
-        .streams
-        .get_enabled_count(stream_type.as_deref())
-        .await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.streams.get_enabled_count(stream_type.as_deref())
+    })
+    .await?;
     if ctx.out.format.is_structured() {
         crate::output::emit(&ctx.out, &resp)
     } else {

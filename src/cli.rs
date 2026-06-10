@@ -64,6 +64,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_input: bool,
 
+    /// Max automatic retries for read-only commands on transient failures
+    /// (HTTP 429/5xx, timeouts). Uses exponential backoff with jitter.
+    /// 0 disables retries. Commands that modify resources never retry.
+    #[arg(long, global = true, default_value_t = 3, value_name = "N")]
+    pub retries: u32,
+
     /// Skip confirmation prompts. Pass twice for destructive bulk operations like `stream delete-all`.
     #[arg(short = 'y', long = "yes", global = true, action = ArgAction::Count)]
     pub yes: u8,
@@ -137,6 +143,7 @@ impl Cli {
             verbose: self.verbose,
             no_input: self.no_input,
             yes_count: self.yes,
+            retries: self.retries,
             base_url: self.base_url.clone(),
         }
     }

@@ -15,18 +15,22 @@ use super::{ActivateArgs, CreateArgs, ListArgs, TemplateKind, UpdateArgs, Update
 use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 
 pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
     let params = GetWebhooksParams {
         limit: a.limit,
         offset: a.offset,
     };
-    let resp = ctx.sdk.webhooks.list_webhooks(&params).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.webhooks.list_webhooks(&params)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &WebhooksListView(resp))
 }
 
 pub(super) async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let w = ctx.sdk.webhooks.get_webhook(id).await?;
+    let w = retrying(ctx.global.retries, || ctx.sdk.webhooks.get_webhook(id)).await?;
     crate::output::emit(&ctx.out, &WebhookView(w))
 }
 
@@ -180,7 +184,7 @@ pub(super) async fn pause(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 pub(super) async fn enabled_count(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.webhooks.get_enabled_count().await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.webhooks.get_enabled_count()).await?;
     if ctx.out.format.is_structured() {
         crate::output::emit(&ctx.out, &resp)
     } else {

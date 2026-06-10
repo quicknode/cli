@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::retry::retrying;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -30,12 +31,12 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn invoices(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_invoices().await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.list_invoices()).await?;
     crate::output::emit(&ctx.out, &InvoicesView(resp))
 }
 
 async fn payments(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_payments().await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.list_payments()).await?;
     crate::output::emit(&ctx.out, &PaymentsView(resp))
 }
 

@@ -9,6 +9,7 @@ use quicknode_sdk::admin::{
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 use crate::time_arg;
 
 mod bulk;
@@ -226,7 +227,7 @@ async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
     if !a.tag_labels.is_empty() {
         req.tag_labels = Some(a.tag_labels);
     }
-    let resp = ctx.sdk.admin.get_endpoints(&req).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_endpoints(&req)).await?;
     crate::output::emit(&ctx.out, &render::EndpointsView(resp))
 }
 
@@ -255,7 +256,7 @@ async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.show_endpoint(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.show_endpoint(id)).await?;
     let data = resp
         .data
         .ok_or_else(|| CliError::Arg(format!("endpoint {id} not found")))?;
@@ -305,7 +306,7 @@ async fn set_status(id: &str, status: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn urls(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_endpoint_urls(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_endpoint_urls(id)).await?;
     let data = resp
         .data
         .ok_or_else(|| CliError::Arg(format!("API returned no URL data for endpoint {id}")))?;
@@ -322,12 +323,18 @@ async fn logs(a: LogsArgs, ctx: Ctx) -> Result<(), CliError> {
         next_at: a.next_at,
         include_details: Some(a.details),
     };
-    let resp = ctx.sdk.admin.get_endpoint_logs(&a.id, &req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_endpoint_logs(&a.id, &req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &render::EndpointLogsView(resp))
 }
 
 async fn log_details(id: &str, request_id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_log_details(id, request_id).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_log_details(id, request_id)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &render::LogDetailsView(resp))
 }
 
@@ -336,7 +343,10 @@ async fn metrics(a: MetricsArgs, ctx: Ctx) -> Result<(), CliError> {
         period: a.period,
         metric: a.metric,
     };
-    let resp = ctx.sdk.admin.get_endpoint_metrics(&a.id, &req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &render::EndpointMetricsView(resp))
 }
 

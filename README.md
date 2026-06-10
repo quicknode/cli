@@ -212,6 +212,18 @@ CLI hands the key to the SDK explicitly; it does not read the SDK's
 The hidden `--base-url <URL>` flag overrides the API host for all four
 sub-clients at once (used for integration tests and on-prem mirrors).
 
+## Retries
+
+Read-only commands (`list`, `show`, `logs`, `metrics`, `usage`, …) retry
+transient failures — HTTP 429/5xx, timeouts, connection errors — with
+exponential backoff and full jitter. The default is 3 retries; tune it with
+the global `--retries <N>` flag (`--retries 0` disables).
+
+Commands that modify resources (`create`, `update`, `delete`, `pause`, …)
+**never** retry automatically: the API has no idempotency keys yet, so a
+retried create could provision twice. If a mutation fails with a transient
+error, check whether it took effect before re-running it.
+
 ## Exit codes
 
 | Code | Meaning |
