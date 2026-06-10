@@ -5,7 +5,8 @@
 use std::io::IsTerminal;
 
 use quicknode_sdk::{
-    AdminConfig, KvStoreConfig, QuicknodeSdk, SdkFullConfig, StreamsConfig, WebhooksConfig,
+    AdminConfig, HttpConfig, KvStoreConfig, QuicknodeSdk, SdkFullConfig, StreamsConfig,
+    WebhooksConfig,
 };
 
 use crate::config;
@@ -90,6 +91,33 @@ fn resolve_output_inner(
     (format, wide)
 }
 
+/// The `User-Agent` sent with every API request. Mirrors the SDK's own shape
+/// (`quicknode-sdk-<lang>/<ver> (<os>-<arch>; …)`) with the CLI as the product:
+/// `quicknode-cli/<version> (<os>-<arch>)`.
+pub fn user_agent() -> String {
+    format!(
+        "quicknode-cli/{} ({}-{})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+}
+
+/// Base SDK config shared by every construction site (`Ctx::from_global` and
+/// the `auth` commands): the API key plus the CLI `User-Agent`. Custom headers
+/// in `HttpConfig` override SDK-managed headers of the same name, which is the
+/// SDK's supported way to replace its auto-generated `User-Agent`.
+pub fn sdk_config(api_key: String) -> SdkFullConfig {
+    let mut full = SdkFullConfig::from_api_key(api_key);
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("User-Agent".to_string(), user_agent());
+    full.http = Some(HttpConfig {
+        headers: Some(headers),
+        ..Default::default()
+    });
+    full
+}
+
 pub struct Ctx {
     pub sdk: QuicknodeSdk,
     pub out: OutputCtx,
@@ -114,7 +142,7 @@ impl Ctx {
             || unreachable!("prompt disabled for non-auth commands"),
         )?;
 
-        let mut full = SdkFullConfig::from_api_key(api_key);
+        let mut full = sdk_config(api_key);
 
         // --base-url applies to every sub-client. Useful for wiremock tests and
         // on-prem mirrors. Each sub-client has its own base path under the host
@@ -269,5 +297,25 @@ mod tests {
     fn base_url_rejects_garbage() {
         assert!(validate_base_url("not a url").is_err());
         assert!(validate_base_url("").is_err());
+    }
+
+    #[test]
+    fn user_agent_identifies_the_cli() {
+        let ua = user_agent();
+        assert!(ua.starts_with("quicknode-cli/"), "ua={ua}");
+        assert!(ua.contains(env!("CARGO_PKG_VERSION")), "ua={ua}");
+    }
+
+    #[test]
+    fn sdk_config_sets_the_user_agent_header_and_nothing_else() {
+        let cfg = sdk_config("k".to_string());
+        let http = cfg.http.expect("http config should be set");
+        assert_eq!(
+            http.headers.as_ref().and_then(|h| h.get("User-Agent")),
+            Some(&user_agent())
+        );
+        // SDK defaults (timeout, pooling) must stay untouched.
+        assert_eq!(http.timeout_secs, None);
+        assert_eq!(http.pool_max_idle_per_host, None);
     }
 }

@@ -9,10 +9,10 @@
 use std::io::{IsTerminal, Write};
 
 use clap::{Args as ClapArgs, Subcommand};
-use quicknode_sdk::{QuicknodeSdk, SdkFullConfig};
+use quicknode_sdk::QuicknodeSdk;
 
 use crate::config::{self, KeySource};
-use crate::context::GlobalArgs;
+use crate::context::{sdk_config, GlobalArgs};
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
@@ -76,7 +76,7 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
     }
 
     // Quick validation against the API so we don't silently save a bogus key.
-    let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key.clone()))?;
+    let sdk = QuicknodeSdk::new(&sdk_config(key.clone()))?;
     crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await?;
 
     config::save_api_key(&path, &key)?;
@@ -106,7 +106,7 @@ fn status(global: GlobalArgs) -> Result<(), CliError> {
 async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
     let (key, source) = resolve_non_interactive(&global)?;
     let redacted = redact(&key);
-    let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key))?;
+    let sdk = QuicknodeSdk::new(&sdk_config(key))?;
     let result = crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await;
     let ok = result.is_ok();
     print_status(&global, source, &redacted, Some(ok));
