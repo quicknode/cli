@@ -57,12 +57,19 @@ You will need a Quicknode API key to get started. Once you have that, you can ru
 `qn` resolves your API key from the first source that matches:
 
 1. `--api-key <KEY>` flag
-2. `QN_CLI__API_KEY` environment variable
-3. `~/.config/qn/config.toml` — or `$XDG_CONFIG_HOME/qn/config.toml` if that env var is set. Managed by `qn auth login`.
+2. The config file: the `--config-file <PATH>` flag if given, otherwise
+   `~/.config/qn/config.toml` — or `$XDG_CONFIG_HOME/qn/config.toml` if that
+   env var is set. Managed by `qn auth login`.
 
-If none match, `qn` exits with code 4 and tells you to run `qn auth login`.
-Regular commands never prompt — only `qn auth login` does. This keeps scripts
-and CI deterministic.
+There is deliberately **no environment-variable key source**: a key left
+exported in a shell is invisible state that outlives the session it was set
+for, and makes it far too easy to run a destructive command against the wrong
+account. For CI, write a config file and point `--config-file` at it (or pass
+`--api-key` from your secret store).
+
+If no source matches, `qn` exits with code 4 and tells you to run
+`qn auth login`. Regular commands never prompt — only `qn auth login` does.
+This keeps scripts and CI deterministic.
 
 ```sh
 qn auth login      # prompts for the key, writes it to ~/.config/qn/config.toml
@@ -196,28 +203,51 @@ qn completions powershell > qn.ps1
 
 ## Configuration via environment
 
-| Variable | Description |
-|---|---|
-| `QN_CLI__API_KEY` | Your Quicknode API key |
-
-`qn` deliberately uses its own `QN_CLI__` namespace so the CLI's env vars don't
-collide with — or silently leak into — direct use of the underlying SDK. The
-CLI hands the key to the SDK explicitly; it does not read the SDK's
-`QN_SDK__*` environment namespace.
+`qn` reads no API credentials from the environment (see
+[Authentication](#authentication) for why). The conventional variables are
+honored: `NO_COLOR` and `TERM=dumb` disable color, and
+`XDG_CONFIG_HOME`/`HOME` locate the default config file. The CLI hands the
+key to the SDK explicitly; it does not read the SDK's `QN_SDK__*` environment
+namespace.
 
 The hidden `--base-url <URL>` flag overrides the API host for all four
 sub-clients at once (used for integration tests and on-prem mirrors).
+
+## Confirmations
+
+Destructive commands (`delete`, `archive`, `bulk pause`, token revocation,
+removing a rate-limit override, …) prompt before acting, and the prompt states
+what will happen ("Pause 3 endpoint(s)? They will stop serving requests").
+Pass `--yes`/`-y` to skip the prompt. In scripts and CI (no TTY), a gated
+command without `--yes` exits with code 5 **before** any request is sent.
+
+The CLI deliberately has no account-wide wipe commands (no `delete-all`);
+operations with that blast radius belong behind the API, not a one-liner.
+
+## Retries
+
+Read-only commands (`list`, `show`, `logs`, `metrics`, `usage`, …) retry
+transient failures — HTTP 429, 500, 502, 503, 504, timeouts, and connection
+errors — with exponential backoff and full jitter. The default is 3 retries;
+tune it with the global `--retries <N>` flag (`--retries 0` disables).
+`stream test-filter` retries too: it sends a POST, but only evaluates a
+filter against historical data and changes nothing.
+
+Commands that modify resources (`create`, `update`, `delete`, `pause`, …)
+**never** retry automatically: a retried create could provision twice. If a
+mutation fails with a transient error, check whether it took effect before
+re-running it.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | CLI error (bad argument, IO, decode) |
+| 1 | CLI error (usage/bad argument, IO, decode) |
 | 2 | API error (server returned 4xx/5xx) |
 | 3 | Network failure (timeout, connect, transport) |
 | 4 | Missing or invalid API key / config |
-| 5 | Operation needs confirmation (pass `--yes` or `--yes --yes`) |
+| 5 | Operation needs confirmation (pass `--yes`) |
 | 130 | Interrupted (SIGINT) |
 
 ## License

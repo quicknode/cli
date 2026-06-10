@@ -9,6 +9,7 @@ use quicknode_sdk::admin::{
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 use crate::time_arg;
 
 mod bulk;
@@ -23,6 +24,12 @@ pub use security::SecurityCmd;
 pub use tag::TagCmd;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn endpoint create --chain ethereum --network mainnet\n  \
+    qn endpoint list -o json\n  \
+    qn endpoint logs ep-1234 --from 1h --details\n  \
+    qn endpoint pause ep-1234\n  \
+    qn endpoint bulk pause ep-1 ep-2 --yes")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: EndpointCmd,
@@ -122,12 +129,12 @@ pub struct ListArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct CreateArgs {
-    /// Blockchain (e.g. `ethereum`, `solana`).
+    /// Blockchain (e.g. `ethereum`, `solana`; run `qn chain list` to see all).
     #[arg(long)]
-    pub chain: Option<String>,
+    pub chain: String,
     /// Network (e.g. `mainnet`).
     #[arg(long)]
-    pub network: Option<String>,
+    pub network: String,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -136,7 +143,7 @@ pub struct UpdateArgs {
     pub id: String,
     /// New label.
     #[arg(long)]
-    pub label: Option<String>,
+    pub label: String,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -226,27 +233,14 @@ async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
     if !a.tag_labels.is_empty() {
         req.tag_labels = Some(a.tag_labels);
     }
-    let resp = ctx.sdk.admin.get_endpoints(&req).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_endpoints(&req)).await?;
     crate::output::emit(&ctx.out, &render::EndpointsView(resp))
 }
 
 async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
-    let missing: Vec<&str> = [
-        ("--chain", a.chain.is_none()),
-        ("--network", a.network.is_none()),
-    ]
-    .iter()
-    .filter_map(|(name, missing)| if *missing { Some(*name) } else { None })
-    .collect();
-    if !missing.is_empty() {
-        return Err(CliError::Arg(format!(
-            "'endpoint create' requires {}. Run 'qn chain list' to see available chains.",
-            missing.join(" and "),
-        )));
-    }
     let req = CreateEndpointRequest {
-        chain: a.chain,
-        network: a.network,
+        chain: Some(a.chain),
+        network: Some(a.network),
     };
     let resp = ctx.sdk.admin.create_endpoint(&req).await?;
     ctx.out
@@ -255,7 +249,7 @@ async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.show_endpoint(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.show_endpoint(id)).await?;
     let data = resp
         .data
         .ok_or_else(|| CliError::Arg(format!("endpoint {id} not found")))?;
@@ -263,10 +257,9 @@ async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
-    if a.label.is_none() {
-        return Err(CliError::Arg("'endpoint update' requires --label.".into()));
-    }
-    let req = UpdateEndpointRequest { label: a.label };
+    let req = UpdateEndpointRequest {
+        label: Some(a.label),
+    };
     ctx.sdk.admin.update_endpoint(&a.id, &req).await?;
     ctx.out.note(&format!("✓ Updated endpoint {}", a.id));
     Ok(())
@@ -280,7 +273,10 @@ async fn archive(a: ArchiveArgs, ctx: Ctx) -> Result<(), CliError> {
     );
     let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
         true => true,
-        false => prompt_yes_no(&format!("Archive endpoint {}?", a.id))?,
+        false => prompt_yes_no(&format!(
+            "Archive endpoint {}? This cannot be undone from the CLI",
+            a.id
+        ))?,
     };
     if !proceed {
         return Err(CliError::Cancelled);
@@ -305,7 +301,7 @@ async fn set_status(id: &str, status: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn urls(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_endpoint_urls(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_endpoint_urls(id)).await?;
     let data = resp
         .data
         .ok_or_else(|| CliError::Arg(format!("API returned no URL data for endpoint {id}")))?;
@@ -322,12 +318,18 @@ async fn logs(a: LogsArgs, ctx: Ctx) -> Result<(), CliError> {
         next_at: a.next_at,
         include_details: Some(a.details),
     };
-    let resp = ctx.sdk.admin.get_endpoint_logs(&a.id, &req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_endpoint_logs(&a.id, &req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &render::EndpointLogsView(resp))
 }
 
 async fn log_details(id: &str, request_id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_log_details(id, request_id).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_log_details(id, request_id)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &render::LogDetailsView(resp))
 }
 
@@ -336,7 +338,10 @@ async fn metrics(a: MetricsArgs, ctx: Ctx) -> Result<(), CliError> {
         period: a.period,
         metric: a.metric,
     };
-    let resp = ctx.sdk.admin.get_endpoint_metrics(&a.id, &req).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &render::EndpointMetricsView(resp))
 }
 

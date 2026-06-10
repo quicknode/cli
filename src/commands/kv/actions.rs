@@ -9,8 +9,10 @@ use quicknode_sdk::{
 
 use super::render::{ListView, ListsView, SetsView};
 use super::{ListCmd, SetCmd};
+use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 
 pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
@@ -30,7 +32,7 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Set {key:?}"));
         }
         SetCmd::Get { key } => {
-            let resp = ctx.sdk.kvstore.get_set(&key).await?;
+            let resp = retrying(ctx.global.retries, || ctx.sdk.kvstore.get_set(&key)).await?;
             if ctx.out.format.is_structured() {
                 crate::output::emit(&ctx.out, &resp)?;
             } else {
@@ -38,18 +40,15 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
             }
         }
         SetCmd::Ls(a) => {
-            let resp = ctx
-                .sdk
-                .kvstore
-                .get_sets(&GetSetsParams {
-                    limit: a.limit,
-                    cursor: a.cursor,
-                })
-                .await?;
+            let params = GetSetsParams {
+                limit: a.limit,
+                cursor: a.cursor,
+            };
+            let resp = retrying(ctx.global.retries, || ctx.sdk.kvstore.get_sets(&params)).await?;
             crate::output::emit(&ctx.out, &SetsView(resp))?;
         }
         SetCmd::Delete { key } => {
-            super::confirm_mild(&ctx, &format!("Delete set {key:?}?"))?;
+            confirm_mild(&ctx, &format!("Delete set {key:?}?"))?;
             ctx.sdk.kvstore.delete_set(&key).await?;
             ctx.out.note(&format!("✓ Deleted set {key:?}"));
         }
@@ -88,28 +87,22 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
 pub(super) async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         ListCmd::Ls(a) => {
-            let resp = ctx
-                .sdk
-                .kvstore
-                .get_lists(&GetListsParams {
-                    limit: a.limit,
-                    cursor: a.cursor,
-                })
-                .await?;
+            let params = GetListsParams {
+                limit: a.limit,
+                cursor: a.cursor,
+            };
+            let resp = retrying(ctx.global.retries, || ctx.sdk.kvstore.get_lists(&params)).await?;
             crate::output::emit(&ctx.out, &ListsView(resp))?;
         }
         ListCmd::Get(a) => {
-            let resp = ctx
-                .sdk
-                .kvstore
-                .get_list(
-                    &a.key,
-                    &GetListParams {
-                        limit: a.limit,
-                        cursor: a.cursor,
-                    },
-                )
-                .await?;
+            let params = GetListParams {
+                limit: a.limit,
+                cursor: a.cursor,
+            };
+            let resp = retrying(ctx.global.retries, || {
+                ctx.sdk.kvstore.get_list(&a.key, &params)
+            })
+            .await?;
             crate::output::emit(&ctx.out, &ListView(resp))?;
         }
         ListCmd::Create { key, items } => {
@@ -133,7 +126,10 @@ pub(super) async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Appended {item:?} to {key:?}"));
         }
         ListCmd::Contains { key, item } => {
-            let resp = ctx.sdk.kvstore.list_contains_item(&key, &item).await?;
+            let resp = retrying(ctx.global.retries, || {
+                ctx.sdk.kvstore.list_contains_item(&key, &item)
+            })
+            .await?;
             if ctx.out.format.is_structured() {
                 crate::output::emit(&ctx.out, &resp)?;
             } else {
@@ -165,7 +161,7 @@ pub(super) async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Updated list {:?}", a.key));
         }
         ListCmd::Delete { key } => {
-            super::confirm_mild(&ctx, &format!("Delete list {key:?}?"))?;
+            confirm_mild(&ctx, &format!("Delete list {key:?}?"))?;
             ctx.sdk.kvstore.delete_list(&key).await?;
             ctx.out.note(&format!("✓ Deleted list {key:?}"));
         }

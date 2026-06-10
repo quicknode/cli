@@ -11,6 +11,7 @@ use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity}
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::retry::retrying;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -123,7 +124,7 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn list(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_teams().await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.list_teams()).await?;
     crate::output::emit(&ctx.out, &TeamsView(resp))
 }
 
@@ -137,7 +138,7 @@ async fn create(name: String, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn show(id: i64, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_team(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.get_team(id)).await?;
     crate::output::emit(&ctx.out, &TeamDetailView(resp))
 }
 
@@ -160,7 +161,7 @@ async fn delete(id: i64, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn endpoints(id: i64, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_team_endpoints(id).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.admin.list_team_endpoints(id)).await?;
     crate::output::emit(&ctx.out, &TeamEndpointsView(resp))
 }
 

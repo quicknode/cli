@@ -58,7 +58,7 @@ pub async fn run(cmd: TagCmd, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn list(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.list_tags().await?;
+    let resp = crate::retry::retrying(ctx.global.retries, || ctx.sdk.admin.list_tags()).await?;
     crate::output::emit(&ctx.out, &TagsView(resp))
 }
 
@@ -79,7 +79,7 @@ async fn delete(tag_id: i32, ctx: Ctx) -> Result<(), CliError> {
     );
     let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
         true => true,
-        false => prompt_yes_no(&format!("Delete tag {tag_id}?"))?,
+        false => prompt_yes_no(&format!("Delete tag {tag_id} from the account?"))?,
     };
     if !proceed {
         return Err(CliError::Cancelled);

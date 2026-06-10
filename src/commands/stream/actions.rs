@@ -9,9 +9,10 @@ use quicknode_sdk::streams::{
 
 use super::render::{StreamView, StreamsListView, TestFilterView};
 use super::{CreateArgs, ListArgs, TestFilterArgs, UpdateArgs};
-use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
+use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 
 pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
     let params = ListStreamsParams {
@@ -21,12 +22,12 @@ pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
         order_by: a.order_by,
         order_direction: a.order_direction,
     };
-    let resp = ctx.sdk.streams.list_streams(&params).await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.streams.list_streams(&params)).await?;
     crate::output::emit(&ctx.out, &StreamsListView(resp))
 }
 
 pub(super) async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
-    let params = if let Some(path) = a.config_file {
+    let params = if let Some(path) = a.stream_config_file {
         let text = std::fs::read_to_string(&path)?;
         serde_json::from_str::<CreateStreamParams>(&text)?
     } else {
@@ -38,27 +39,17 @@ pub(super) async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 fn build_create_params(a: CreateArgs) -> Result<CreateStreamParams, CliError> {
-    let name = a
-        .name
-        .ok_or_else(|| CliError::Arg("--name is required".into()))?;
-    let network = a
-        .network
-        .ok_or_else(|| CliError::Arg("--network is required".into()))?;
-    let dataset = a
-        .dataset
-        .ok_or_else(|| CliError::Arg("--dataset is required".into()))?;
-    let start = a
-        .start
-        .ok_or_else(|| CliError::Arg("--start is required".into()))?;
-    let end = a
-        .end
-        .ok_or_else(|| CliError::Arg("--end is required (-1 for continuous)".into()))?;
-    let region = a
-        .region
-        .ok_or_else(|| CliError::Arg("--region is required".into()))?;
-    let url = a.webhook.ok_or_else(|| {
-        CliError::Arg("--webhook is required (or use --config-file for other destinations)".into())
-    })?;
+    // These flags are `required_unless_present = "stream_config_file"` in
+    // clap, and this function is only reached when --stream-config-file was
+    // NOT supplied.
+    const ENFORCED: &str = "enforced by clap unless --stream-config-file is present";
+    let name = a.name.expect(ENFORCED);
+    let network = a.network.expect(ENFORCED);
+    let dataset = a.dataset.expect(ENFORCED);
+    let start = a.start.expect(ENFORCED);
+    let end = a.end.expect(ENFORCED);
+    let region = a.region.expect(ENFORCED);
+    let url = a.webhook.expect(ENFORCED);
 
     let filter_function = match (a.filter, a.filter_file) {
         (Some(s), None) => Some(STANDARD.encode(s)),
@@ -108,7 +99,7 @@ fn build_create_params(a: CreateArgs) -> Result<CreateStreamParams, CliError> {
 }
 
 pub(super) async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let s = ctx.sdk.streams.get_stream(id).await?;
+    let s = retrying(ctx.global.retries, || ctx.sdk.streams.get_stream(id)).await?;
     crate::output::emit(&ctx.out, &StreamView(s))
 }
 
@@ -147,26 +138,8 @@ pub(super) async fn delete(id: &str, ctx: Ctx) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(super) async fn delete_all(ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Severe, cfg)? {
-        true => true,
-        false => prompt_typed(
-            "Type 'delete-all' to delete EVERY stream on the account",
-            "delete-all",
-        )?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.streams.delete_all_streams().await?;
-    ctx.out.note("✓ Deleted all streams");
-    Ok(())
-}
+// There is intentionally no `stream delete-all` command. Account-wide wipes
+// are out of scope for the CLI; use the API directly if you really need one.
 
 pub(super) async fn activate(id: &str, ctx: Ctx) -> Result<(), CliError> {
     ctx.sdk.streams.activate_stream(id).await?;
@@ -201,16 +174,17 @@ pub(super) async fn test_filter(a: TestFilterArgs, ctx: Ctx) -> Result<(), CliEr
         filter_language: a.filter_language.map(Into::into),
         address_book_config: None,
     };
-    let resp = ctx.sdk.streams.test_filter(&params).await?;
+    // POST, but read-only: it evaluates a filter against historical data and
+    // changes nothing, so it's safe to retry.
+    let resp = retrying(ctx.global.retries, || ctx.sdk.streams.test_filter(&params)).await?;
     crate::output::emit(&ctx.out, &TestFilterView(resp))
 }
 
 pub(super) async fn enabled_count(stream_type: Option<String>, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx
-        .sdk
-        .streams
-        .get_enabled_count(stream_type.as_deref())
-        .await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.streams.get_enabled_count(stream_type.as_deref())
+    })
+    .await?;
     if ctx.out.format.is_structured() {
         crate::output::emit(&ctx.out, &resp)
     } else {

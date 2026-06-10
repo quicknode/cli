@@ -12,21 +12,25 @@ use quicknode_sdk::webhooks::{
 
 use super::render::{WebhookView, WebhooksListView};
 use super::{ActivateArgs, CreateArgs, ListArgs, TemplateKind, UpdateArgs, UpdateTemplateArgs};
-use crate::confirm::{decide_without_prompt, prompt_typed, prompt_yes_no, ConfirmCfg, Severity};
+use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
+use crate::retry::retrying;
 
 pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
     let params = GetWebhooksParams {
         limit: a.limit,
         offset: a.offset,
     };
-    let resp = ctx.sdk.webhooks.list_webhooks(&params).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.webhooks.list_webhooks(&params)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &WebhooksListView(resp))
 }
 
 pub(super) async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let w = ctx.sdk.webhooks.get_webhook(id).await?;
+    let w = retrying(ctx.global.retries, || ctx.sdk.webhooks.get_webhook(id)).await?;
     crate::output::emit(&ctx.out, &WebhookView(w))
 }
 
@@ -143,26 +147,8 @@ pub(super) async fn delete(id: &str, ctx: Ctx) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(super) async fn delete_all(ctx: Ctx) -> Result<(), CliError> {
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Severe, cfg)? {
-        true => true,
-        false => prompt_typed(
-            "Type 'delete-all' to delete EVERY webhook on the account",
-            "delete-all",
-        )?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
-    ctx.sdk.webhooks.delete_all_webhooks().await?;
-    ctx.out.note("✓ Deleted all webhooks");
-    Ok(())
-}
+// There is intentionally no `webhook delete-all` command. Account-wide wipes
+// are out of scope for the CLI; use the API directly if you really need one.
 
 pub(super) async fn activate(a: ActivateArgs, ctx: Ctx) -> Result<(), CliError> {
     let params = ActivateWebhookParams {
@@ -180,7 +166,7 @@ pub(super) async fn pause(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 pub(super) async fn enabled_count(ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.webhooks.get_enabled_count().await?;
+    let resp = retrying(ctx.global.retries, || ctx.sdk.webhooks.get_enabled_count()).await?;
     if ctx.out.format.is_structured() {
         crate::output::emit(&ctx.out, &resp)
     } else {

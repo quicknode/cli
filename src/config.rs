@@ -2,13 +2,17 @@
 //!
 //! Resolution order, highest to lowest precedence:
 //!   1. `--api-key` flag
-//!   2. `QN_CLI__API_KEY` env var
-//!   3. config file
+//!   2. config file (`--config-file` path if given, else the default path)
 //!
-//! When all three fail we return [`CliError::NoApiKey`] which exits 4 with a
-//! message directing the user to `qn auth login`. The `qn auth login` command
-//! is the only place that prompts interactively; other commands never block
-//! waiting for input.
+//! There is deliberately no environment-variable source: a key left exported
+//! in a shell is invisible state that outlives the session it was set for,
+//! and is the easiest way to run a destructive command against the wrong
+//! account.
+//!
+//! When both sources fail we return [`CliError::NoApiKey`] which exits 4 with
+//! a message directing the user to `qn auth login`. The `qn auth login`
+//! command is the only place that prompts interactively; other commands never
+//! block waiting for input.
 
 use std::fs;
 use std::io::IsTerminal;
@@ -19,12 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::errors::CliError;
 use crate::output::Format;
 
-const ENV_API_KEY: &str = "QN_CLI__API_KEY";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
     Flag,
-    Env,
     ConfigFile,
     Prompt,
 }
@@ -33,7 +34,6 @@ impl KeySource {
     pub fn label(self) -> &'static str {
         match self {
             KeySource::Flag => "--api-key flag",
-            KeySource::Env => "QN_CLI__API_KEY env var",
             KeySource::ConfigFile => "config file",
             KeySource::Prompt => "interactive prompt",
         }
@@ -199,27 +199,23 @@ pub fn delete_config(path: &Path) -> Result<(), CliError> {
     }
 }
 
-/// Resolves an API key per the documented precedence: flag > env > config file.
+/// Resolves an API key per the documented precedence: flag > config file.
 ///
 /// `allow_prompt` and `prompt` exist only so `qn auth login` can opt into the
 /// interactive path. Regular commands pass `allow_prompt = false`; if the
-/// three non-interactive sources fail they get `Err(NoApiKey)`.
+/// non-interactive sources fail they get `Err(NoApiKey)`.
 ///
 /// `prompt` is supplied by the caller so tests can inject a deterministic
 /// closure instead of touching the real terminal. In production
 /// [`prompt_for_api_key`] is the implementation used by `qn auth login`.
 pub fn resolve_api_key(
     flag: Option<&str>,
-    env_key: Option<&str>,
     config_path: Option<&Path>,
     allow_prompt: bool,
     prompt: impl FnOnce() -> Result<String, CliError>,
 ) -> Result<(String, KeySource), CliError> {
     if let Some(k) = flag.map(str::trim).filter(|s| !s.is_empty()) {
         return Ok((k.to_string(), KeySource::Flag));
-    }
-    if let Some(k) = env_key.map(str::trim).filter(|s| !s.is_empty()) {
-        return Ok((k.to_string(), KeySource::Env));
     }
     if let Some(path) = config_path {
         if let Some(cfg) = load_from(path)? {
@@ -251,13 +247,6 @@ pub fn can_prompt() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
-/// Reads `QN_CLI__API_KEY` from the environment.
-pub fn read_env_api_key() -> Option<String> {
-    std::env::var(ENV_API_KEY)
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-}
-
 /// Interactive prompt for an API key. Hidden input on the terminal.
 pub fn prompt_for_api_key() -> Result<String, CliError> {
     use dialoguer::Password;
@@ -277,35 +266,34 @@ mod tests {
     }
 
     #[test]
-    fn flag_wins_over_everything() {
-        let (k, src) =
-            resolve_api_key(Some("from-flag"), Some("from-env"), None, true, fail_prompt).unwrap();
+    fn flag_wins_over_config_and_prompt() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_api_key(&path, "from-config").unwrap();
+
+        let (k, src) = resolve_api_key(Some("from-flag"), Some(&path), true, fail_prompt).unwrap();
         assert_eq!(k, "from-flag");
         assert_eq!(src, KeySource::Flag);
     }
 
     #[test]
-    fn env_wins_over_config_and_prompt() {
-        let (k, src) = resolve_api_key(None, Some("from-env"), None, true, fail_prompt).unwrap();
-        assert_eq!(k, "from-env");
-        assert_eq!(src, KeySource::Env);
-    }
-
-    #[test]
-    fn empty_flag_falls_through_to_env() {
-        let (k, src) =
-            resolve_api_key(Some("   "), Some("from-env"), None, true, fail_prompt).unwrap();
-        assert_eq!(k, "from-env");
-        assert_eq!(src, KeySource::Env);
-    }
-
-    #[test]
-    fn config_used_when_no_flag_or_env() {
+    fn empty_flag_falls_through_to_config() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         save_api_key(&path, "from-config").unwrap();
 
-        let (k, src) = resolve_api_key(None, None, Some(&path), false, fail_prompt).unwrap();
+        let (k, src) = resolve_api_key(Some("   "), Some(&path), false, fail_prompt).unwrap();
+        assert_eq!(k, "from-config");
+        assert_eq!(src, KeySource::ConfigFile);
+    }
+
+    #[test]
+    fn config_used_when_no_flag() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_api_key(&path, "from-config").unwrap();
+
+        let (k, src) = resolve_api_key(None, Some(&path), false, fail_prompt).unwrap();
         assert_eq!(k, "from-config");
         assert_eq!(src, KeySource::ConfigFile);
     }
@@ -315,14 +303,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("does-not-exist.toml");
         let (k, src) =
-            resolve_api_key(None, None, Some(&path), true, || Ok("prompted".to_string())).unwrap();
+            resolve_api_key(None, Some(&path), true, || Ok("prompted".to_string())).unwrap();
         assert_eq!(k, "prompted");
         assert_eq!(src, KeySource::Prompt);
     }
 
     #[test]
     fn no_inputs_with_prompt_disabled_returns_no_api_key() {
-        let err = resolve_api_key(None, None, None, false, fail_prompt).unwrap_err();
+        let err = resolve_api_key(None, None, false, fail_prompt).unwrap_err();
         assert!(matches!(err, CliError::NoApiKey));
     }
 
@@ -331,7 +319,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "this is = not valid = toml\n[[[").unwrap();
-        let err = resolve_api_key(None, None, Some(&path), false, fail_prompt).unwrap_err();
+        let err = resolve_api_key(None, Some(&path), false, fail_prompt).unwrap_err();
         assert!(matches!(err, CliError::BadConfig { .. }), "got: {err:?}");
     }
 

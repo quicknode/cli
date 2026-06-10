@@ -9,7 +9,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CliError {
-    #[error("no API key found. Set QN_CLI__API_KEY or run 'qn auth login'")]
+    #[error("no API key found. Run 'qn auth login', or pass --api-key or --config-file")]
     NoApiKey,
 
     #[error("config file at {path} is invalid: {source}")]
@@ -53,7 +53,8 @@ pub enum CliError {
 /// Maps a [`CliError`] to a process exit code per the plan.
 ///
 /// - 0: success (never produced here)
-/// - 1: generic CLI failure (arg parse, IO, decode)
+/// - 1: generic CLI failure (arg parse, IO, decode). clap usage errors are
+///   mapped to 1 in main.rs too, so 2 always and only means an API error.
 /// - 2: SdkError::Api (server returned a non-2xx)
 /// - 3: SdkError::Http (network failure)
 /// - 4: NoApiKey / BadConfig

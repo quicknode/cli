@@ -172,21 +172,11 @@ async fn activate_pause_delete_stream() {
 }
 
 #[tokio::test]
-async fn delete_all_streams_needs_double_yes() {
+async fn delete_all_is_not_a_command() {
+    // Account-wide wipes are deliberately not offered by the CLI.
     let server = MockServer::start().await;
-    Mock::given(method("DELETE"))
-        .and(path("/streams/rest/v1/streams"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-
-    // Single --yes is not enough for severe.
-    let one_yes = run_qn(&server.uri(), &["stream", "delete-all", "--yes"]).await;
-    assert_eq!(one_yes.exit_code, 5, "stderr={}", one_yes.stderr);
-
-    // --yes --yes proceeds.
-    let two_yes = run_qn(&server.uri(), &["stream", "delete-all", "--yes", "--yes"]).await;
-    assert_eq!(two_yes.exit_code, 0, "stderr={}", two_yes.stderr);
+    let out = run_qn(&server.uri(), &["stream", "delete-all", "--yes", "--yes"]).await;
+    assert_ne!(out.exit_code, 0);
 }
 
 #[tokio::test]

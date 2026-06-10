@@ -10,7 +10,6 @@ use predicates::prelude::*;
 fn bin() -> Command {
     let mut c = Command::cargo_bin("qn").expect("qn binary built");
     // Make sure no inherited env hijacks the tests.
-    c.env_remove("QN_CLI__API_KEY");
     c.env_remove("NO_COLOR");
     c.env_remove("HOME"); // so config lookup doesn't read a real ~/.config/qn
     c.env("HOME", std::env::temp_dir());
@@ -74,6 +73,20 @@ fn endpoint_short_help_works() {
 #[test]
 fn no_api_key_no_tty_exits_4() {
     bin()
+        .args(["endpoint", "list"])
+        .args(["--no-input"])
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains("no API key found"));
+}
+
+#[test]
+fn env_var_api_key_is_not_a_key_source() {
+    // QN_CLI__API_KEY support was removed deliberately (a key left exported in
+    // a shell outlives its session). Setting it must not authenticate anything.
+    bin()
+        .env("QN_CLI__API_KEY", "should-be-ignored")
         .args(["endpoint", "list"])
         .args(["--no-input"])
         .assert()

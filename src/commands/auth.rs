@@ -16,6 +16,11 @@ use crate::context::GlobalArgs;
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn auth login                       # prompts for the key (hidden input)\n  \
+    qn auth login --api-key <KEY>       # non-interactive (e.g. CI)\n  \
+    qn auth whoami                      # verify the key against the API\n  \
+    qn --config-file ./ci.toml auth status")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: AuthCmd,
@@ -50,7 +55,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
 }
 
 async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let path = config::config_path().ok_or_else(|| {
+    let path = global.resolve_config_path().ok_or_else(|| {
         CliError::Arg("no config directory available on this platform".to_string())
     })?;
 
@@ -72,7 +77,7 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
 
     // Quick validation against the API so we don't silently save a bogus key.
     let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key.clone()))?;
-    sdk.admin.list_chains().await?;
+    crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await?;
 
     config::save_api_key(&path, &key)?;
     if !global.quiet {
@@ -82,7 +87,7 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
 }
 
 fn logout(global: GlobalArgs) -> Result<(), CliError> {
-    let path = config::config_path().ok_or_else(|| {
+    let path = global.resolve_config_path().ok_or_else(|| {
         CliError::Arg("no config directory available on this platform".to_string())
     })?;
     config::delete_config(&path)?;
@@ -102,7 +107,7 @@ async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
     let (key, source) = resolve_non_interactive(&global)?;
     let redacted = redact(&key);
     let sdk = QuicknodeSdk::new(&SdkFullConfig::from_api_key(key))?;
-    let result = sdk.admin.list_chains().await;
+    let result = crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await;
     let ok = result.is_ok();
     print_status(&global, source, &redacted, Some(ok));
     result.map(|_| ()).map_err(Into::into)
@@ -111,15 +116,10 @@ async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
 /// Resolves the key just like the rest of the CLI — no prompting. Returns the
 /// raw key (callers must redact before printing) along with its source.
 fn resolve_non_interactive(global: &GlobalArgs) -> Result<(String, KeySource), CliError> {
-    let env_key = config::read_env_api_key();
-    let path = config::config_path();
-    config::resolve_api_key(
-        global.api_key.as_deref(),
-        env_key.as_deref(),
-        path.as_deref(),
-        false,
-        || unreachable!("prompt disabled for auth status/whoami"),
-    )
+    let path = global.resolve_config_path();
+    config::resolve_api_key(global.api_key.as_deref(), path.as_deref(), false, || {
+        unreachable!("prompt disabled for auth status/whoami")
+    })
 }
 
 /// Show the last 4 chars only. Char-based slicing — never panics on multi-byte input.

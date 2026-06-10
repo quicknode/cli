@@ -2,9 +2,11 @@
 //!
 //! Stream `create` is highly configurable. To keep the CLI usable we expose
 //! the common fields directly (name, network, dataset, range, region, plan,
-//! webhook url) and provide `--config-file` to load a full JSON
+//! webhook url) and provide `--stream-config-file` to load a full JSON
 //! `CreateStreamParams` from disk for advanced cases (S3/Azure/Postgres/Kafka
-//! destinations, filter functions, extra destinations, etc.).
+//! destinations, filter functions, extra destinations, etc.). It is named
+//! distinctly from the global `--config-file` (CLI auth/config TOML) so the
+//! two can never be confused.
 
 mod actions;
 mod render;
@@ -18,6 +20,12 @@ use crate::context::Ctx;
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn stream list --limit 20\n  \
+    qn stream create --name blocks --network ethereum-mainnet --dataset block \\\n      \
+        --start 24691804 --end=-1 --region usa-east --webhook https://hook.example.com\n  \
+    qn stream create --stream-config-file stream.json\n  \
+    qn stream pause s-1234")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: StreamCmd,
@@ -28,7 +36,7 @@ pub enum StreamCmd {
     /// List streams on the account.
     #[command(visible_alias = "ls")]
     List(ListArgs),
-    /// Create a stream (webhook destination). For non-webhook destinations, use --config-file.
+    /// Create a stream (webhook destination). For non-webhook destinations, use --stream-config-file.
     Create(Box<CreateArgs>),
     /// Show a stream's full configuration and current state.
     Show { id: String },
@@ -36,8 +44,6 @@ pub enum StreamCmd {
     Update(UpdateArgs),
     /// Delete a stream.
     Delete { id: String },
-    /// Delete every stream on the account.
-    DeleteAll,
     /// Activate (resume) a stream.
     Activate { id: String },
     /// Pause a stream.
@@ -69,33 +75,39 @@ pub struct ListArgs {
 #[derive(Debug, ClapArgs)]
 pub struct CreateArgs {
     /// Load full `CreateStreamParams` from a JSON file. When supplied, all
-    /// other --flags are ignored.
+    /// other --flags are ignored. (Distinct from the global `--config-file`,
+    /// which selects the CLI's own config TOML.)
     #[arg(long, conflicts_with_all = ["name", "network", "dataset", "start", "end", "region", "plan", "webhook"])]
-    pub config_file: Option<PathBuf>,
+    pub stream_config_file: Option<PathBuf>,
 
     /// Stream name.
-    #[arg(long)]
+    #[arg(long, required_unless_present = "stream_config_file")]
     pub name: Option<String>,
     /// Network (e.g. `ethereum-mainnet`).
-    #[arg(long)]
+    #[arg(long, required_unless_present = "stream_config_file")]
     pub network: Option<String>,
     /// Dataset (snake_case).
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, required_unless_present = "stream_config_file")]
     pub dataset: Option<DatasetArg>,
     /// Start block.
-    #[arg(long)]
+    #[arg(long, required_unless_present = "stream_config_file")]
     pub start: Option<i64>,
     /// End block (`-1` for continuous).
-    #[arg(long, allow_hyphen_values = true)]
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        required_unless_present = "stream_config_file"
+    )]
     pub end: Option<i64>,
     /// Region.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, required_unless_present = "stream_config_file")]
     pub region: Option<RegionArg>,
     /// Billing plan slug (optional).
     #[arg(long)]
     pub plan: Option<String>,
-    /// Webhook URL for the primary destination.
-    #[arg(long)]
+    /// Webhook URL for the primary destination (use `--stream-config-file`
+    /// for other destination types).
+    #[arg(long, required_unless_present = "stream_config_file")]
     pub webhook: Option<String>,
     /// Webhook security token (32-byte minimum). Optional.
     #[arg(long)]
@@ -273,7 +285,6 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         StreamCmd::Show { id } => actions::show(&id, ctx).await,
         StreamCmd::Update(a) => actions::update(a, ctx).await,
         StreamCmd::Delete { id } => actions::delete(&id, ctx).await,
-        StreamCmd::DeleteAll => actions::delete_all(ctx).await,
         StreamCmd::Activate { id } => actions::activate(&id, ctx).await,
         StreamCmd::Pause { id } => actions::pause(&id, ctx).await,
         StreamCmd::TestFilter(a) => actions::test_filter(a, ctx).await,

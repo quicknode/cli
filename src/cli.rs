@@ -21,15 +21,29 @@ use crate::output::Format;
     about = "Command-line interface for the Quicknode API.",
     long_about = "qn lets you manage Quicknode endpoints, streams, webhooks, and the KV store from the terminal.\n\n\
                   Use `qn <noun> --help` (e.g. `qn endpoint --help`) for command details.\n\n\
-                  Authentication is resolved in this order: --api-key flag, QN_CLI__API_KEY env var,\n\
-                  ~/.config/qn/config.toml. Run `qn auth login` to save a key the first time.",
+                  Authentication is resolved in this order: --api-key flag, then the config file\n\
+                  (--config-file path if given, else ~/.config/qn/config.toml). Run `qn auth login`\n\
+                  to save a key the first time.",
     propagate_version = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    after_help = "Examples:\n  \
+        qn auth login\n  \
+        qn endpoint create --chain ethereum --network mainnet\n  \
+        qn endpoint list -o json\n  \
+        qn endpoint logs ep-1234 --from 1h\n  \
+        qn chain list",
+    // Group the global flags under their own heading in every subcommand's
+    // --help, so command-specific flags surface first under "Options".
+    next_help_heading = "Global options"
 )]
 pub struct Cli {
-    /// API key. Overrides QN_CLI__API_KEY and the config file.
-    #[arg(long, global = true, env = "QN_CLI__API_KEY", hide_env_values = true)]
+    /// API key. Overrides the config file.
+    #[arg(long, global = true)]
     pub api_key: Option<String>,
+
+    /// Path to an alternate config file (default: ~/.config/qn/config.toml).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config_file: Option<std::path::PathBuf>,
 
     /// Output format. `table` is the default human view; the others are
     /// pipeline-friendly serialized forms. If unset, falls back to the
@@ -59,7 +73,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_input: bool,
 
-    /// Skip confirmation prompts. Pass twice for destructive bulk operations like `stream delete-all`.
+    /// Max automatic retries for read-only commands on transient failures
+    /// (HTTP 429/500/502/503/504, timeouts). Uses exponential backoff with
+    /// jitter. 0 disables retries. Commands that modify resources never retry.
+    #[arg(long, global = true, default_value_t = 3, value_name = "N")]
+    pub retries: u32,
+
+    /// Skip confirmation prompts on destructive operations.
     #[arg(short = 'y', long = "yes", global = true, action = ArgAction::Count)]
     pub yes: u8,
 
@@ -122,6 +142,7 @@ impl Cli {
     pub fn global_args(&self) -> GlobalArgs {
         GlobalArgs {
             api_key: self.api_key.clone(),
+            config_file: self.config_file.clone(),
             format: self.format,
             wide: self.wide,
             // format resolved-from-config in Ctx::from_global; auth.rs falls
@@ -131,6 +152,7 @@ impl Cli {
             verbose: self.verbose,
             no_input: self.no_input,
             yes_count: self.yes,
+            retries: self.retries,
             base_url: self.base_url.clone(),
         }
     }

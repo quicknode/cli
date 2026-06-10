@@ -11,9 +11,11 @@ use quicknode_sdk::admin::{
 };
 use serde::Serialize;
 
+use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::retry::retrying;
 
 #[derive(Debug, Subcommand)]
 pub enum SecurityCmd {
@@ -206,12 +208,18 @@ pub async fn run(cmd: SecurityCmd, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_endpoint_security(id).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_endpoint_security(id)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &SecurityShowView(resp))
 }
 
 async fn options_show(id: &str, ctx: Ctx) -> Result<(), CliError> {
-    let resp = ctx.sdk.admin.get_security_options(id).await?;
+    let resp = retrying(ctx.global.retries, || {
+        ctx.sdk.admin.get_security_options(id)
+    })
+    .await?;
     crate::output::emit(&ctx.out, &SecurityOptionsView(resp))
 }
 
@@ -258,6 +266,12 @@ async fn token(cmd: TokenCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Created token on {id}"));
         }
         TokenCmd::Delete { id, token_id } => {
+            confirm_mild(
+                &ctx,
+                &format!(
+                    "Delete token {token_id} on {id}? Clients authenticating with it lose access"
+                ),
+            )?;
             ctx.sdk.admin.delete_token(&id, &token_id).await?;
             ctx.out.note(&format!("✓ Deleted token {token_id} on {id}"));
         }

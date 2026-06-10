@@ -42,7 +42,6 @@ async fn list_endpoints_json_output_is_valid_json() {
 
     let output = Command::cargo_bin("qn")
         .unwrap()
-        .env_remove("QN_CLI__API_KEY")
         .env_remove("HOME")
         .env("HOME", std::env::temp_dir())
         .args([
@@ -89,7 +88,6 @@ async fn list_endpoints_all_formats_render() {
     for fmt in ["json", "yaml", "md", "toon", "table"] {
         let output = Command::cargo_bin("qn")
             .unwrap()
-            .env_remove("QN_CLI__API_KEY")
             .env_remove("HOME")
             .env("HOME", std::env::temp_dir())
             .args([
@@ -136,7 +134,6 @@ async fn list_endpoints_wide_md_includes_urls() {
 
     let output = Command::cargo_bin("qn")
         .unwrap()
-        .env_remove("QN_CLI__API_KEY")
         .env_remove("HOME")
         .env("HOME", std::env::temp_dir())
         .args([
@@ -407,6 +404,83 @@ async fn endpoint_security_token_create() {
 }
 
 #[tokio::test]
+async fn endpoint_security_token_delete_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/tokens/tok-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint", "security", "token", "delete", "ep-1", "tok-1", "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_token_delete_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/tokens/tok-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "token", "delete", "ep-1", "tok-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn rate_limit_delete_override_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/rate-limits/ovr-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "rate-limit",
+            "delete-override",
+            "ep-1",
+            "ovr-1",
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn rate_limit_delete_override_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/rate-limits/ovr-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "rate-limit", "delete-override", "ep-1", "ovr-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn endpoint_security_set_options_sends_partial_payload() {
     let server = MockServer::start().await;
     Mock::given(method("PATCH"))
@@ -492,12 +566,12 @@ async fn endpoint_ratelimit_set_omits_unset_fields() {
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
-// ---- Stage B: required-args pre-flight checks ---- //
+// ---- Required-args enforcement (clap-level, exits 1 before any HTTP) ---- //
 
 #[tokio::test]
 async fn endpoint_create_no_flags_fails_before_api_call() {
     // No mocks mounted; if the CLI tries to make a request, wiremock would 404.
-    // We assert that the pre-flight check fires *before* any HTTP call.
+    // clap rejects the invocation *before* any HTTP call.
     let server = MockServer::start().await;
     let out = run_qn(&server.uri(), &["endpoint", "create"]).await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
@@ -519,8 +593,8 @@ async fn endpoint_create_only_chain_fails_before_api_call() {
     .await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
     assert!(
-        out.stderr.contains("--network") && !out.stderr.contains("--chain "),
-        "should call out --network specifically; stderr={}",
+        out.stderr.contains("--network <NETWORK>"),
+        "should call out --network; stderr={}",
         out.stderr
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -532,6 +606,19 @@ async fn endpoint_update_no_flags_fails_before_api_call() {
     let out = run_qn(&server.uri(), &["endpoint", "update", "ep-1"]).await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
     assert!(out.stderr.contains("--label"), "stderr={}", out.stderr);
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn stream_create_missing_flags_fails_before_api_call() {
+    let server = MockServer::start().await;
+    let out = run_qn(&server.uri(), &["stream", "create", "--name", "x"]).await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("--network") && out.stderr.contains("--webhook"),
+        "stderr={}",
+        out.stderr
+    );
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
 }
 
