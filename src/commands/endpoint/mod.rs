@@ -24,6 +24,12 @@ pub use security::SecurityCmd;
 pub use tag::TagCmd;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn endpoint create --chain ethereum --network mainnet\n  \
+    qn endpoint list -o json\n  \
+    qn endpoint logs ep-1234 --from 1h --details\n  \
+    qn endpoint pause ep-1234\n  \
+    qn endpoint bulk pause ep-1 ep-2 --yes")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: EndpointCmd,
@@ -123,12 +129,12 @@ pub struct ListArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct CreateArgs {
-    /// Blockchain (e.g. `ethereum`, `solana`).
+    /// Blockchain (e.g. `ethereum`, `solana`; run `qn chain list` to see all).
     #[arg(long)]
-    pub chain: Option<String>,
+    pub chain: String,
     /// Network (e.g. `mainnet`).
     #[arg(long)]
-    pub network: Option<String>,
+    pub network: String,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -137,7 +143,7 @@ pub struct UpdateArgs {
     pub id: String,
     /// New label.
     #[arg(long)]
-    pub label: Option<String>,
+    pub label: String,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -232,22 +238,9 @@ async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
-    let missing: Vec<&str> = [
-        ("--chain", a.chain.is_none()),
-        ("--network", a.network.is_none()),
-    ]
-    .iter()
-    .filter_map(|(name, missing)| if *missing { Some(*name) } else { None })
-    .collect();
-    if !missing.is_empty() {
-        return Err(CliError::Arg(format!(
-            "'endpoint create' requires {}. Run 'qn chain list' to see available chains.",
-            missing.join(" and "),
-        )));
-    }
     let req = CreateEndpointRequest {
-        chain: a.chain,
-        network: a.network,
+        chain: Some(a.chain),
+        network: Some(a.network),
     };
     let resp = ctx.sdk.admin.create_endpoint(&req).await?;
     ctx.out
@@ -264,10 +257,9 @@ async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
-    if a.label.is_none() {
-        return Err(CliError::Arg("'endpoint update' requires --label.".into()));
-    }
-    let req = UpdateEndpointRequest { label: a.label };
+    let req = UpdateEndpointRequest {
+        label: Some(a.label),
+    };
     ctx.sdk.admin.update_endpoint(&a.id, &req).await?;
     ctx.out.note(&format!("✓ Updated endpoint {}", a.id));
     Ok(())

@@ -39,27 +39,16 @@ pub(super) async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 fn build_create_params(a: CreateArgs) -> Result<CreateStreamParams, CliError> {
-    let name = a
-        .name
-        .ok_or_else(|| CliError::Arg("--name is required".into()))?;
-    let network = a
-        .network
-        .ok_or_else(|| CliError::Arg("--network is required".into()))?;
-    let dataset = a
-        .dataset
-        .ok_or_else(|| CliError::Arg("--dataset is required".into()))?;
-    let start = a
-        .start
-        .ok_or_else(|| CliError::Arg("--start is required".into()))?;
-    let end = a
-        .end
-        .ok_or_else(|| CliError::Arg("--end is required (-1 for continuous)".into()))?;
-    let region = a
-        .region
-        .ok_or_else(|| CliError::Arg("--region is required".into()))?;
-    let url = a.webhook.ok_or_else(|| {
-        CliError::Arg("--webhook is required (or use --config-file for other destinations)".into())
-    })?;
+    // These flags are `required_unless_present = "config_file"` in clap, and
+    // this function is only reached when --config-file was NOT supplied.
+    const ENFORCED: &str = "enforced by clap unless --config-file is present";
+    let name = a.name.expect(ENFORCED);
+    let network = a.network.expect(ENFORCED);
+    let dataset = a.dataset.expect(ENFORCED);
+    let start = a.start.expect(ENFORCED);
+    let end = a.end.expect(ENFORCED);
+    let region = a.region.expect(ENFORCED);
+    let url = a.webhook.expect(ENFORCED);
 
     let filter_function = match (a.filter, a.filter_file) {
         (Some(s), None) => Some(STANDARD.encode(s)),

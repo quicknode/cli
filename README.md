@@ -240,7 +240,7 @@ re-running it.
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | CLI error (bad argument, IO, decode) |
+| 1 | CLI error (usage/bad argument, IO, decode) |
 | 2 | API error (server returned 4xx/5xx) |
 | 3 | Network failure (timeout, connect, transport) |
 | 4 | Missing or invalid API key / config |

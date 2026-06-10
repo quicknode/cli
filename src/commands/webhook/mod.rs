@@ -12,6 +12,11 @@ use crate::context::Ctx;
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn webhook list\n  \
+    qn webhook create --name alerts --network ethereum-mainnet \\\n      \
+        --url https://hook.example.com --template evmWalletFilter --wallet 0xabc\n  \
+    qn webhook pause wh-1234")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: WebhookCmd,

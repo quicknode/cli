@@ -18,6 +18,12 @@ use crate::context::Ctx;
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn stream list --limit 20\n  \
+    qn stream create --name blocks --network ethereum-mainnet --dataset block \\\n      \
+        --start 24691804 --end=-1 --region usa-east --webhook https://hook.example.com\n  \
+    qn stream create --config-file stream.json\n  \
+    qn stream pause s-1234")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: StreamCmd,
@@ -72,28 +78,33 @@ pub struct CreateArgs {
     pub config_file: Option<PathBuf>,
 
     /// Stream name.
-    #[arg(long)]
+    #[arg(long, required_unless_present = "config_file")]
     pub name: Option<String>,
     /// Network (e.g. `ethereum-mainnet`).
-    #[arg(long)]
+    #[arg(long, required_unless_present = "config_file")]
     pub network: Option<String>,
     /// Dataset (snake_case).
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, required_unless_present = "config_file")]
     pub dataset: Option<DatasetArg>,
     /// Start block.
-    #[arg(long)]
+    #[arg(long, required_unless_present = "config_file")]
     pub start: Option<i64>,
     /// End block (`-1` for continuous).
-    #[arg(long, allow_hyphen_values = true)]
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        required_unless_present = "config_file"
+    )]
     pub end: Option<i64>,
     /// Region.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, required_unless_present = "config_file")]
     pub region: Option<RegionArg>,
     /// Billing plan slug (optional).
     #[arg(long)]
     pub plan: Option<String>,
-    /// Webhook URL for the primary destination.
-    #[arg(long)]
+    /// Webhook URL for the primary destination (use `--config-file` for other
+    /// destination types).
+    #[arg(long, required_unless_present = "config_file")]
     pub webhook: Option<String>,
     /// Webhook security token (32-byte minimum). Optional.
     #[arg(long)]

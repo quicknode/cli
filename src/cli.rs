@@ -25,7 +25,16 @@ use crate::output::Format;
                   (--config-file path if given, else ~/.config/qn/config.toml). Run `qn auth login`\n\
                   to save a key the first time.",
     propagate_version = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    after_help = "Examples:\n  \
+        qn auth login\n  \
+        qn endpoint create --chain ethereum --network mainnet\n  \
+        qn endpoint list -o json\n  \
+        qn endpoint logs ep-1234 --from 1h\n  \
+        qn chain list",
+    // Group the global flags under their own heading in every subcommand's
+    // --help, so command-specific flags surface first under "Options".
+    next_help_heading = "Global options"
 )]
 pub struct Cli {
     /// API key. Overrides the config file.

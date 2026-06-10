@@ -11,6 +11,11 @@ use crate::context::Ctx;
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn kv set put mykey myvalue\n  \
+    qn kv set get mykey\n  \
+    qn kv list create mylist item1 item2\n  \
+    qn kv list contains mylist item1")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: KvCmd,

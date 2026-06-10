@@ -54,7 +54,8 @@ async fn run_qn_inner(base_url: &str, extra_args: &[&str], inject_key: bool) -> 
     let cli = match Cli::try_parse_from(&argv) {
         Ok(c) => c,
         Err(e) => {
-            let exit = if e.use_stderr() { 2 } else { 0 };
+            // Mirrors main.rs: usage errors are exit 1, help/version exit 0.
+            let exit = if e.use_stderr() { 1 } else { 0 };
             return RunOutput {
                 stdout: String::new(),
                 stderr: e.to_string(),

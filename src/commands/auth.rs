@@ -16,6 +16,11 @@ use crate::context::GlobalArgs;
 use crate::errors::CliError;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn auth login                       # prompts for the key (hidden input)\n  \
+    qn auth login --api-key <KEY>       # non-interactive (e.g. CI)\n  \
+    qn auth whoami                      # verify the key against the API\n  \
+    qn --config-file ./ci.toml auth status")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: AuthCmd,
