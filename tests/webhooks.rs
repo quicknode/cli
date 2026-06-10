@@ -147,17 +147,11 @@ async fn pause_activate_delete_webhook() {
 }
 
 #[tokio::test]
-async fn delete_all_webhooks_needs_double_yes() {
+async fn delete_all_is_not_a_command() {
+    // Account-wide wipes are deliberately not offered by the CLI.
     let server = MockServer::start().await;
-    Mock::given(method("DELETE"))
-        .and(path("/webhooks/rest/v1/webhooks"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-    let one = run_qn(&server.uri(), &["webhook", "delete-all", "--yes"]).await;
-    assert_eq!(one.exit_code, 5);
-    let two = run_qn(&server.uri(), &["webhook", "delete-all", "-y", "-y"]).await;
-    assert_eq!(two.exit_code, 0, "stderr={}", two.stderr);
+    let out = run_qn(&server.uri(), &["webhook", "delete-all", "-y", "-y"]).await;
+    assert_ne!(out.exit_code, 0);
 }
 
 #[tokio::test]

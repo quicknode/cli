@@ -212,6 +212,17 @@ CLI hands the key to the SDK explicitly; it does not read the SDK's
 The hidden `--base-url <URL>` flag overrides the API host for all four
 sub-clients at once (used for integration tests and on-prem mirrors).
 
+## Confirmations
+
+Destructive commands (`delete`, `archive`, `bulk pause`, token revocation,
+removing a rate-limit override, …) prompt before acting, and the prompt states
+what will happen ("Pause 3 endpoint(s)? They will stop serving requests").
+Pass `--yes`/`-y` to skip the prompt. In scripts and CI (no TTY), a gated
+command without `--yes` exits with code 5 **before** any request is sent.
+
+The CLI deliberately has no account-wide wipe commands (no `delete-all`);
+operations with that blast radius belong behind the API, not a one-liner.
+
 ## Retries
 
 Read-only commands (`list`, `show`, `logs`, `metrics`, `usage`, …) retry
@@ -220,9 +231,9 @@ exponential backoff and full jitter. The default is 3 retries; tune it with
 the global `--retries <N>` flag (`--retries 0` disables).
 
 Commands that modify resources (`create`, `update`, `delete`, `pause`, …)
-**never** retry automatically: the API has no idempotency keys yet, so a
-retried create could provision twice. If a mutation fails with a transient
-error, check whether it took effect before re-running it.
+**never** retry automatically: a retried create could provision twice. If a
+mutation fails with a transient error, check whether it took effect before
+re-running it.
 
 ## Exit codes
 
@@ -233,7 +244,7 @@ error, check whether it took effect before re-running it.
 | 2 | API error (server returned 4xx/5xx) |
 | 3 | Network failure (timeout, connect, transport) |
 | 4 | Missing or invalid API key / config |
-| 5 | Operation needs confirmation (pass `--yes` or `--yes --yes`) |
+| 5 | Operation needs confirmation (pass `--yes`) |
 | 130 | Interrupted (SIGINT) |
 
 ## License

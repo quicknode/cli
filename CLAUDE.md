@@ -73,7 +73,13 @@ Things to verify for each new endpoint:
 - **Negative numbers**: any `i64` flag that accepts `-1` (`--end`, etc.) needs `#[arg(long, allow_hyphen_values = true)]` or clap will read it as another flag.
 - **Multi-value flags**: prefer repeatable `--method foo --method bar` (clap `Vec<String>` with `#[arg(long = "method")]`). Optionally also accept `--methods foo,bar` via a second field with `value_delimiter = ','`. The command body extends one into the other.
 - **Large `Args` structs**: clippy's `large_enum_variant` will reject an enum variant whose payload is > ~200 bytes. Box it: `Create(Box<CreateArgs>)` (we hit this on `StreamCmd::Create` and `WebhookCmd::Create`).
-- **Destructive operations**: route through `confirm::decide_without_prompt(Severity::Mild|Severe, ConfirmCfg)`. Mild = single `--yes` skips, TTY prompts otherwise. Severe = `--yes --yes` skips OR user types a literal word (`delete-all`). Non-TTY without enough `--yes` returns `CliError::NeedsConfirmation` (exit 5).
+- **Destructive operations**: the policy is non-negotiable —
+  - Anything that deletes, revokes, or loosens protection (delete/archive verbs, token revocation, removing a rate-limit override, pausing many endpoints) gets **at least `Severity::Mild`**: single `--yes` skips, TTY prompts otherwise, non-TTY without `--yes` returns `CliError::NeedsConfirmation` (exit 5). Use the `confirm::confirm_mild(&ctx, msg)` helper.
+  - Prompts must name the resource and the blast radius: "Pause 47 endpoint(s)? They will stop serving requests", not "Are you sure?". Include counts for bulk operations.
+  - **Account-wide wipe verbs (delete-all style) are not offered by the CLI at all.** Don't add one; point users at the API instead.
+  - Commands that restore service (`resume`, `activate`) are not gated.
+  - `Severity::Severe` (typed-word + `--yes --yes`) exists in `confirm.rs` for future wide-blast-radius operations; nothing uses it today.
+  - Every gated command needs both tests: no `--yes` non-TTY ⇒ exit 5 **and zero requests reach the mock** (`.expect(0)`); `--yes` ⇒ exit 0.
 - **Args that span multiple subcommands**: for things like rate-limits where both account-level and method-level CRUD exists, use a single `RateLimitCmd` enum with `MethodList/MethodCreate/...` variants — don't fight clap by trying to nest a third level.
 
 ### 3. Module layout

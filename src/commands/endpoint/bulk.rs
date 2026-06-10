@@ -13,6 +13,7 @@ use quicknode_sdk::admin::{
 };
 use serde::Serialize;
 
+use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, write_table, OutputCtx, Render};
@@ -72,6 +73,25 @@ pub async fn run(cmd: BulkCmd, ctx: Ctx) -> Result<(), CliError> {
 async fn set_status(a: IdsArgs, status: &str, ctx: Ctx) -> Result<(), CliError> {
     if a.ids.is_empty() {
         return Err(CliError::Arg("supply at least one endpoint id".to_string()));
+    }
+    // Pausing a fleet stops it serving requests — confirm with the blast
+    // radius spelled out. Resuming restores service, so it stays unguarded.
+    if status == "paused" {
+        let cfg = ConfirmCfg::new(
+            ctx.global.yes_count,
+            ctx.global.no_input,
+            ctx.out.stdout_is_tty,
+        );
+        let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
+            true => true,
+            false => prompt_yes_no(&format!(
+                "Pause {} endpoint(s)? They will stop serving requests",
+                a.ids.len()
+            ))?,
+        };
+        if !proceed {
+            return Err(CliError::Cancelled);
+        }
     }
     let req = BulkUpdateEndpointStatusRequest {
         ids: a.ids,

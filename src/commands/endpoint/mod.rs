@@ -281,7 +281,10 @@ async fn archive(a: ArchiveArgs, ctx: Ctx) -> Result<(), CliError> {
     );
     let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
         true => true,
-        false => prompt_yes_no(&format!("Archive endpoint {}?", a.id))?,
+        false => prompt_yes_no(&format!(
+            "Archive endpoint {}? This cannot be undone from the CLI",
+            a.id
+        ))?,
     };
     if !proceed {
         return Err(CliError::Cancelled);

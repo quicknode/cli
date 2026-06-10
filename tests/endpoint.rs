@@ -404,6 +404,83 @@ async fn endpoint_security_token_create() {
 }
 
 #[tokio::test]
+async fn endpoint_security_token_delete_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/tokens/tok-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint", "security", "token", "delete", "ep-1", "tok-1", "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_token_delete_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/tokens/tok-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "token", "delete", "ep-1", "tok-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn rate_limit_delete_override_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/rate-limits/ovr-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "rate-limit",
+            "delete-override",
+            "ep-1",
+            "ovr-1",
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn rate_limit_delete_override_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/rate-limits/ovr-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "rate-limit", "delete-override", "ep-1", "ovr-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn endpoint_security_set_options_sends_partial_payload() {
     let server = MockServer::start().await;
     Mock::given(method("PATCH"))

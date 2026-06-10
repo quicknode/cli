@@ -11,6 +11,7 @@ use quicknode_sdk::admin::{
 };
 use serde::Serialize;
 
+use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
@@ -265,6 +266,12 @@ async fn token(cmd: TokenCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Created token on {id}"));
         }
         TokenCmd::Delete { id, token_id } => {
+            confirm_mild(
+                &ctx,
+                &format!(
+                    "Delete token {token_id} on {id}? Clients authenticating with it lose access"
+                ),
+            )?;
             ctx.sdk.admin.delete_token(&id, &token_id).await?;
             ctx.out.note(&format!("✓ Deleted token {token_id} on {id}"));
         }

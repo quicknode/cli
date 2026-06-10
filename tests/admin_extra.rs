@@ -222,9 +222,38 @@ async fn bulk_status_paused() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["endpoint", "bulk", "pause", "ep-1", "ep-2"],
+        &["endpoint", "bulk", "pause", "ep-1", "ep-2", "--yes"],
     )
     .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn bulk_pause_without_yes_needs_confirmation_and_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/bulk/status"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["endpoint", "bulk", "pause", "ep-1"]).await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn bulk_resume_does_not_need_confirmation() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/bulk/status"))
+        .and(body_json(json!({ "ids": ["ep-1"], "status": "active" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "total": 1, "updated_count": 1, "failed_count": 0, "results": [] }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["endpoint", "bulk", "resume", "ep-1"]).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 

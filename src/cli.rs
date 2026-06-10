@@ -70,7 +70,7 @@ pub struct Cli {
     #[arg(long, global = true, default_value_t = 3, value_name = "N")]
     pub retries: u32,
 
-    /// Skip confirmation prompts. Pass twice for destructive bulk operations like `stream delete-all`.
+    /// Skip confirmation prompts on destructive operations.
     #[arg(short = 'y', long = "yes", global = true, action = ArgAction::Count)]
     pub yes: u8,
 

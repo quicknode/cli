@@ -1,13 +1,13 @@
 //! Full-jitter exponential backoff for read-only API calls.
 //!
-//! Mutating commands must NOT use this. The API has no idempotency keys, so a
-//! retried create/update/delete can be applied twice (duplicate endpoints,
-//! double tag writes, …). Reads are safe to repeat, and the backend is
-//! rate-limited, so scripted reads need to survive the occasional 429.
+//! Mutating commands must NOT use this: a retried create/update/delete can be
+//! applied twice (duplicate endpoints, double tag writes, …). Reads are safe
+//! to repeat, and the backend is rate-limited, so scripted reads need to
+//! survive the occasional 429.
 //!
-//! `Retry-After` is not honored yet: `SdkError::Api` carries only the status
-//! and body, not response headers. Honoring it needs a quicknode-sdk change;
-//! until then full jitter keeps concurrent callers from herding.
+//! Backoff is driven purely by full jitter (`SdkError::Api` exposes the
+//! status and body, which is what the retry decision is based on); the
+//! randomized window keeps concurrent callers from herding.
 
 use std::future::Future;
 use std::time::Duration;

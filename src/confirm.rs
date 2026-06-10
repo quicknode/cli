@@ -2,7 +2,8 @@
 //!
 //! Two levels:
 //! - **mild** (e.g. `endpoint archive`, `endpoint tag delete`): one y/N prompt; --yes skips.
-//! - **severe** (e.g. `stream delete-all`): typed-word confirmation; --yes --yes (twice) skips.
+//! - **severe** (reserved for future wide-blast-radius operations): typed-word
+//!   confirmation; --yes --yes (twice) skips.
 //!
 //! On a non-TTY, mild requires `--yes` and severe requires `--yes --yes` — never
 //! auto-confirm in scripts.
@@ -13,6 +14,10 @@ use crate::errors::CliError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Mild,
+    /// Typed-word confirmation; `--yes --yes` to skip. No command uses this
+    /// today — account-wide wipe verbs were removed from the CLI — but the
+    /// gating stays for future wide-blast-radius operations.
+    #[allow(dead_code)]
     Severe,
 }
 
@@ -54,6 +59,25 @@ pub fn decide_without_prompt(severity: Severity, cfg: ConfirmCfg) -> Result<bool
     Ok(false)
 }
 
+/// One-stop Mild gate for command bodies: auto-proceeds with `--yes`, prompts
+/// y/N on a TTY, and fails with `NeedsConfirmation` in script mode. Returns
+/// `Err(Cancelled)` when the user declines the prompt.
+pub fn confirm_mild(ctx: &crate::context::Ctx, message: &str) -> Result<(), CliError> {
+    let cfg = ConfirmCfg::new(
+        ctx.global.yes_count,
+        ctx.global.no_input,
+        ctx.out.stdout_is_tty,
+    );
+    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
+        true => true,
+        false => prompt_yes_no(message)?,
+    };
+    if !proceed {
+        return Err(CliError::Cancelled);
+    }
+    Ok(())
+}
+
 /// Interactive y/N prompt. Returns true on yes.
 pub fn prompt_yes_no(message: &str) -> Result<bool, CliError> {
     use dialoguer::Confirm;
@@ -65,7 +89,9 @@ pub fn prompt_yes_no(message: &str) -> Result<bool, CliError> {
 }
 
 /// Interactive typed-word confirmation. Returns true if the user types
-/// `expected` exactly.
+/// `expected` exactly. Pairs with [`Severity::Severe`]; kept for the same
+/// reason.
+#[allow(dead_code)]
 pub fn prompt_typed(message: &str, expected: &str) -> Result<bool, CliError> {
     use dialoguer::Input;
     let typed: String = Input::new()

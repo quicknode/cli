@@ -36,8 +36,6 @@ pub enum StreamCmd {
     Update(UpdateArgs),
     /// Delete a stream.
     Delete { id: String },
-    /// Delete every stream on the account.
-    DeleteAll,
     /// Activate (resume) a stream.
     Activate { id: String },
     /// Pause a stream.
@@ -273,7 +271,6 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         StreamCmd::Show { id } => actions::show(&id, ctx).await,
         StreamCmd::Update(a) => actions::update(a, ctx).await,
         StreamCmd::Delete { id } => actions::delete(&id, ctx).await,
-        StreamCmd::DeleteAll => actions::delete_all(ctx).await,
         StreamCmd::Activate { id } => actions::activate(&id, ctx).await,
         StreamCmd::Pause { id } => actions::pause(&id, ctx).await,
         StreamCmd::TestFilter(a) => actions::test_filter(a, ctx).await,

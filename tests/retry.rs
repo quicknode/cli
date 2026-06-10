@@ -83,8 +83,8 @@ async fn read_does_not_retry_a_404() {
 #[tokio::test]
 async fn create_is_never_retried_even_on_500() {
     let server = MockServer::start().await;
-    // A mutating POST must hit the server exactly once: with no idempotency
-    // keys, a retried create could provision (and bill) twice.
+    // A mutating POST must hit the server exactly once: a retried create
+    // could provision (and bill) twice.
     Mock::given(method("POST"))
         .and(path("/v0/endpoints"))
         .and(body_json(

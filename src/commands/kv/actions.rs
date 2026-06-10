@@ -9,6 +9,7 @@ use quicknode_sdk::{
 
 use super::render::{ListView, ListsView, SetsView};
 use super::{ListCmd, SetCmd};
+use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::retry::retrying;
@@ -47,7 +48,7 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
             crate::output::emit(&ctx.out, &SetsView(resp))?;
         }
         SetCmd::Delete { key } => {
-            super::confirm_mild(&ctx, &format!("Delete set {key:?}?"))?;
+            confirm_mild(&ctx, &format!("Delete set {key:?}?"))?;
             ctx.sdk.kvstore.delete_set(&key).await?;
             ctx.out.note(&format!("✓ Deleted set {key:?}"));
         }
@@ -160,7 +161,7 @@ pub(super) async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Updated list {:?}", a.key));
         }
         ListCmd::Delete { key } => {
-            super::confirm_mild(&ctx, &format!("Delete list {key:?}?"))?;
+            confirm_mild(&ctx, &format!("Delete list {key:?}?"))?;
             ctx.sdk.kvstore.delete_list(&key).await?;
             ctx.out.note(&format!("✓ Deleted list {key:?}"));
         }

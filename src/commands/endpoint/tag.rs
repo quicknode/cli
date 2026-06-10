@@ -79,7 +79,7 @@ async fn delete(tag_id: i32, ctx: Ctx) -> Result<(), CliError> {
     );
     let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
         true => true,
-        false => prompt_yes_no(&format!("Delete tag {tag_id}?"))?,
+        false => prompt_yes_no(&format!("Delete tag {tag_id} from the account?"))?,
     };
     if !proceed {
         return Err(CliError::Cancelled);

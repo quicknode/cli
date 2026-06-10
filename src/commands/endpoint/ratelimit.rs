@@ -100,6 +100,13 @@ pub async fn run(cmd: RateLimitCmd, ctx: Ctx) -> Result<(), CliError> {
         RateLimitCmd::Get { id } => get(&id, ctx).await,
         RateLimitCmd::Set(a) => set(a, ctx).await,
         RateLimitCmd::DeleteOverride { id, override_id } => {
+            crate::confirm::confirm_mild(
+                &ctx,
+                &format!(
+                    "Delete rate-limit override {override_id} on {id}? \
+                     The endpoint reverts to its plan defaults"
+                ),
+            )?;
             ctx.sdk
                 .admin
                 .delete_rate_limit_override(&id, &override_id)

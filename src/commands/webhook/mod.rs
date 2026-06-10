@@ -32,8 +32,6 @@ pub enum WebhookCmd {
     UpdateTemplate(Box<UpdateTemplateArgs>),
     /// Delete a webhook.
     Delete { id: String },
-    /// Delete every webhook on the account.
-    DeleteAll,
     /// Activate a webhook (resume delivery).
     Activate(ActivateArgs),
     /// Pause a webhook.
@@ -186,7 +184,6 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         WebhookCmd::Update(a) => actions::update(a, ctx).await,
         WebhookCmd::UpdateTemplate(a) => actions::update_template(*a, ctx).await,
         WebhookCmd::Delete { id } => actions::delete(&id, ctx).await,
-        WebhookCmd::DeleteAll => actions::delete_all(ctx).await,
         WebhookCmd::Activate(a) => actions::activate(a, ctx).await,
         WebhookCmd::Pause { id } => actions::pause(&id, ctx).await,
         WebhookCmd::EnabledCount => actions::enabled_count(ctx).await,
