@@ -27,7 +27,7 @@ pub(super) async fn list(a: ListArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 pub(super) async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
-    let params = if let Some(path) = a.config_file {
+    let params = if let Some(path) = a.stream_config_file {
         let text = std::fs::read_to_string(&path)?;
         serde_json::from_str::<CreateStreamParams>(&text)?
     } else {
@@ -39,9 +39,10 @@ pub(super) async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 fn build_create_params(a: CreateArgs) -> Result<CreateStreamParams, CliError> {
-    // These flags are `required_unless_present = "config_file"` in clap, and
-    // this function is only reached when --config-file was NOT supplied.
-    const ENFORCED: &str = "enforced by clap unless --config-file is present";
+    // These flags are `required_unless_present = "stream_config_file"` in
+    // clap, and this function is only reached when --stream-config-file was
+    // NOT supplied.
+    const ENFORCED: &str = "enforced by clap unless --stream-config-file is present";
     let name = a.name.expect(ENFORCED);
     let network = a.network.expect(ENFORCED);
     let dataset = a.dataset.expect(ENFORCED);

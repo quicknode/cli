@@ -5,9 +5,8 @@
 //! to repeat, and the backend is rate-limited, so scripted reads need to
 //! survive the occasional 429.
 //!
-//! Backoff is driven purely by full jitter (`SdkError::Api` exposes the
-//! status and body, which is what the retry decision is based on); the
-//! randomized window keeps concurrent callers from herding.
+//! Backoff is full jitter: the randomized window keeps concurrent callers
+//! from herding.
 
 use std::future::Future;
 use std::time::Duration;

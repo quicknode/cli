@@ -74,8 +74,8 @@ pub struct Cli {
     pub no_input: bool,
 
     /// Max automatic retries for read-only commands on transient failures
-    /// (HTTP 429/5xx, timeouts). Uses exponential backoff with jitter.
-    /// 0 disables retries. Commands that modify resources never retry.
+    /// (HTTP 429/500/502/503/504, timeouts). Uses exponential backoff with
+    /// jitter. 0 disables retries. Commands that modify resources never retry.
     #[arg(long, global = true, default_value_t = 3, value_name = "N")]
     pub retries: u32,
 

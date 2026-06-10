@@ -204,10 +204,11 @@ qn completions powershell > qn.ps1
 ## Configuration via environment
 
 `qn` reads no API credentials from the environment (see
-[Authentication](#authentication) for why). It honors the conventional
-output-related variables only: `NO_COLOR` and `TERM=dumb` disable color. The
-CLI hands the key to the SDK explicitly; it does not read the SDK's
-`QN_SDK__*` environment namespace.
+[Authentication](#authentication) for why). The conventional variables are
+honored: `NO_COLOR` and `TERM=dumb` disable color, and
+`XDG_CONFIG_HOME`/`HOME` locate the default config file. The CLI hands the
+key to the SDK explicitly; it does not read the SDK's `QN_SDK__*` environment
+namespace.
 
 The hidden `--base-url <URL>` flag overrides the API host for all four
 sub-clients at once (used for integration tests and on-prem mirrors).
@@ -226,9 +227,11 @@ operations with that blast radius belong behind the API, not a one-liner.
 ## Retries
 
 Read-only commands (`list`, `show`, `logs`, `metrics`, `usage`, …) retry
-transient failures — HTTP 429/5xx, timeouts, connection errors — with
-exponential backoff and full jitter. The default is 3 retries; tune it with
-the global `--retries <N>` flag (`--retries 0` disables).
+transient failures — HTTP 429, 500, 502, 503, 504, timeouts, and connection
+errors — with exponential backoff and full jitter. The default is 3 retries;
+tune it with the global `--retries <N>` flag (`--retries 0` disables).
+`stream test-filter` retries too: it sends a POST, but only evaluates a
+filter against historical data and changes nothing.
 
 Commands that modify resources (`create`, `update`, `delete`, `pause`, …)
 **never** retry automatically: a retried create could provision twice. If a
