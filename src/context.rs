@@ -16,6 +16,9 @@ use crate::output::{Format, OutputCtx};
 #[derive(Debug, Clone, Default)]
 pub struct GlobalArgs {
     pub api_key: Option<String>,
+    /// `--config-file`: alternate config TOML. `None` means the default path
+    /// (`~/.config/qn/config.toml`).
+    pub config_file: Option<std::path::PathBuf>,
     /// `None` means the user didn't pass `--format`; resolve via config file
     /// (then the TTY-aware default: `Table` on a TTY, `Toon` off) when we
     /// build the [`Ctx`].
@@ -49,8 +52,13 @@ impl GlobalArgs {
         resolve_output_inner(self.format, self.wide, cfg_format, cfg_wide, stdout_is_tty)
     }
 
+    /// The config file to read: `--config-file` if given, else the default path.
+    pub fn resolve_config_path(&self) -> Option<std::path::PathBuf> {
+        self.config_file.clone().or_else(config::config_path)
+    }
+
     fn load_output_config(&self) -> (Option<Format>, bool) {
-        let Some(p) = config::config_path() else {
+        let Some(p) = self.resolve_config_path() else {
             return (None, false);
         };
         match config::load_from(&p) {
@@ -87,18 +95,17 @@ pub struct Ctx {
 
 impl Ctx {
     /// Construct the SDK + output ctx from `global`. Resolves the API key per
-    /// the documented precedence: flag > env > config file. If none of those
-    /// supply a key we return `CliError::NoApiKey` — regular commands do not
-    /// prompt; the user is directed to `qn auth login`.
+    /// the documented precedence: flag > config file (`--config-file` path if
+    /// given, else the default). If neither supplies a key we return
+    /// `CliError::NoApiKey` — regular commands do not prompt; the user is
+    /// directed to `qn auth login`.
     pub fn from_global(global: GlobalArgs) -> Result<Self, CliError> {
-        let config_path = config::config_path();
-        let env_key = config::read_env_api_key();
+        let config_path = global.resolve_config_path();
         let stdout_is_tty = std::io::stdout().is_terminal();
         let (format, wide) = global.resolve_output(stdout_is_tty);
 
         let (api_key, _) = config::resolve_api_key(
             global.api_key.as_deref(),
-            env_key.as_deref(),
             config_path.as_deref(),
             false,
             || unreachable!("prompt disabled for non-auth commands"),

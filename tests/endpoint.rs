@@ -42,7 +42,6 @@ async fn list_endpoints_json_output_is_valid_json() {
 
     let output = Command::cargo_bin("qn")
         .unwrap()
-        .env_remove("QN_CLI__API_KEY")
         .env_remove("HOME")
         .env("HOME", std::env::temp_dir())
         .args([
@@ -89,7 +88,6 @@ async fn list_endpoints_all_formats_render() {
     for fmt in ["json", "yaml", "md", "toon", "table"] {
         let output = Command::cargo_bin("qn")
             .unwrap()
-            .env_remove("QN_CLI__API_KEY")
             .env_remove("HOME")
             .env("HOME", std::env::temp_dir())
             .args([
@@ -136,7 +134,6 @@ async fn list_endpoints_wide_md_includes_urls() {
 
     let output = Command::cargo_bin("qn")
         .unwrap()
-        .env_remove("QN_CLI__API_KEY")
         .env_remove("HOME")
         .env("HOME", std::env::temp_dir())
         .args([

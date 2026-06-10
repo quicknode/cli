@@ -57,12 +57,19 @@ You will need a Quicknode API key to get started. Once you have that, you can ru
 `qn` resolves your API key from the first source that matches:
 
 1. `--api-key <KEY>` flag
-2. `QN_CLI__API_KEY` environment variable
-3. `~/.config/qn/config.toml` — or `$XDG_CONFIG_HOME/qn/config.toml` if that env var is set. Managed by `qn auth login`.
+2. The config file: the `--config-file <PATH>` flag if given, otherwise
+   `~/.config/qn/config.toml` — or `$XDG_CONFIG_HOME/qn/config.toml` if that
+   env var is set. Managed by `qn auth login`.
 
-If none match, `qn` exits with code 4 and tells you to run `qn auth login`.
-Regular commands never prompt — only `qn auth login` does. This keeps scripts
-and CI deterministic.
+There is deliberately **no environment-variable key source**: a key left
+exported in a shell is invisible state that outlives the session it was set
+for, and makes it far too easy to run a destructive command against the wrong
+account. For CI, write a config file and point `--config-file` at it (or pass
+`--api-key` from your secret store).
+
+If no source matches, `qn` exits with code 4 and tells you to run
+`qn auth login`. Regular commands never prompt — only `qn auth login` does.
+This keeps scripts and CI deterministic.
 
 ```sh
 qn auth login      # prompts for the key, writes it to ~/.config/qn/config.toml
@@ -196,12 +203,9 @@ qn completions powershell > qn.ps1
 
 ## Configuration via environment
 
-| Variable | Description |
-|---|---|
-| `QN_CLI__API_KEY` | Your Quicknode API key |
-
-`qn` deliberately uses its own `QN_CLI__` namespace so the CLI's env vars don't
-collide with — or silently leak into — direct use of the underlying SDK. The
+`qn` reads no API credentials from the environment (see
+[Authentication](#authentication) for why). It honors the conventional
+output-related variables only: `NO_COLOR` and `TERM=dumb` disable color. The
 CLI hands the key to the SDK explicitly; it does not read the SDK's
 `QN_SDK__*` environment namespace.
 

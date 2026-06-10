@@ -9,7 +9,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CliError {
-    #[error("no API key found. Set QN_CLI__API_KEY or run 'qn auth login'")]
+    #[error("no API key found. Run 'qn auth login', or pass --api-key or --config-file")]
     NoApiKey,
 
     #[error("config file at {path} is invalid: {source}")]

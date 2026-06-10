@@ -24,19 +24,31 @@ pub struct RunOutput {
 /// The SDK is pointed at `base_url`, an API key of `"test"` is supplied, and
 /// `--no-input` is set so no command can hang on a prompt.
 pub async fn run_qn(base_url: &str, extra_args: &[&str]) -> RunOutput {
+    run_qn_inner(base_url, extra_args, true).await
+}
+
+/// Like [`run_qn`] but without injecting `--api-key test`, for tests that
+/// exercise key resolution themselves (e.g. via `--config-file`).
+pub async fn run_qn_no_key(base_url: &str, extra_args: &[&str]) -> RunOutput {
+    run_qn_inner(base_url, extra_args, false).await
+}
+
+async fn run_qn_inner(base_url: &str, extra_args: &[&str], inject_key: bool) -> RunOutput {
     // We can't easily redirect stdout/stderr of the parent process from within
     // a tokio test, so we don't try. Tests assert via wiremock matchers (for
     // request shape) and via the exit code; visible-output assertions are in
     // the cli_smoke.rs subprocess tests instead.
     let mut argv: Vec<String> = vec![
         "qn".to_string(),
-        "--api-key".to_string(),
-        "test".to_string(),
         "--base-url".to_string(),
         base_url.to_string(),
         "--no-input".to_string(),
         "--no-color".to_string(),
     ];
+    if inject_key {
+        argv.insert(1, "--api-key".to_string());
+        argv.insert(2, "test".to_string());
+    }
     argv.extend(extra_args.iter().map(|s| s.to_string()));
 
     let cli = match Cli::try_parse_from(&argv) {

@@ -50,7 +50,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
 }
 
 async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let path = config::config_path().ok_or_else(|| {
+    let path = global.resolve_config_path().ok_or_else(|| {
         CliError::Arg("no config directory available on this platform".to_string())
     })?;
 
@@ -82,7 +82,7 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
 }
 
 fn logout(global: GlobalArgs) -> Result<(), CliError> {
-    let path = config::config_path().ok_or_else(|| {
+    let path = global.resolve_config_path().ok_or_else(|| {
         CliError::Arg("no config directory available on this platform".to_string())
     })?;
     config::delete_config(&path)?;
@@ -111,15 +111,10 @@ async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
 /// Resolves the key just like the rest of the CLI — no prompting. Returns the
 /// raw key (callers must redact before printing) along with its source.
 fn resolve_non_interactive(global: &GlobalArgs) -> Result<(String, KeySource), CliError> {
-    let env_key = config::read_env_api_key();
-    let path = config::config_path();
-    config::resolve_api_key(
-        global.api_key.as_deref(),
-        env_key.as_deref(),
-        path.as_deref(),
-        false,
-        || unreachable!("prompt disabled for auth status/whoami"),
-    )
+    let path = global.resolve_config_path();
+    config::resolve_api_key(global.api_key.as_deref(), path.as_deref(), false, || {
+        unreachable!("prompt disabled for auth status/whoami")
+    })
 }
 
 /// Show the last 4 chars only. Char-based slicing — never panics on multi-byte input.
