@@ -43,6 +43,19 @@ The crate name is `quicknode-cli` but the installed binary is `qn`.
 brew install quicknode/tap/qn
 ```
 
+### Scoop (Windows)
+
+```powershell
+scoop bucket add quicknode https://github.com/quicknode/scoop-bucket
+scoop install quicknode/qn
+```
+
+### Arch Linux (AUR)
+
+```sh
+yay -S qn-bin   # or any other AUR helper
+```
+
 ### From source
 
 ```sh
