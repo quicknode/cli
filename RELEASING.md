@@ -2,6 +2,25 @@
 
 How to cut a release. The pipeline is mostly automated via cargo-dist; a few channels still need manual maintainer steps until CI has the right credentials to do them itself.
 
+## Quick release
+
+If the one-time setup below is done (tap, bucket, and AUR clones live under `~/qn/`), a full release is two commands:
+
+```fish
+just release-prepare X.Y.Z
+# release-prepare drives bump → PR → squash-merge → tag → CI through to a green run.
+# Watch the workflow; come back when it's done.
+
+just release-sync-manual-channels
+# Auto-detects the just-released version from the latest git tag, then bumps
+# the Homebrew tap, Scoop bucket, and AUR qn-bin clones to match. Prints the
+# three `git push` commands you run to publish.
+```
+
+Override the clone-root directory if your clones live elsewhere: `just release-sync-manual-channels ~/work/quicknode`. Override the version too if you're backfilling an older release: `just release-sync-manual-channels ~/qn 0.1.4`.
+
+The rest of this document covers what each step does in detail, what to do if part of the pipeline fails, and the one-time setup for each channel.
+
 ## Per-release flow
 
 Three named recipes in the `Justfile`:
@@ -18,7 +37,7 @@ Three named recipes in the `Justfile`:
    - `custom-publish-deb` → packages `.deb` per arch, uploads to the GitHub Release as assets
    - `custom-publish-copr` → builds an SRPM from `packaging/qn-bin.spec` (whose `%prep` downloads the SLSA-attested prebuilt binary), dispatches via `copr-cli build` to the `quicknode/qn` COPR project
 
-3. **Maintainer manual steps after CI succeeds.** Two channels still need a person to drive the publish because CI doesn't yet have the credentials it needs.
+3. **Maintainer manual steps after CI succeeds.** Some channels still need a person to drive the publish because CI doesn't yet have the credentials it needs.
 
 ## Manual steps after each release
 
@@ -74,11 +93,6 @@ Public repo on GitHub. Must be public — Scoop does an anonymous git clone. Has
 Maintainer needs an AUR account at <https://aur.archlinux.org> with an SSH key registered. Once that's set up:
 
 ```fish
-# Confirm the name isn't taken (one-time, before first push)
-curl -sf "https://aur.archlinux.org/rpc/v5/info?arg[]=qn-bin" \
-  | python3 -c "import json,sys; print(json.load(sys.stdin).get('resultcount'))"
-# 0 = free
-
 # Clone the (currently empty) AUR git remote
 mkdir -p ~/qn
 cd ~/qn

@@ -191,6 +191,127 @@ release-update-aur-bin version aur_path:
   echo "Committed qn-bin {{version}} to {{aur_path}}. To publish:"
   echo "  git -C {{aur_path}} push"
 
+# Manually update the Scoop bucket with a manifest for a given release.
+# Use this until CI has a PAT with contents:write on the bucket repo and
+# can automate the push — at which point a CI job takes over and this
+# recipe becomes a manual-recovery fallback.
+#
+# The generated manifest includes `checkver` + `autoupdate` so Scoop
+# users get new versions on `scoop update` even without us pushing a
+# new manifest for every release. We still push to bump the canonical
+# `version` field so `scoop search` is honest about what's current.
+#
+# Usage: just release-update-scoop-bucket 0.1.4 ~/qn/scoop-bucket
+#
+# Precondition: bucket_path is a clean local clone of quicknode/scoop-bucket.
+release-update-scoop-bucket version bucket_path:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ ! -d "{{bucket_path}}/.git" ]]; then
+    echo "Error: {{bucket_path}} is not a git checkout. Clone quicknode/scoop-bucket there first." >&2
+    exit 1
+  fi
+  if ! git -C "{{bucket_path}}" diff --quiet || ! git -C "{{bucket_path}}" diff --cached --quiet; then
+    echo "Error: {{bucket_path}} has uncommitted changes. Commit or stash them first." >&2
+    exit 1
+  fi
+  sha_url="https://github.com/quicknode/cli/releases/download/v{{version}}/quicknode-cli-x86_64-pc-windows-msvc.zip.sha256"
+  if ! sha_line=$(curl -sfL "$sha_url"); then
+    echo "Error: could not download $sha_url (does the release exist?)" >&2
+    exit 1
+  fi
+  # The .sha256 sidecar is `<hex> *<filename>`; take just the hex.
+  hash=$(echo "$sha_line" | awk '{print $1}')
+  if [[ ! "$hash" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Error: parsed hash '$hash' is not a 64-char hex string." >&2
+    exit 1
+  fi
+  mkdir -p "{{bucket_path}}/bucket"
+  cat > "{{bucket_path}}/bucket/qn.json" <<EOF
+  {
+      "version": "{{version}}",
+      "description": "Command-line interface for the Quicknode SDK",
+      "homepage": "https://github.com/quicknode/cli",
+      "license": "MIT",
+      "architecture": {
+          "64bit": {
+              "url": "https://github.com/quicknode/cli/releases/download/v{{version}}/quicknode-cli-x86_64-pc-windows-msvc.zip",
+              "hash": "$hash"
+          }
+      },
+      "bin": "qn.exe",
+      "checkver": "github",
+      "autoupdate": {
+          "architecture": {
+              "64bit": {
+                  "url": "https://github.com/quicknode/cli/releases/download/v\$version/quicknode-cli-x86_64-pc-windows-msvc.zip"
+              }
+          }
+      }
+  }
+  EOF
+  cd "{{bucket_path}}"
+  if git diff --quiet bucket/qn.json && ! git ls-files --error-unmatch bucket/qn.json >/dev/null 2>&1; then
+    git add bucket/qn.json
+  elif git diff --quiet bucket/qn.json; then
+    echo "bucket/qn.json is already at v{{version}}. Nothing to commit."
+    exit 0
+  else
+    git add bucket/qn.json
+  fi
+  git commit -m "qn {{version}}"
+  echo
+  echo "Committed qn {{version}} to {{bucket_path}}. To publish:"
+  echo "  git -C {{bucket_path}} push"
+
+# Run release-update-{homebrew-tap,scoop-bucket,aur-bin} in sequence for
+# the latest release tag, then print the three `git push` commands the
+# maintainer needs to run to publish. Auto-detects the version from the
+# most recent git tag (`v<X.Y.Z>` → `<X.Y.Z>`), or accepts an override.
+#
+# Expects three sibling clones under `root` (defaults to ~/qn):
+#   ~/qn/homebrew-tap   → quicknode/homebrew-tap
+#   ~/qn/scoop-bucket   → quicknode/scoop-bucket
+#   ~/qn/qn-bin         → ssh://aur@aur.archlinux.org/qn-bin.git
+#
+# Usage:
+#   just release-sync-manual-channels                  # auto-detect version, default root
+#   just release-sync-manual-channels ~/work/quicknode # override root
+#   just release-sync-manual-channels ~/qn 0.1.4       # override both
+release-sync-manual-channels root="~/qn" version="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  # Expand a leading ~/ to $HOME/ since bash doesn't expand tildes inside
+  # variables. Absolute paths pass through unchanged.
+  root="{{root}}"
+  case "$root" in
+    "~")  root="$HOME" ;;
+    "~/"*) root="$HOME/${root#\~/}" ;;
+  esac
+  # If no version was passed, take the latest tag (strip leading v).
+  version="{{version}}"
+  if [[ -z "$version" ]]; then
+    git fetch --tags --quiet
+    tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+    if [[ -z "$tag" ]]; then
+      echo 'Error: no git tags found and no version override passed. Run: just release-sync-manual-channels ROOT VERSION' >&2
+      exit 1
+    fi
+    version="${tag#v}"
+  fi
+  echo "Syncing manual channels at v${version} from clones under ${root}/"
+  echo
+  just release-update-homebrew-tap "$version" "${root}/homebrew-tap"
+  echo
+  just release-update-scoop-bucket "$version" "${root}/scoop-bucket"
+  echo
+  just release-update-aur-bin      "$version" "${root}/qn-bin"
+  echo
+  echo "All three channels updated. To publish, run:"
+  echo "  git -C ${root}/homebrew-tap push"
+  echo "  git -C ${root}/scoop-bucket push"
+  echo "  git -C ${root}/qn-bin push"
+
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
 # Each recipe is callable on its own; release-prepare orchestrates them with prompts.
 
