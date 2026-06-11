@@ -4,13 +4,13 @@
 //! See `tests/common/mod.rs` for the test harness.
 
 pub mod cli;
+pub mod context;
 pub mod errors;
 pub mod output;
 
 pub(crate) mod commands;
 pub(crate) mod config;
 pub(crate) mod confirm;
-pub(crate) mod context;
 pub(crate) mod retry;
 pub(crate) mod time_arg;
 

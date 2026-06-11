@@ -185,6 +185,24 @@ async fn list_endpoints_happy_path() {
 }
 
 #[tokio::test]
+async fn requests_carry_the_cli_user_agent() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints"))
+        .and(header("user-agent", qn::context::user_agent().as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [],
+            "pagination": { "total": 0, "limit": 20, "offset": 0 }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out = run_qn(&server.uri(), &["endpoint", "list"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn list_endpoints_404_renders_clean_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
