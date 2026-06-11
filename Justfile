@@ -470,3 +470,7 @@ release-prepare version yes="0":
   echo
   echo "Phase 1 complete. Inspect the release at:"
   echo "  https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/v{{version}}"
+  echo
+  echo "Next: sync the manual channels (Homebrew, Scoop, AUR) by running"
+  echo "  just release-sync-manual-channels ~/qn {{version}}"
+  echo "(omit the args to auto-detect the version from the latest tag)."
