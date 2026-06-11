@@ -42,10 +42,10 @@ release-cargo-publish:
   cargo publish -p quicknode-cli
 
 # Manually update the Homebrew tap with the formula attached to a given
-# release. Use this until we have a HOMEBREW_TAP_TOKEN secret and can
-# add "homebrew" to publish-jobs in dist-workspace.toml — at which
-# point the cargo-dist workflow takes over and this recipe becomes
-# obsolete.
+# release. Use this until CI has a PAT with contents:write on the tap
+# repo and can automate the formula push — at which point we add
+# "homebrew" to publish-jobs in dist-workspace.toml, the cargo-dist
+# workflow takes over, and this recipe becomes a manual-recovery fallback.
 #
 # Usage: just release-update-homebrew-tap 0.1.0 ~/qn/homebrew-tap
 #
