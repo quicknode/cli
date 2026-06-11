@@ -29,13 +29,7 @@ error: null
 
 ## Installation
 
-### From crates.io
-
-```sh
-cargo install quicknode-cli
-```
-
-The crate name is `quicknode-cli` but the installed binary is `qn`.
+Pick the recommended path for your platform. Other channels are listed under [Alternatives](#alternatives).
 
 ### Homebrew (macOS, Linux)
 
@@ -50,18 +44,59 @@ scoop bucket add quicknode https://github.com/quicknode/scoop-bucket
 scoop install quicknode/qn
 ```
 
+### `.deb` (Debian, Ubuntu)
+
+Each GitHub release attaches `qn_<VERSION>_amd64.deb` and `qn_<VERSION>_arm64.deb`. Check your architecture with `dpkg --print-architecture`, then grab the matching file from the [latest release page](https://github.com/quicknode/cli/releases/latest):
+
+```sh
+# replace <VERSION> with the version on the release page, e.g. 0.1.8
+curl -LO https://github.com/quicknode/cli/releases/download/v<VERSION>/qn_<VERSION>_amd64.deb
+sudo apt install ./qn_<VERSION>_amd64.deb
+```
+
 ### Arch Linux (AUR)
 
 ```sh
 yay -S qn-bin   # or any other AUR helper
 ```
 
-### From source
+### Fedora, EPEL (COPR)
+
+```sh
+sudo dnf copr enable quicknode/qn
+sudo dnf install qn
+```
+
+### Docker (GHCR)
+
+```sh
+docker pull ghcr.io/quicknode/qn:latest
+docker run --rm ghcr.io/quicknode/qn:latest --help
+```
+
+### Alternatives
+
+<details>
+<summary>crates.io, from source, prebuilt binaries</summary>
+
+**crates.io:**
+
+```sh
+cargo install quicknode-cli
+```
+
+The crate name is `quicknode-cli` but the installed binary is `qn`.
+
+**From source:**
 
 ```sh
 git clone git@github.com:quicknode/cli.git && cd cli
 cargo install --path .
 ```
+
+**Prebuilt binaries:** every GitHub release attaches per-platform archives — see the [latest release page](https://github.com/quicknode/cli/releases/latest).
+
+</details>
 
 ## Authentication
 
