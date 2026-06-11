@@ -42,10 +42,10 @@ release-cargo-publish:
   cargo publish -p quicknode-cli
 
 # Manually update the Homebrew tap with the formula attached to a given
-# release. Use this until we have a HOMEBREW_TAP_TOKEN secret and can
-# add "homebrew" to publish-jobs in dist-workspace.toml — at which
-# point the cargo-dist workflow takes over and this recipe becomes
-# obsolete.
+# release. Use this until CI has a PAT with contents:write on the tap
+# repo and can automate the formula push — at which point we add
+# "homebrew" to publish-jobs in dist-workspace.toml, the cargo-dist
+# workflow takes over, and this recipe becomes a manual-recovery fallback.
 #
 # Usage: just release-update-homebrew-tap 0.1.0 ~/qn/homebrew-tap
 #
@@ -83,6 +83,113 @@ release-update-homebrew-tap version tap_path:
   echo
   echo "Committed qn {{version}} to {{tap_path}}. To publish:"
   echo "  git -C {{tap_path}} push"
+
+# Manually update the AUR `qn-bin` package with a PKGBUILD + .SRCINFO
+# for a given release. Use this until CI has SSH access to push to the
+# AUR git remote — at which point a CI publish-aur job takes over and
+# this recipe becomes a manual-recovery fallback.
+#
+# The PKGBUILD downloads our prebuilt linux-gnu tarballs from the GitHub
+# release (separate sha256 per arch). x86_64 and aarch64 only — cargo-dist
+# does not build i686 or armv7.
+#
+# Usage: just release-update-aur-bin 0.1.4 ~/qn/aur-qn-bin
+#
+# Precondition: aur_path is a clean local clone of
+# ssh://aur@aur.archlinux.org/qn-bin.git. First-time setup requires the
+# package name `qn-bin` to be registered on the AUR — see AUR docs for
+# the initial `git clone` + push.
+release-update-aur-bin version aur_path:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ ! -d "{{aur_path}}/.git" ]]; then
+    echo "Error: {{aur_path}} is not a git checkout. Clone ssh://aur@aur.archlinux.org/qn-bin.git there first." >&2
+    exit 1
+  fi
+  if ! git -C "{{aur_path}}" diff --quiet || ! git -C "{{aur_path}}" diff --cached --quiet; then
+    echo "Error: {{aur_path}} has uncommitted changes. Commit or stash them first." >&2
+    exit 1
+  fi
+  # Fetch both sha256 sidecars from the release.
+  x86_url="https://github.com/quicknode/cli/releases/download/v{{version}}/quicknode-cli-x86_64-unknown-linux-gnu.tar.xz.sha256"
+  arm_url="https://github.com/quicknode/cli/releases/download/v{{version}}/quicknode-cli-aarch64-unknown-linux-gnu.tar.xz.sha256"
+  if ! x86_line=$(curl -sfL "$x86_url"); then
+    echo "Error: could not download $x86_url (does the release exist?)" >&2
+    exit 1
+  fi
+  if ! arm_line=$(curl -sfL "$arm_url"); then
+    echo "Error: could not download $arm_url" >&2
+    exit 1
+  fi
+  # Each sidecar is `<hex> *<filename>` — take just the hex.
+  x86_hash=$(echo "$x86_line" | awk '{print $1}')
+  arm_hash=$(echo "$arm_line" | awk '{print $1}')
+  for h in "$x86_hash" "$arm_hash"; do
+    if [[ ! "$h" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "Error: parsed hash '$h' is not a 64-char hex string." >&2
+      exit 1
+    fi
+  done
+  cat > "{{aur_path}}/PKGBUILD" <<EOF
+  # Maintainer: Quicknode <support@quicknode.com>
+  pkgname=qn-bin
+  pkgver={{version}}
+  pkgrel=1
+  pkgdesc='Command-line interface for the Quicknode SDK'
+  arch=('x86_64' 'aarch64')
+  url='https://github.com/quicknode/cli'
+  license=('MIT')
+  depends=('glibc')
+  provides=('qn')
+  conflicts=('qn')
+  source_x86_64=("\$pkgname-\$pkgver-x86_64.tar.xz::https://github.com/quicknode/cli/releases/download/v\$pkgver/quicknode-cli-x86_64-unknown-linux-gnu.tar.xz")
+  source_aarch64=("\$pkgname-\$pkgver-aarch64.tar.xz::https://github.com/quicknode/cli/releases/download/v\$pkgver/quicknode-cli-aarch64-unknown-linux-gnu.tar.xz")
+  sha256sums_x86_64=('$x86_hash')
+  sha256sums_aarch64=('$arm_hash')
+
+  package() {
+    local archdir
+    case "\$CARCH" in
+      x86_64)  archdir='quicknode-cli-x86_64-unknown-linux-gnu' ;;
+      aarch64) archdir='quicknode-cli-aarch64-unknown-linux-gnu' ;;
+    esac
+    install -Dm755 "\$archdir/qn"      "\$pkgdir/usr/bin/qn"
+    install -Dm644 "\$archdir/LICENSE" "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
+    install -Dm644 "\$archdir/README.md" "\$pkgdir/usr/share/doc/\$pkgname/README.md"
+  }
+  EOF
+  # Generate .SRCINFO manually — we can't run `makepkg --printsrcinfo` on
+  # macOS dev boxes. Mirrors the deterministic field order makepkg emits.
+  cat > "{{aur_path}}/.SRCINFO" <<EOF
+  pkgbase = qn-bin
+  	pkgdesc = Command-line interface for the Quicknode SDK
+  	pkgver = {{version}}
+  	pkgrel = 1
+  	url = https://github.com/quicknode/cli
+  	arch = x86_64
+  	arch = aarch64
+  	license = MIT
+  	depends = glibc
+  	provides = qn
+  	conflicts = qn
+  	source_x86_64 = qn-bin-{{version}}-x86_64.tar.xz::https://github.com/quicknode/cli/releases/download/v{{version}}/quicknode-cli-x86_64-unknown-linux-gnu.tar.xz
+  	sha256sums_x86_64 = $x86_hash
+  	source_aarch64 = qn-bin-{{version}}-aarch64.tar.xz::https://github.com/quicknode/cli/releases/download/v{{version}}/quicknode-cli-aarch64-unknown-linux-gnu.tar.xz
+  	sha256sums_aarch64 = $arm_hash
+
+  pkgname = qn-bin
+  EOF
+  cd "{{aur_path}}"
+  # Stage both, even if only one changed; AUR convention is to commit them together.
+  git add PKGBUILD .SRCINFO
+  if git diff --cached --quiet PKGBUILD .SRCINFO; then
+    echo "PKGBUILD/.SRCINFO already at v{{version}}. Nothing to commit."
+    exit 0
+  fi
+  git commit -m "qn-bin {{version}}"
+  echo
+  echo "Committed qn-bin {{version}} to {{aur_path}}. To publish:"
+  echo "  git -C {{aur_path}} push"
 
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
 # Each recipe is callable on its own; release-prepare orchestrates them with prompts.

@@ -18,10 +18,11 @@ hosting = "github"
 # Whether to install an updater program
 install-updater = false
 # Homebrew tap repository to publish the formula to. The "homebrew"
-# entry is deliberately omitted from publish-jobs until we have a
-# HOMEBREW_TAP_TOKEN secret — without it, the formula push step would
-# fail CI on every release. The formula itself is still generated and
-# attached to each GitHub Release. Until the token exists, run
+# entry is deliberately omitted from publish-jobs until CI has a PAT
+# with contents:write on the tap repo — without that secret, the
+# formula push step would fail CI on every release. The formula
+# itself is still generated and attached to each GitHub Release.
+# Until that's wired, run
 # `just release-update-homebrew-tap VERSION TAP_PATH` to push the
 # formula to quicknode/homebrew-tap manually.
 tap = "quicknode/homebrew-tap"
