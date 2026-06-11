@@ -1,0 +1,112 @@
+name: Publish RPMs to COPR
+
+# Reusable workflow invoked by cargo-dist's release pipeline as a
+# user_publish_job (see dist-workspace.toml `publish-jobs`).
+#
+# Builds an SRPM from packaging/qn-bin.spec — a thin .spec whose %prep
+# downloads the SLSA-attested prebuilt binary cargo-dist publishes for
+# this release and verifies it against the .sha256 sidecar. No Rust
+# toolchain involved on COPR's side; the binary inside the resulting
+# RPM is bit-identical to the one in crates.io, Homebrew, GHCR, .deb,
+# and AUR.
+#
+# `copr-cli build --enable-net=on` is required because the spec's
+# %prep stage fetches the tarball over HTTPS from the GitHub Release.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist-manifest JSON for this announcement
+        required: true
+        type: string
+
+# Reusable-workflow permissions must not exceed what the caller grants
+# in dist-workspace.toml's github-custom-job-permissions block. We only
+# need to read this repo to access the spec file.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release tag from plan
+        id: meta
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          version=$(echo "$PLAN" | jq -r '.releases[0].app_version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install rpmbuild + copr-cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm python3-pip python3-venv
+          python3 -m venv "$HOME/copr-venv"
+          "$HOME/copr-venv/bin/pip" install --quiet copr-cli rich
+          echo "$HOME/copr-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build SRPM
+        env:
+          QN_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          # Set up the rpmbuild tree.
+          mkdir -p "$HOME/rpmbuild"/{SOURCES,SPECS,SRPMS}
+          cp packaging/qn-bin.spec "$HOME/rpmbuild/SPECS/qn-bin.spec"
+
+          # SRPM only has the spec — the sources are fetched by mock at
+          # %prep time (Source0/Source1 are URLs, not local files). We
+          # pass --nodeps so rpmbuild doesn't try to satisfy
+          # BuildRequires on the runner; COPR's mock handles that.
+          rpmbuild -bs "$HOME/rpmbuild/SPECS/qn-bin.spec" \
+            --define "_topdir $HOME/rpmbuild" \
+            --define "qn_version $QN_VERSION" \
+            --nodeps
+          ls -la "$HOME/rpmbuild/SRPMS/"
+
+      - name: Configure copr-cli
+        env:
+          # copr-cli doesn't read env vars — it requires a config file at
+          # ~/.config/copr in INI format. The four fields are provisioned
+          # as separate repo secrets so each can be pasted as a single
+          # line and rotated independently. The file is assembled here at
+          # runtime. Verbatim values come from
+          # https://copr.fedorainfracloud.org/api/.
+          COPR_LOGIN:    ${{ secrets.COPR_LOGIN }}
+          COPR_USERNAME: ${{ secrets.COPR_USERNAME }}
+          COPR_TOKEN:    ${{ secrets.COPR_TOKEN }}
+          COPR_URL:      ${{ secrets.COPR_URL }}
+        run: |
+          missing=()
+          [[ -z "$COPR_LOGIN" ]]    && missing+=(COPR_LOGIN)
+          [[ -z "$COPR_USERNAME" ]] && missing+=(COPR_USERNAME)
+          [[ -z "$COPR_TOKEN" ]]    && missing+=(COPR_TOKEN)
+          [[ -z "$COPR_URL" ]]      && missing+=(COPR_URL)
+          if (( ${#missing[@]} > 0 )); then
+            echo "Error: COPR secrets not set on this repo:" >&2
+            printf '  %s\n' "${missing[@]}" >&2
+            echo "Provision per RELEASING.md's COPR one-time-setup section." >&2
+            exit 1
+          fi
+          mkdir -p ~/.config
+          # Use printf rather than heredoc to avoid YAML-indentation
+          # leaking into the file (configparser treats indented lines
+          # as continuations and rejects them).
+          printf '[copr-cli]\nlogin = %s\nusername = %s\ntoken = %s\ncopr_url = %s\n' \
+            "$COPR_LOGIN" "$COPR_USERNAME" "$COPR_TOKEN" "$COPR_URL" \
+            > ~/.config/copr
+          chmod 600 ~/.config/copr
+
+      - name: copr-cli build
+        run: |
+          srpm=$(ls "$HOME/rpmbuild/SRPMS/"qn-${{ steps.meta.outputs.version }}-1*.src.rpm)
+          if [[ ! -f "$srpm" ]]; then
+            echo "Error: SRPM not found at expected path under SRPMS/" >&2
+            exit 1
+          fi
+          echo "Uploading $srpm to quicknode/qn..."
+          # --enable-net=on so COPR's mock chroot can curl the prebuilt
+          # tarball + sha256 sidecar from the GitHub Release in %prep.
+          copr-cli build quicknode/qn "$srpm" --enable-net=on
