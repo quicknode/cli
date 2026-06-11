@@ -70,10 +70,13 @@ pub struct OutputSection {
 /// Returns the canonical config path: `$XDG_CONFIG_HOME/qn/config.toml` if the
 /// env var is set, otherwise `~/.config/qn/config.toml`. We use the same path
 /// on every platform — easier to document, easier to share across machines —
-/// rather than the OS-native `directories`-crate locations.
+/// rather than the OS-native `directories`-crate locations. The home directory
+/// comes from `$HOME`, falling back to `%USERPROFILE%` (Windows shells set the
+/// latter, not the former).
 ///
-/// Returns `None` only if neither `$XDG_CONFIG_HOME` nor `$HOME` is set, which
-/// would mean the user's shell environment is broken.
+/// Returns `None` only if none of `$XDG_CONFIG_HOME`, `$HOME`, or
+/// `%USERPROFILE%` is set, which would mean the user's shell environment is
+/// broken.
 pub fn config_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("qn").join("config.toml"))
 }
@@ -82,6 +85,7 @@ fn config_dir() -> Option<PathBuf> {
     resolve_config_dir(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
     )
 }
 
@@ -89,6 +93,7 @@ fn config_dir() -> Option<PathBuf> {
 fn resolve_config_dir(
     xdg_config_home: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
 ) -> Option<PathBuf> {
     if let Some(xdg) = xdg_config_home {
         let p = PathBuf::from(xdg);
@@ -96,7 +101,8 @@ fn resolve_config_dir(
             return Some(p);
         }
     }
-    home.map(|h| PathBuf::from(h).join(".config"))
+    home.or(userprofile)
+        .map(|h| PathBuf::from(h).join(".config"))
 }
 
 /// Loads the config file at `path`, returning `Ok(None)` if it doesn't exist.
@@ -337,6 +343,7 @@ mod tests {
         let d = resolve_config_dir(
             Some(std::ffi::OsString::from("/custom/xdg")),
             Some(std::ffi::OsString::from("/home/u")),
+            None,
         )
         .unwrap();
         assert_eq!(d, PathBuf::from("/custom/xdg"));
@@ -348,6 +355,7 @@ mod tests {
         let d = resolve_config_dir(
             Some(std::ffi::OsString::from("relative/path")),
             Some(std::ffi::OsString::from("/home/u")),
+            None,
         )
         .unwrap();
         assert_eq!(d, PathBuf::from("/home/u/.config"));
@@ -355,13 +363,33 @@ mod tests {
 
     #[test]
     fn config_dir_falls_back_to_home_dot_config() {
-        let d = resolve_config_dir(None, Some(std::ffi::OsString::from("/home/u"))).unwrap();
+        let d = resolve_config_dir(None, Some(std::ffi::OsString::from("/home/u")), None).unwrap();
         assert_eq!(d, PathBuf::from("/home/u/.config"));
     }
 
     #[test]
-    fn config_dir_returns_none_without_home() {
-        assert!(resolve_config_dir(None, None).is_none());
+    fn config_dir_falls_back_to_userprofile_without_home() {
+        // Windows shells set USERPROFILE, not HOME.
+        let userprofile = std::ffi::OsString::from(r"C:\Users\u");
+        let d = resolve_config_dir(None, None, Some(userprofile.clone())).unwrap();
+        assert_eq!(d, PathBuf::from(userprofile).join(".config"));
+    }
+
+    #[test]
+    fn config_dir_prefers_home_over_userprofile() {
+        // e.g. Git Bash on Windows sets both; HOME wins.
+        let d = resolve_config_dir(
+            None,
+            Some(std::ffi::OsString::from("/home/u")),
+            Some(std::ffi::OsString::from(r"C:\Users\u")),
+        )
+        .unwrap();
+        assert_eq!(d, PathBuf::from("/home/u/.config"));
+    }
+
+    #[test]
+    fn config_dir_returns_none_without_home_or_userprofile() {
+        assert!(resolve_config_dir(None, None, None).is_none());
     }
 
     #[test]
