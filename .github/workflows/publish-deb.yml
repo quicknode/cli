@@ -25,7 +25,10 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-22.04
+    # Must be ubuntu-24.04 (glibc 2.39) — taiki-e/install-action pulls a
+    # prebuilt cargo-deb that's linked against glibc 2.39, which won't
+    # load on the older ubuntu-22.04 runners (glibc 2.35).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
