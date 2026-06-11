@@ -55,7 +55,16 @@ jobs:
         run: |
           # Set up the rpmbuild tree.
           mkdir -p "$HOME/rpmbuild"/{SOURCES,SPECS,SRPMS}
-          cp packaging/qn-bin.spec "$HOME/rpmbuild/SPECS/qn-bin.spec"
+
+          # sed the version literally into the spec rather than passing
+          # --define qn_version=...  to rpmbuild. COPR's older chroots
+          # (EPEL 9, Fedora 42-44) re-parse the SRPM's spec during the
+          # binary-build phase without inheriting the source build's
+          # --define, leaving "%{qn_version}" unexpanded and breaking
+          # the build. Burning the version in at SRPM-build time means
+          # every downstream parse sees the same literal.
+          sed "s/@@QN_VERSION@@/$QN_VERSION/g" packaging/qn-bin.spec \
+            > "$HOME/rpmbuild/SPECS/qn-bin.spec"
 
           # Pre-download both arch tarballs into SOURCES/ — rpmbuild -bs
           # needs the actual files present locally to embed them in the
@@ -74,7 +83,6 @@ jobs:
           # the runner; COPR's mock chroot handles that for the real build.
           rpmbuild -bs "$HOME/rpmbuild/SPECS/qn-bin.spec" \
             --define "_topdir $HOME/rpmbuild" \
-            --define "qn_version $QN_VERSION" \
             --nodeps
           ls -la "$HOME/rpmbuild/SRPMS/"
 
