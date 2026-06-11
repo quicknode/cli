@@ -13,13 +13,26 @@
 # the parser state and causes downstream "Name field must be present"
 # errors that look unrelated.
 #
+# The version is substituted by .github/workflows/publish-copr.yml via
+# sed before rpmbuild -bs: every @@QN_VERSION@@ becomes the actual
+# release version (0.1.4 etc.). We don't use a spec macro because COPR's
+# older chroots (EPEL 9, Fedora 42-44) re-parse the spec during the
+# binary-build phase without inheriting our --define from the source
+# build, leading to a literal unexpanded macro in error messages.
+#
 # Built by .github/workflows/publish-copr.yml on each release. That
 # workflow pre-downloads both arch tarballs into ~/rpmbuild/SOURCES/
-# before invoking `rpmbuild -bs`, so the resulting SRPM carries the
-# sources and COPR's mock can build with --enable-net=off if desired.
+# before invoking rpmbuild -bs, so the resulting SRPM carries the
+# sources and COPR's mock can build without network access.
+
+# Skip the auto-generated debuginfo subpackage. Our binary is already
+# stripped by cargo-dist upstream, and we don't claim the resulting
+# /usr/lib/debug/... file in the files section, so without this Fedora's
+# strict "unpackaged files found" check fails the build.
+%global debug_package %{nil}
 
 Name:    qn
-Version: %{qn_version}
+Version: @@QN_VERSION@@
 Release: 1%{?dist}
 Summary: Command-line interface for the Quicknode SDK
 License: MIT
@@ -63,5 +76,5 @@ install -Dm644 README.md  %{buildroot}%{_docdir}/%{name}/README.md
 %doc README.md
 
 %changelog
-* Thu Jun 11 2026 Quicknode <support@quicknode.com> - %{version}-1
+* Thu Jun 11 2026 Quicknode <support@quicknode.com> - @@QN_VERSION@@-1
 - Automated build from the GitHub Release upstream.
