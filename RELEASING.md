@@ -11,13 +11,15 @@ just release-prepare X.Y.Z
 # release-prepare drives bump → PR → squash-merge → tag → CI through to a green run.
 # Watch the workflow; come back when it's done.
 
-just release-sync-manual-channels
+just release-finalize
 # Auto-detects the just-released version from the latest git tag, then bumps
-# the Homebrew tap, Scoop bucket, and AUR qn-bin clones to match. Prints the
-# three `git push` commands you run to publish.
+# the Homebrew tap, Scoop bucket, and AUR qn-bin clones to match. Opens a PR
+# against the tap and bucket repos (their main branches are protected) and
+# prints the `git push` command for AUR. Merge the two PRs and run the push
+# to publish.
 ```
 
-Override the clone-root directory if your clones live elsewhere: `just release-sync-manual-channels ~/work/quicknode`. Override the version too if you're backfilling an older release: `just release-sync-manual-channels ~/qn 0.1.4`.
+Override the clone-root directory if your clones live elsewhere: `just release-finalize ~/work/quicknode`. Override the version too if you're backfilling an older release: `just release-finalize ~/qn 0.1.4`.
 
 The rest of this document covers what each step does in detail, what to do if part of the pipeline fails, and the one-time setup for each channel.
 
@@ -49,10 +51,9 @@ Sync the formula cargo-dist generated as a release artifact into the tap repo:
 
 ```fish
 just release-update-homebrew-tap X.Y.Z ~/qn/homebrew-tap
-git -C ~/qn/homebrew-tap push
 ```
 
-The recipe downloads `qn.rb` from the GitHub Release, copies it to `Formula/qn.rb` in the tap clone, commits with a clean message, and prints the push command. It does not push itself — review the diff first.
+The recipe downloads `qn.rb` from the GitHub Release, copies it to `Formula/qn.rb` on a `release/vX.Y.Z` branch cut from the tap's latest `origin/main`, commits, pushes the branch, and opens a PR (the tap's `main` is protected, so changes must land via PR). Review and merge the PR to publish. Re-running the recipe recreates the branch and updates the open PR.
 
 ### Scoop
 
@@ -60,10 +61,9 @@ Bump the canonical `version` in `bucket/qn.json`:
 
 ```fish
 just release-update-scoop-bucket X.Y.Z ~/qn/scoop-bucket
-git -C ~/qn/scoop-bucket push
 ```
 
-The recipe pulls the Windows zip's sha256 from the release, renders a manifest with `version`, `hash`, and an `autoupdate` block, and stages it at `bucket/qn.json`. Once a user has tapped the bucket, `scoop update` finds new versions on its own — this manual step just keeps `scoop search qn` honest about what's current.
+The recipe pulls the Windows zip's sha256 from the release, renders a manifest with `version`, `hash`, and an `autoupdate` block at `bucket/qn.json`, commits it on a `release/vX.Y.Z` branch cut from the bucket's latest `origin/main`, pushes the branch, and opens a PR (the bucket's `main` is protected, so changes must land via PR). Review and merge the PR to publish. Once a user has tapped the bucket, `scoop update` finds new versions on its own — this manual step just keeps `scoop search qn` honest about what's current.
 
 ### AUR
 
@@ -78,7 +78,7 @@ The recipe pulls both Linux gnu sha256 sidecars (x86_64 + aarch64) from the rele
 
 ### Curated install block on the release notes
 
-`release-sync-manual-channels` finishes by calling `release-update-install-notes`, which prepends a curated "How to install" section to the GitHub release body. Source for the block is `packaging/release-notes-install.md.tmpl`; edit it there if the install copy needs to change. The recipe is idempotent — re-running against the same release replaces the existing block rather than stacking duplicates — so it's safe to invoke standalone:
+`release-finalize` finishes by calling `release-update-install-notes`, which prepends a curated "How to install" section to the GitHub release body. Source for the block is `packaging/release-notes-install.md.tmpl`; edit it there if the install copy needs to change. The recipe is idempotent — re-running against the same release replaces the existing block rather than stacking duplicates — so it's safe to invoke standalone:
 
 ```fish
 just release-update-install-notes X.Y.Z            # edits the release in place
