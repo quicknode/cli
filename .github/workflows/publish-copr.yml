@@ -10,8 +10,8 @@ name: Publish RPMs to COPR
 # RPM is bit-identical to the one in crates.io, Homebrew, GHCR, .deb,
 # and AUR.
 #
-# `copr-cli build --enable-net=on` is required because the spec's
-# %prep stage fetches the tarball over HTTPS from the GitHub Release.
+# The SRPM embeds both Linux gnu tarballs (x86_64 + aarch64), so
+# COPR's mock chroots can build without network access.
 on:
   workflow_call:
     inputs:
@@ -51,15 +51,27 @@ jobs:
       - name: Build SRPM
         env:
           QN_VERSION: ${{ steps.meta.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Set up the rpmbuild tree.
           mkdir -p "$HOME/rpmbuild"/{SOURCES,SPECS,SRPMS}
           cp packaging/qn-bin.spec "$HOME/rpmbuild/SPECS/qn-bin.spec"
 
-          # SRPM only has the spec — the sources are fetched by mock at
-          # %prep time (Source0/Source1 are URLs, not local files). We
-          # pass --nodeps so rpmbuild doesn't try to satisfy
-          # BuildRequires on the runner; COPR's mock handles that.
+          # Pre-download both arch tarballs into SOURCES/ — rpmbuild -bs
+          # needs the actual files present locally to embed them in the
+          # SRPM, even though the spec's Source0/Source1 are URLs. The
+          # resulting SRPM carries both tarballs; %prep picks one based
+          # on the chroot's arch.
+          cd "$HOME/rpmbuild/SOURCES"
+          gh release download "v$QN_VERSION" \
+            --repo quicknode/cli \
+            --pattern "quicknode-cli-x86_64-unknown-linux-gnu.tar.xz" \
+            --pattern "quicknode-cli-aarch64-unknown-linux-gnu.tar.xz"
+          ls -la
+          cd "$GITHUB_WORKSPACE"
+
+          # --nodeps so rpmbuild doesn't try to satisfy BuildRequires on
+          # the runner; COPR's mock chroot handles that for the real build.
           rpmbuild -bs "$HOME/rpmbuild/SPECS/qn-bin.spec" \
             --define "_topdir $HOME/rpmbuild" \
             --define "qn_version $QN_VERSION" \
@@ -107,6 +119,7 @@ jobs:
             exit 1
           fi
           echo "Uploading $srpm to quicknode/qn..."
-          # --enable-net=on so COPR's mock chroot can curl the prebuilt
-          # tarball + sha256 sidecar from the GitHub Release in %prep.
-          copr-cli build quicknode/qn "$srpm" --enable-net=on
+          # No --enable-net=on needed: the SRPM already embeds both
+          # arch tarballs (rpmbuild verifies them at extract time via
+          # the sha256 baked into the SRPM header).
+          copr-cli build quicknode/qn "$srpm"
