@@ -56,7 +56,10 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
 
 async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
     let path = global.resolve_config_path().ok_or_else(|| {
-        CliError::Arg("no config directory available on this platform".to_string())
+        CliError::Arg(
+            "no config directory available: set HOME (or USERPROFILE on Windows), or pass --config-file <PATH>"
+                .to_string(),
+        )
     })?;
 
     let key = match args.api_key.or(global.api_key) {
@@ -88,7 +91,10 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
 
 fn logout(global: GlobalArgs) -> Result<(), CliError> {
     let path = global.resolve_config_path().ok_or_else(|| {
-        CliError::Arg("no config directory available on this platform".to_string())
+        CliError::Arg(
+            "no config directory available: set HOME (or USERPROFILE on Windows), or pass --config-file <PATH>"
+                .to_string(),
+        )
     })?;
     config::delete_config(&path)?;
     if !global.quiet {

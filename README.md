@@ -72,7 +72,8 @@ You will need a Quicknode API key to get started. Once you have that, you can ru
 1. `--api-key <KEY>` flag
 2. The config file: the `--config-file <PATH>` flag if given, otherwise
    `~/.config/qn/config.toml` — or `$XDG_CONFIG_HOME/qn/config.toml` if that
-   env var is set. Managed by `qn auth login`.
+   env var is set. The same layout applies on Windows:
+   `%USERPROFILE%\.config\qn\config.toml`. Managed by `qn auth login`.
 
 There is deliberately **no environment-variable key source**: a key left
 exported in a shell is invisible state that outlives the session it was set
@@ -219,7 +220,8 @@ qn completions powershell > qn.ps1
 `qn` reads no API credentials from the environment (see
 [Authentication](#authentication) for why). The conventional variables are
 honored: `NO_COLOR` and `TERM=dumb` disable color, and
-`XDG_CONFIG_HOME`/`HOME` locate the default config file. The CLI hands the
+`XDG_CONFIG_HOME`/`HOME` (`USERPROFILE` on Windows) locate the default
+config file. The CLI hands the
 key to the SDK explicitly; it does not read the SDK's `QN_SDK__*` environment
 namespace.
 
