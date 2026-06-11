@@ -16,8 +16,9 @@ Three named recipes in the `Justfile`:
    - `custom-publish-crates` → publishes `quicknode-cli` to crates.io
    - `custom-publish-docker` → builds multi-arch image, pushes to `ghcr.io/quicknode/qn`
    - `custom-publish-deb` → packages `.deb` per arch, uploads to the GitHub Release as assets
+   - `custom-publish-copr` → builds an SRPM from `packaging/qn-bin.spec` (whose `%prep` downloads the SLSA-attested prebuilt binary), dispatches via `copr-cli build` to the `quicknode/qn` COPR project
 
-3. **Maintainer manual steps after CI succeeds.** Three channels still need a person to drive the publish because CI doesn't yet have the credentials it needs.
+3. **Maintainer manual steps after CI succeeds.** Two channels still need a person to drive the publish because CI doesn't yet have the credentials it needs.
 
 ## Manual steps after each release
 
@@ -97,6 +98,26 @@ git -C ~/qn/qn-bin push -u origin master
 The first push registers the package on the AUR. Subsequent pushes just update it — no rename needed (the branch stays `master`).
 
 After publishing: confirm via `https://aur.archlinux.org/packages/qn-bin` (the RPC at `/rpc/v5/info` can lag the package page by a few minutes — trust the web page, not the RPC, for fresh registrations).
+
+### COPR (`quicknode/qn`)
+
+Maintainer needs a Fedora account at <https://accounts.fedoraproject.org> and a COPR project `quicknode/qn` created at <https://copr.fedorainfracloud.org>. Project settings to set on creation:
+
+- **Chroots**: current Fedora releases + EPEL 9 (covers RHEL 9, Rocky 9, Alma 9). Skip EPEL 8 unless requested — its glibc is too old for our gnu binaries.
+- **Build settings**: enable internet access for builds (the `%prep` step in `packaging/qn-bin.spec` curls the prebuilt tarball from the GitHub Release; without net the build can't download it).
+
+CI auths to COPR via four repo secrets — `copr-cli` itself only reads credentials from a config file at `~/.config/copr` (no env-var fallback), so we provision the four fields separately and let the workflow assemble the file at build time. Generate the values at <https://copr.fedorainfracloud.org/api/>; the page shows a `[copr-cli]` config block with these four lines. Copy each field's value into its own secret:
+
+| Secret | Field from the COPR API page |
+|---|---|
+| `COPR_LOGIN`    | `login = …` |
+| `COPR_USERNAME` | `username = …` |
+| `COPR_TOKEN`    | `token = …` |
+| `COPR_URL`      | `copr_url = …` (almost always `https://copr.fedorainfracloud.org`) |
+
+Set each with `gh secret set COPR_LOGIN --repo quicknode/cli` etc., pasting just the value (no `login = ` prefix, no quotes). Splitting them this way also means the token can be rotated without re-pasting the other three.
+
+`packaging/qn-bin.spec` lives in this repo; it's a thin spec whose `%prep` downloads the SLSA-attested prebuilt linux-gnu tarball and verifies it against the `.sha256` sidecar, so COPR isn't rebuilding `qn` from Rust source — it's just packaging the upstream binary into an RPM per chroot. Same trust chain as everywhere else qn ships.
 
 ## Recovery: a publish channel failed
 

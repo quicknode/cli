@@ -29,7 +29,7 @@ tap = "quicknode/homebrew-tap"
 # Override the Homebrew formula name so `brew install quicknode/tap/qn` works
 # (default would derive it from the package name `quicknode-cli`).
 formula = "qn"
-publish-jobs = ["./publish-crates", "./publish-docker", "./publish-deb"]
+publish-jobs = ["./publish-crates", "./publish-docker", "./publish-deb", "./publish-copr"]
 # Emit SLSA build attestations for every binary archive. Critical for a credential-handling tool.
 github-attestations = true
 
@@ -41,4 +41,4 @@ github-attestations = true
 # the calling job's permission grant so the called workflow can also
 # declare contents:read without exceeding the caller. publish-deb
 # needs contents: write so it can `gh release upload` the .deb files.
-github-custom-job-permissions = { "publish-crates" = { contents = "read" }, "publish-docker" = { contents = "read", packages = "write", "id-token" = "write" }, "publish-deb" = { contents = "write" } }
+github-custom-job-permissions = { "publish-crates" = { contents = "read" }, "publish-docker" = { contents = "read", packages = "write", "id-token" = "write" }, "publish-deb" = { contents = "write" }, "publish-copr" = { contents = "read" } }
