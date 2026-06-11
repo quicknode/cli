@@ -2,10 +2,16 @@
 #
 # This spec is built on COPR's mock chroots. The SRPM embeds both Linux
 # gnu tarballs (x86_64 + aarch64) cargo-dist published for this release;
-# %prep selects the right one for the chroot's arch and %install lays
-# the binary + docs into the buildroot. No Rust toolchain involved on
-# the COPR side — the binary inside the resulting RPM is bit-identical
-# to what ships in crates.io, Homebrew, .deb, AUR, and the GHCR image.
+# the prep section selects the right one for the chroot's arch and the
+# install section lays the binary + docs into the buildroot. No Rust
+# toolchain involved on the COPR side — the binary inside the resulting
+# RPM is bit-identical to what ships in crates.io, Homebrew, .deb, AUR,
+# and the GHCR image.
+#
+# Comments here intentionally avoid the percent-sign character entirely
+# — RPM expands macros inside comments at parse time, which corrupts
+# the parser state and causes downstream "Name field must be present"
+# errors that look unrelated.
 #
 # Built by .github/workflows/publish-copr.yml on each release. That
 # workflow pre-downloads both arch tarballs into ~/rpmbuild/SOURCES/
@@ -19,8 +25,8 @@ Summary: Command-line interface for the Quicknode SDK
 License: MIT
 URL:     https://github.com/quicknode/cli
 
-# Both arch tarballs ship in the SRPM. %prep picks one based on the
-# chroot's arch.
+# Both arch tarballs ship in the SRPM. The prep section picks one based
+# on the chroot's arch.
 Source0: https://github.com/quicknode/cli/releases/download/v%{version}/quicknode-cli-x86_64-unknown-linux-gnu.tar.xz
 Source1: https://github.com/quicknode/cli/releases/download/v%{version}/quicknode-cli-aarch64-unknown-linux-gnu.tar.xz
 
