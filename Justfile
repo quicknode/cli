@@ -42,14 +42,17 @@ release-cargo-publish:
   cargo publish -p quicknode-cli
 
 # Manually update the Homebrew tap with the formula attached to a given
-# release. Use this until CI has a PAT with contents:write on the tap
-# repo and can automate the formula push — at which point we add
+# release. The tap's main branch is protected, so this commits the formula
+# on a release/vX.Y.Z branch cut from the tap's latest origin/main, pushes
+# it, and opens a PR. Use this until CI has a PAT with contents:write on
+# the tap repo and can automate the formula push — at which point we add
 # "homebrew" to publish-jobs in dist-workspace.toml, the cargo-dist
 # workflow takes over, and this recipe becomes a manual-recovery fallback.
 #
 # Usage: just release-update-homebrew-tap 0.1.0 ~/qn/homebrew-tap
 #
-# Precondition: tap_path is a clean local clone of quicknode/homebrew-tap.
+# Precondition: tap_path is a clean local clone of quicknode/homebrew-tap
+# and `gh` is authenticated with permission to open PRs on it.
 release-update-homebrew-tap version tap_path:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -66,23 +69,32 @@ release-update-homebrew-tap version tap_path:
     echo "Error: could not download $formula_url (does the release exist?)" >&2
     exit 1
   fi
-  mkdir -p "{{tap_path}}/Formula"
-  cp /tmp/qn.rb "{{tap_path}}/Formula/qn.rb"
-  rm /tmp/qn.rb
   cd "{{tap_path}}"
-  if git diff --quiet Formula/qn.rb && ! git ls-files --error-unmatch Formula/qn.rb >/dev/null 2>&1; then
-    # New file
-    git add Formula/qn.rb
-  elif git diff --quiet Formula/qn.rb; then
-    echo "Formula/qn.rb is already at v{{version}}. Nothing to commit."
+  git fetch origin
+  branch="release/v{{version}}"
+  # Re-runs recreate the branch from the same base, so the later push
+  # needs --force-with-lease rather than a plain push.
+  git switch -C "$branch" origin/main
+  mkdir -p Formula
+  cp /tmp/qn.rb Formula/qn.rb
+  rm /tmp/qn.rb
+  git add Formula/qn.rb
+  if git diff --cached --quiet; then
+    echo "Formula/qn.rb is already at v{{version}} on main. Nothing to do."
     exit 0
-  else
-    git add Formula/qn.rb
   fi
   git commit -m "qn {{version}}"
-  echo
-  echo "Committed qn {{version}} to {{tap_path}}. To publish:"
-  echo "  git -C {{tap_path}} push"
+  git push --force-with-lease -u origin "$branch"
+  pr_url=$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // empty')
+  if [[ -n "$pr_url" ]]; then
+    echo "Updated existing PR: $pr_url"
+  else
+    gh pr create \
+      --base main \
+      --head "$branch" \
+      --title "qn {{version}}" \
+      --body "Bump qn formula to v{{version}}."
+  fi
 
 # Manually update the AUR `qn-bin` package with a PKGBUILD + .SRCINFO
 # for a given release. Use this until CI has SSH access to push to the
@@ -192,9 +204,12 @@ release-update-aur-bin version aur_path:
   echo "  git -C {{aur_path}} push"
 
 # Manually update the Scoop bucket with a manifest for a given release.
-# Use this until CI has a PAT with contents:write on the bucket repo and
-# can automate the push — at which point a CI job takes over and this
-# recipe becomes a manual-recovery fallback.
+# The bucket's main branch is protected, so this commits the manifest on
+# a release/vX.Y.Z branch cut from the bucket's latest origin/main,
+# pushes it, and opens a PR. Use this until CI has a PAT with
+# contents:write on the bucket repo and can automate the publish — at
+# which point a CI job takes over and this recipe becomes a
+# manual-recovery fallback.
 #
 # The generated manifest includes `checkver` + `autoupdate` so Scoop
 # users get new versions on `scoop update` even without us pushing a
@@ -203,7 +218,8 @@ release-update-aur-bin version aur_path:
 #
 # Usage: just release-update-scoop-bucket 0.1.4 ~/qn/scoop-bucket
 #
-# Precondition: bucket_path is a clean local clone of quicknode/scoop-bucket.
+# Precondition: bucket_path is a clean local clone of quicknode/scoop-bucket
+# and `gh` is authenticated with permission to open PRs on it.
 release-update-scoop-bucket version bucket_path:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -226,8 +242,14 @@ release-update-scoop-bucket version bucket_path:
     echo "Error: parsed hash '$hash' is not a 64-char hex string." >&2
     exit 1
   fi
-  mkdir -p "{{bucket_path}}/bucket"
-  cat > "{{bucket_path}}/bucket/qn.json" <<EOF
+  cd "{{bucket_path}}"
+  git fetch origin
+  branch="release/v{{version}}"
+  # Re-runs recreate the branch from the same base, so the later push
+  # needs --force-with-lease rather than a plain push.
+  git switch -C "$branch" origin/main
+  mkdir -p bucket
+  cat > bucket/qn.json <<EOF
   {
       "version": "{{version}}",
       "description": "Command-line interface for the Quicknode SDK",
@@ -250,19 +272,23 @@ release-update-scoop-bucket version bucket_path:
       }
   }
   EOF
-  cd "{{bucket_path}}"
-  if git diff --quiet bucket/qn.json && ! git ls-files --error-unmatch bucket/qn.json >/dev/null 2>&1; then
-    git add bucket/qn.json
-  elif git diff --quiet bucket/qn.json; then
-    echo "bucket/qn.json is already at v{{version}}. Nothing to commit."
+  git add bucket/qn.json
+  if git diff --cached --quiet; then
+    echo "bucket/qn.json is already at v{{version}} on main. Nothing to do."
     exit 0
-  else
-    git add bucket/qn.json
   fi
   git commit -m "qn {{version}}"
-  echo
-  echo "Committed qn {{version}} to {{bucket_path}}. To publish:"
-  echo "  git -C {{bucket_path}} push"
+  git push --force-with-lease -u origin "$branch"
+  pr_url=$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // empty')
+  if [[ -n "$pr_url" ]]; then
+    echo "Updated existing PR: $pr_url"
+  else
+    gh pr create \
+      --base main \
+      --head "$branch" \
+      --title "qn {{version}}" \
+      --body "Bump qn manifest to v{{version}}."
+  fi
 
 # Prepend a curated "How to install" section to the GitHub release body for
 # v<VERSION>. The block is rendered from packaging/release-notes-install.md.tmpl
@@ -314,9 +340,11 @@ release-update-install-notes version mode="":
   echo "Updated release v${version} with curated install block."
 
 # Run release-update-{homebrew-tap,scoop-bucket,aur-bin} in sequence for
-# the latest release tag, then print the three `git push` commands the
-# maintainer needs to run to publish. Auto-detects the version from the
-# most recent git tag (`v<X.Y.Z>` → `<X.Y.Z>`), or accepts an override.
+# the latest release tag. The Homebrew and Scoop recipes push a release
+# branch and open a PR (their main branches are protected); AUR has no
+# PR flow, so its push command is printed for the maintainer to run.
+# Auto-detects the version from the most recent git tag
+# (`v<X.Y.Z>` → `<X.Y.Z>`), or accepts an override.
 #
 # Expects three sibling clones under `root` (defaults to ~/qn):
 #   ~/qn/homebrew-tap   → quicknode/homebrew-tap
@@ -324,10 +352,10 @@ release-update-install-notes version mode="":
 #   ~/qn/qn-bin         → ssh://aur@aur.archlinux.org/qn-bin.git
 #
 # Usage:
-#   just release-sync-manual-channels                  # auto-detect version, default root
-#   just release-sync-manual-channels ~/work/quicknode # override root
-#   just release-sync-manual-channels ~/qn 0.1.4       # override both
-release-sync-manual-channels root="~/qn" version="":
+#   just release-finalize                  # auto-detect version, default root
+#   just release-finalize ~/work/quicknode # override root
+#   just release-finalize ~/qn 0.1.4       # override both
+release-finalize root="~/qn" version="":
   #!/usr/bin/env bash
   set -euo pipefail
   # Expand a leading ~/ to $HOME/ since bash doesn't expand tildes inside
@@ -343,7 +371,7 @@ release-sync-manual-channels root="~/qn" version="":
     git fetch --tags --quiet
     tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
     if [[ -z "$tag" ]]; then
-      echo 'Error: no git tags found and no version override passed. Run: just release-sync-manual-channels ROOT VERSION' >&2
+      echo 'Error: no git tags found and no version override passed. Run: just release-finalize ROOT VERSION' >&2
       exit 1
     fi
     version="${tag#v}"
@@ -358,9 +386,9 @@ release-sync-manual-channels root="~/qn" version="":
   echo
   just release-update-install-notes "$version"
   echo
-  echo "Manual channels and release-notes install block updated. To publish, run:"
-  echo "  git -C ${root}/homebrew-tap push"
-  echo "  git -C ${root}/scoop-bucket push"
+  echo "Manual channels and release-notes install block updated."
+  echo "Homebrew and Scoop publish via the PRs opened above — merge them to finish."
+  echo "AUR has no PR flow; publish it with:"
   echo "  git -C ${root}/qn-bin push"
 
 # Release Phase 1: bump → branch → PR → merge → tag → GH release → wait for CI.
@@ -523,5 +551,5 @@ release-prepare version yes="0":
   echo "  https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/v{{version}}"
   echo
   echo "Next: sync the manual channels (Homebrew, Scoop, AUR) by running"
-  echo "  just release-sync-manual-channels ~/qn {{version}}"
+  echo "  just release-finalize ~/qn {{version}}"
   echo "(omit the args to auto-detect the version from the latest tag)."
