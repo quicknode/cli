@@ -1,0 +1,52 @@
+## Install
+
+Pick the recommended path for your platform.
+
+### Homebrew (macOS, Linux)
+
+```sh
+brew install quicknode/tap/qn
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add quicknode https://github.com/quicknode/scoop-bucket
+scoop install quicknode/qn
+```
+
+### `.deb` (Debian, Ubuntu)
+
+Check your architecture with `dpkg --print-architecture`, then grab the matching `.deb` asset from this release:
+
+```sh
+# amd64
+curl -LO https://github.com/quicknode/cli/releases/download/v{{VERSION}}/qn_{{VERSION}}_amd64.deb
+sudo apt install ./qn_{{VERSION}}_amd64.deb
+
+# arm64
+curl -LO https://github.com/quicknode/cli/releases/download/v{{VERSION}}/qn_{{VERSION}}_arm64.deb
+sudo apt install ./qn_{{VERSION}}_arm64.deb
+```
+
+### Arch Linux (AUR)
+
+```sh
+yay -S qn-bin   # or any other AUR helper
+```
+
+### Fedora, EPEL (COPR)
+
+```sh
+sudo dnf copr enable quicknode/qn
+sudo dnf install qn
+```
+
+### Docker (GHCR)
+
+```sh
+docker pull ghcr.io/quicknode/qn:{{VERSION}}
+docker run --rm ghcr.io/quicknode/qn:{{VERSION}} --help
+```
+
+For `cargo install`, source builds, and raw prebuilt binaries see the [project README](https://github.com/quicknode/cli#alternatives).

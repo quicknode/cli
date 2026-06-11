@@ -264,6 +264,55 @@ release-update-scoop-bucket version bucket_path:
   echo "Committed qn {{version}} to {{bucket_path}}. To publish:"
   echo "  git -C {{bucket_path}} push"
 
+# Prepend a curated "How to install" section to the GitHub release body for
+# v<VERSION>. The block is rendered from packaging/release-notes-install.md.tmpl
+# (substituting {{VERSION}}) and bracketed by HTML-comment markers so re-runs
+# replace the existing block instead of stacking duplicates. cargo-dist's
+# auto-generated body is preserved below a `---` separator.
+#
+# Usage:
+#   just release-update-install-notes 0.1.8            # edits the release
+#   just release-update-install-notes 0.1.8 --dry-run  # prints assembled body to stdout
+release-update-install-notes version mode="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  version="{{version}}"
+  mode="{{mode}}"
+  if [[ -n "$mode" && "$mode" != "--dry-run" ]]; then
+    echo "Error: unknown mode '$mode' (expected --dry-run or unset)." >&2
+    exit 1
+  fi
+  tmpl="packaging/release-notes-install.md.tmpl"
+  if [[ ! -f "$tmpl" ]]; then
+    echo "Error: $tmpl not found." >&2
+    exit 1
+  fi
+  rendered=$(sed "s/{{ '{{' }}VERSION{{ '}}' }}/${version}/g" "$tmpl")
+  start_marker='<!-- qn-install-block:start -->'
+  end_marker='<!-- qn-install-block:end -->'
+  # The block itself does not include the `---` separator — the separator lives
+  # between the block and the rest of the body and stays in the body across re-runs.
+  block=$(printf '%s\n%s\n%s' "$start_marker" "$rendered" "$end_marker")
+  current=$(gh release view "v${version}" --json body --jq .body)
+  if [[ "$current" == *"$start_marker"* && "$current" == *"$end_marker"* ]]; then
+    # Replace existing block (idempotent re-run). Split body around markers in pure bash.
+    before="${current%%$start_marker*}"
+    after_with_end="${current#*$start_marker}"
+    after="${after_with_end#*$end_marker}"
+    new_body="${before}${block}${after}"
+  else
+    new_body=$(printf '%s\n\n---\n%s' "$block" "$current")
+  fi
+  if [[ "$mode" == "--dry-run" ]]; then
+    printf '%s\n' "$new_body"
+    exit 0
+  fi
+  tmpfile=$(mktemp)
+  trap 'rm -f "$tmpfile"' EXIT
+  printf '%s\n' "$new_body" > "$tmpfile"
+  gh release edit "v${version}" --notes-file "$tmpfile"
+  echo "Updated release v${version} with curated install block."
+
 # Run release-update-{homebrew-tap,scoop-bucket,aur-bin} in sequence for
 # the latest release tag, then print the three `git push` commands the
 # maintainer needs to run to publish. Auto-detects the version from the
@@ -307,7 +356,9 @@ release-sync-manual-channels root="~/qn" version="":
   echo
   just release-update-aur-bin      "$version" "${root}/qn-bin"
   echo
-  echo "All three channels updated. To publish, run:"
+  just release-update-install-notes "$version"
+  echo
+  echo "Manual channels and release-notes install block updated. To publish, run:"
   echo "  git -C ${root}/homebrew-tap push"
   echo "  git -C ${root}/scoop-bucket push"
   echo "  git -C ${root}/qn-bin push"

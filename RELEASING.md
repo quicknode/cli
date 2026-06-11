@@ -76,6 +76,17 @@ git -C ~/qn/qn-bin push
 
 The recipe pulls both Linux gnu sha256 sidecars (x86_64 + aarch64) from the release, renders a `PKGBUILD` + `.SRCINFO`, and stages them. Push goes to `ssh://aur@aur.archlinux.org/qn-bin.git` — the AUR's git remote.
 
+### Curated install block on the release notes
+
+`release-sync-manual-channels` finishes by calling `release-update-install-notes`, which prepends a curated "How to install" section to the GitHub release body. Source for the block is `packaging/release-notes-install.md.tmpl`; edit it there if the install copy needs to change. The recipe is idempotent — re-running against the same release replaces the existing block rather than stacking duplicates — so it's safe to invoke standalone:
+
+```fish
+just release-update-install-notes X.Y.Z            # edits the release in place
+just release-update-install-notes X.Y.Z --dry-run  # prints the assembled body without editing
+```
+
+cargo-dist's auto-generated content is preserved below a `---` separator.
+
 ## One-time setup notes
 
 A few channels needed manual setup the first time. Captured here so the next maintainer doesn't have to rediscover them.
