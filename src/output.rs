@@ -17,8 +17,9 @@
 //! Color is suppressed when any of: `--no-color`, `NO_COLOR` env, `TERM=dumb`,
 //! stdout is not a TTY, or the format is anything other than `table`.
 //!
-//! State-change confirmations go to stderr through [`OutputCtx::note`]; only
-//! `--quiet` suppresses them.
+//! State-change confirmations go to stderr through [`OutputCtx::note`], and
+//! advisory warnings through [`OutputCtx::warn`]; only `--quiet` suppresses
+//! them.
 
 use std::io::{IsTerminal, Write};
 
@@ -116,6 +117,15 @@ impl OutputCtx {
     /// Writes a state-change note to stderr (e.g. "✓ Paused endpoint ep-123").
     /// Suppressed under `--quiet`.
     pub fn note(&self, message: &str) {
+        if self.quiet {
+            return;
+        }
+        let _ = writeln!(std::io::stderr(), "{message}");
+    }
+
+    /// Writes an advisory warning to stderr (e.g. "⚠ option is disabled…").
+    /// Suppressed under `--quiet`, like [`note`](Self::note).
+    pub fn warn(&self, message: &str) {
         if self.quiet {
             return;
         }

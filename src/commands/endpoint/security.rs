@@ -308,11 +308,37 @@ async fn set_options(a: SetOptionsArgs, ctx: Ctx) -> Result<(), CliError> {
     crate::output::emit(&ctx.out, &SecurityOptionsListView(resp.data))
 }
 
+/// Best-effort post-add check: if the security option governing the item just
+/// added is disabled, the item is not enforced and won't appear in list output,
+/// so warn on stderr with the exact enable command. Never fails the command —
+/// any error fetching the options is swallowed (the add already succeeded),
+/// and the lookup is skipped entirely under `--quiet`.
+async fn warn_if_option_disabled(ctx: &Ctx, id: &str, option: &str, flag: &str, item_desc: &str) {
+    if ctx.out.quiet {
+        return;
+    }
+    let Ok(resp) = ctx.sdk.admin.get_security_options(id).await else {
+        return;
+    };
+    if resp
+        .data
+        .iter()
+        .any(|o| o.option == option && o.status == "disabled")
+    {
+        ctx.out.warn(&format!(
+            "⚠ The '{option}' security option is disabled on {id} —\n  \
+             {item_desc} will have no effect until you enable it:\n    \
+             qn endpoint security set-options --{flag} enabled {id}"
+        ));
+    }
+}
+
 async fn token(cmd: TokenCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         TokenCmd::Create { id } => {
             ctx.sdk.admin.create_token(&id).await?;
             ctx.out.note(&format!("✓ Created token on {id}"));
+            warn_if_option_disabled(&ctx, &id, "tokens", "tokens", "this token").await;
         }
         TokenCmd::Delete { id, token_id } => {
             confirm_mild(
@@ -337,6 +363,7 @@ async fn referrer(cmd: ReferrerCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.sdk.admin.create_referrer(&id, &req).await?;
             ctx.out
                 .note(&format!("✓ Whitelisted referrer {referrer:?} on {id}"));
+            warn_if_option_disabled(&ctx, &id, "referrers", "referrers", "this referrer").await;
         }
         ReferrerCmd::Remove { id, referrer_id } => {
             confirm_mild(
@@ -359,6 +386,7 @@ async fn ip(cmd: IpCmd, ctx: Ctx) -> Result<(), CliError> {
             };
             ctx.sdk.admin.create_ip(&id, &req).await?;
             ctx.out.note(&format!("✓ Whitelisted IP {ip} on {id}"));
+            warn_if_option_disabled(&ctx, &id, "ips", "ips", "this IP").await;
         }
         IpCmd::Remove { id, ip_id } => {
             confirm_mild(
@@ -396,6 +424,7 @@ async fn jwt(cmd: JwtCmd, ctx: Ctx) -> Result<(), CliError> {
             };
             ctx.sdk.admin.create_jwt(&a.id, &req).await?;
             ctx.out.note(&format!("✓ Added JWT on {}", a.id));
+            warn_if_option_disabled(&ctx, &a.id, "jwts", "jwts", "this JWT").await;
         }
         JwtCmd::Remove { id, jwt_id } => {
             confirm_mild(&ctx, &format!("Remove JWT {jwt_id} from endpoint {id}?"))?;
@@ -415,6 +444,8 @@ async fn domain_mask(cmd: DomainMaskCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.sdk.admin.create_domain_mask(&id, &req).await?;
             ctx.out
                 .note(&format!("✓ Added domain mask {domain:?} on {id}"));
+            warn_if_option_disabled(&ctx, &id, "domainMasks", "domain-masks", "this domain mask")
+                .await;
         }
         DomainMaskCmd::Remove { id, domain_mask_id } => {
             confirm_mild(
@@ -449,6 +480,14 @@ async fn request_filter(cmd: RequestFilterCmd, ctx: Ctx) -> Result<(), CliError>
             })?;
             ctx.out
                 .note(&format!("✓ Created request filter {} on {}", d.id, a.id));
+            warn_if_option_disabled(
+                &ctx,
+                &a.id,
+                "requestFilters",
+                "request-filters",
+                "this request filter",
+            )
+            .await;
         }
         RequestFilterCmd::Update(a) => {
             let mut methods = a.methods;
@@ -497,6 +536,14 @@ async fn ip_header(cmd: IpHeaderCmd, ctx: Ctx) -> Result<(), CliError> {
                 .await?;
             ctx.out
                 .note(&format!("✓ Set IP header {header_name:?} on {id}"));
+            warn_if_option_disabled(
+                &ctx,
+                &id,
+                "ipCustomHeader",
+                "ip-custom-header",
+                "this header",
+            )
+            .await;
         }
         IpHeaderCmd::Remove { id } => {
             confirm_mild(
