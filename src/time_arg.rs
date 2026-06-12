@@ -28,6 +28,11 @@ impl ParsedTime {
         self.0.unix_timestamp()
     }
 
+    /// Builds from unix seconds; `None` if out of `OffsetDateTime` range.
+    pub fn from_unix(ts: i64) -> Option<Self> {
+        OffsetDateTime::from_unix_timestamp(ts).ok().map(Self)
+    }
+
     pub fn to_rfc3339(self) -> String {
         self.0
             .format(&Rfc3339)

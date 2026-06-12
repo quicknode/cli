@@ -289,6 +289,65 @@ async fn billing_payments_table_includes_status_and_marketplace() {
 }
 
 #[tokio::test]
+async fn usage_summary_table_shows_overages_and_window() {
+    let body = serde_json::json!({
+        "data": {
+            "credits_used": 1200,
+            "credits_remaining": 8800,
+            "limit": 10000,
+            "overages": 0,
+            "start_time": 1767225600,
+            "end_time": 1769904000
+        },
+        "error": null
+    });
+    let out = table_stdout("/v0/usage/rpc", body, &["usage", "summary"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn usage_by_method_table_includes_chain_and_network() {
+    let body = serde_json::json!({
+        "data": {
+            "methods": [
+                {
+                    "method_name": "eth_call",
+                    "credits_used": 900,
+                    "archive": false,
+                    "network": "mainnet",
+                    "chain": "eth"
+                },
+                {
+                    "method_name": "getBlockHeight",
+                    "credits_used": 300,
+                    "archive": null,
+                    "network": "mainnet",
+                    "chain": "solana"
+                }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout("/v0/usage/rpc/by-method", body, &["usage", "by-method"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn usage_by_tag_table_includes_requests() {
+    let body = serde_json::json!({
+        "data": {
+            "tags": [
+                { "tag_id": 1, "label": "prod", "credits_used": 1000, "requests": 420 },
+                { "tag_id": null, "label": "untagged", "credits_used": 200, "requests": 80 }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout("/v0/usage/rpc/by-tag", body, &["usage", "by-tag"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     let body = serde_json::json!({
         "data": {
