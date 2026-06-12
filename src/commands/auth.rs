@@ -70,6 +70,16 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
                     "no TTY available; pass --api-key to log in non-interactively".to_string(),
                 ));
             }
+            if !global.quiet {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "Welcome! The qn CLI uses a Quicknode API key to manage your account.\n\
+                     Your key is stored locally in {}.\n\n  \
+                     Get an API key:  https://dashboard.quicknode.com/api-keys\n  \
+                     Need an account? https://www.quicknode.com/signup\n",
+                    path.display()
+                );
+            }
             config::prompt_for_api_key()?
         }
     };
