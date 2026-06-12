@@ -1,0 +1,33 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+FIELD                      VALUE                 
+id                         ep-1                  
+label                      —                     
+status                     active                
+chain/network              eth/mainnet           
+http_url                   https://ep-1.example  
+wss_url                    wss://ep-1.example    
+tags                       —                     
+is_multichain              ✗                     
+security.tokens            ✓ (1)                 
+security.jwts              ✗ (0)                 
+security.domain_masks      ✗ (0)                 
+security.ips               ✗ (0)                 
+security.referrers         ✗ (0)                 
+security.request_filters   ✓ (1)                 
+security.ip_custom_header  x-real-ip             
+rate_limits.by_ip          ✗                     
+rate_limits.account        -1                    
+rate_limits.rps            -1                    
+rate_limits.rpm            -1                    
+rate_limits.rpd            -1                    
+
+TOKENS (1)
+ID     TOKEN  
+tok-1  0xabc  
+
+REQUEST_FILTERS (1)
+ID    METHODS                    
+rf-1  eth_blockNumber, eth_call

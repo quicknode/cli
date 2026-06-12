@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+TAG_ID  LABEL     CREDITS  REQUESTS  
+1       prod      1000     420       
+—       untagged  200      80

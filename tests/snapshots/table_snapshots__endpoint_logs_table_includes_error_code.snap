@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+TIME                      METHOD           STATUS  ERROR   NETWORK  REQUEST_ID  
+2026-01-01T00:00:00.000Z  eth_blockNumbre  200     -32601  mainnet  req-1       
+2026-01-01T00:00:01.000Z  eth_blockNumber  200     —       mainnet  req-2

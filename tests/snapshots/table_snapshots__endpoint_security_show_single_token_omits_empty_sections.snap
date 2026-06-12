@@ -1,0 +1,16 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+OPTION            ENABLED  
+tokens            ✓        
+jwts              ✗        
+domain_masks      ✗        
+ips               ✗        
+referrers         ✗        
+request_filters   ✗        
+ip_custom_header  —        
+
+TOKENS (1)
+ID     TOKEN  
+tok-1  0xabc

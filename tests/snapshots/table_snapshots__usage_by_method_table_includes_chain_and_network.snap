@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+METHOD          CHAIN   NETWORK  CREDITS  ARCHIVE  
+eth_call        eth     mainnet  900      ✗        
+getBlockHeight  solana  mainnet  300      —

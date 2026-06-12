@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::output::{bool_cell, new_table, opt_cell, set_header_bold, write_table, Render};
 use crate::retry::retrying;
 use crate::time_arg;
 
@@ -128,6 +128,16 @@ impl Render for UsageSummaryView {
             opt_cell(&data.credits_remaining),
         ]);
         t.add_row(vec![Cell::new("limit"), opt_cell(&data.limit)]);
+        t.add_row(vec![Cell::new("overages"), opt_cell(&data.overages)]);
+        // The API reports the window as unix seconds; show RFC-3339 like the
+        // --from/--to flags accept. Out-of-range values fall back to the raw
+        // number rather than erroring a read-only command.
+        let time_cell = |ts: i64| match time_arg::ParsedTime::from_unix(ts) {
+            Some(t) => Cell::new(t.to_rfc3339()),
+            None => Cell::new(ts),
+        };
+        t.add_row(vec![Cell::new("start_time"), time_cell(data.start_time)]);
+        t.add_row(vec![Cell::new("end_time"), time_cell(data.end_time)]);
         write_table(w, &t)
     }
 }
@@ -179,12 +189,18 @@ impl Render for UsageByMethodView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["METHOD", "CREDITS", "ARCHIVE"]);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec!["METHOD", "CHAIN", "NETWORK", "CREDITS", "ARCHIVE"],
+        );
         for m in &data.methods {
             t.add_row(vec![
                 Cell::new(&m.method_name),
+                opt_cell(&m.chain),
+                opt_cell(&m.network),
                 Cell::new(m.credits_used),
-                opt_cell(&m.archive),
+                bool_cell(m.archive),
             ]);
         }
         write_table(w, &t)
@@ -233,12 +249,13 @@ impl Render for UsageByTagView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["TAG_ID", "LABEL", "CREDITS"]);
+        set_header_bold(&mut t, ctx, vec!["TAG_ID", "LABEL", "CREDITS", "REQUESTS"]);
         for tg in &data.tags {
             t.add_row(vec![
                 opt_cell(&tg.tag_id),
                 Cell::new(&tg.label),
                 Cell::new(tg.credits_used),
+                Cell::new(tg.requests),
             ]);
         }
         write_table(w, &t)

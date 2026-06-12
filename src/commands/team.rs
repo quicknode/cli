@@ -266,7 +266,36 @@ impl Render for TeamDetailView {
             Cell::new("default_role"),
             opt_cell(&detail.default_role),
         ]);
-        write_table(w, &t)
+        t.add_row(vec![
+            Cell::new("members_count"),
+            opt_cell(&detail.members_count),
+        ]);
+        write_table(w, &t)?;
+
+        let member_section = |w: &mut dyn std::io::Write,
+                              title: &str,
+                              users: &[quicknode_sdk::admin::TeamUser]|
+         -> std::io::Result<()> {
+            if users.is_empty() {
+                return Ok(());
+            }
+            writeln!(w)?;
+            writeln!(w, "{} ({})", title, users.len())?;
+            let mut t = new_table(ctx);
+            set_header_bold(&mut t, ctx, vec!["ID", "EMAIL", "NAME", "ROLE", "STATUS"]);
+            for u in users {
+                t.add_row(vec![
+                    Cell::new(u.id),
+                    Cell::new(&u.email),
+                    opt_cell(&u.full_name),
+                    opt_cell(&u.role),
+                    opt_cell(&u.status),
+                ]);
+            }
+            write_table(w, &t)
+        };
+        member_section(w, "MEMBERS", &detail.users)?;
+        member_section(w, "PENDING_INVITES", &detail.pending_invites)
     }
 }
 

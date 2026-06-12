@@ -1,0 +1,18 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+FIELD          VALUE   
+id             7       
+name           core    
+default_role   viewer  
+members_count  2       
+
+MEMBERS (2)
+ID  EMAIL              NAME           ROLE    STATUS  
+1   alice@example.com  Alice Example  admin   active  
+2   bob@example.com    —              viewer  active  
+
+PENDING_INVITES (1)
+ID  EMAIL              NAME  ROLE    STATUS   
+3   carol@example.com  —     viewer  pending
