@@ -290,6 +290,10 @@ async fn referrer(cmd: ReferrerCmd, ctx: Ctx) -> Result<(), CliError> {
                 .note(&format!("✓ Whitelisted referrer {referrer:?} on {id}"));
         }
         ReferrerCmd::Remove { id, referrer_id } => {
+            confirm_mild(
+                &ctx,
+                &format!("Remove referrer {referrer_id} from endpoint {id}'s whitelist?"),
+            )?;
             ctx.sdk.admin.delete_referrer(&id, &referrer_id).await?;
             ctx.out
                 .note(&format!("✓ Removed referrer {referrer_id} on {id}"));
@@ -308,6 +312,10 @@ async fn ip(cmd: IpCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Whitelisted IP {ip} on {id}"));
         }
         IpCmd::Remove { id, ip_id } => {
+            confirm_mild(
+                &ctx,
+                &format!("Remove IP {ip_id} from endpoint {id}'s whitelist?"),
+            )?;
             ctx.sdk.admin.delete_ip(&id, &ip_id).await?;
             ctx.out.note(&format!("✓ Removed IP {ip_id} on {id}"));
         }
@@ -341,6 +349,10 @@ async fn jwt(cmd: JwtCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Added JWT on {}", a.id));
         }
         JwtCmd::Remove { id, jwt_id } => {
+            confirm_mild(
+                &ctx,
+                &format!("Remove JWT {jwt_id} from endpoint {id}?"),
+            )?;
             ctx.sdk.admin.delete_jwt(&id, &jwt_id).await?;
             ctx.out.note(&format!("✓ Removed JWT {jwt_id} on {id}"));
         }
@@ -359,6 +371,10 @@ async fn domain_mask(cmd: DomainMaskCmd, ctx: Ctx) -> Result<(), CliError> {
                 .note(&format!("✓ Added domain mask {domain:?} on {id}"));
         }
         DomainMaskCmd::Remove { id, domain_mask_id } => {
+            confirm_mild(
+                &ctx,
+                &format!("Remove domain mask {domain_mask_id} from endpoint {id}?"),
+            )?;
             ctx.sdk
                 .admin
                 .delete_domain_mask(&id, &domain_mask_id)
@@ -407,6 +423,10 @@ async fn request_filter(cmd: RequestFilterCmd, ctx: Ctx) -> Result<(), CliError>
             id,
             request_filter_id,
         } => {
+            confirm_mild(
+                &ctx,
+                &format!("Remove request filter {request_filter_id} from endpoint {id}?"),
+            )?;
             ctx.sdk
                 .admin
                 .delete_request_filter(&id, &request_filter_id)
@@ -433,6 +453,10 @@ async fn ip_header(cmd: IpHeaderCmd, ctx: Ctx) -> Result<(), CliError> {
                 .note(&format!("✓ Set IP header {header_name:?} on {id}"));
         }
         IpHeaderCmd::Remove { id } => {
+            confirm_mild(
+                &ctx,
+                &format!("Remove the custom IP header configuration on endpoint {id}?"),
+            )?;
             ctx.sdk.admin.delete_ip_custom_header(&id).await?;
             ctx.out.note(&format!("✓ Removed IP header config on {id}"));
         }
