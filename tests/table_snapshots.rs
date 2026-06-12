@@ -167,6 +167,44 @@ async fn endpoint_security_show_single_token_omits_empty_sections() {
 }
 
 #[tokio::test]
+async fn endpoint_logs_table_includes_error_code() {
+    let body = serde_json::json!({
+        "data": [
+            {
+                "timestamp": "2026-01-01T00:00:00.000Z",
+                "method": "eth_blockNumbre",
+                "network": "mainnet",
+                "http_method": "POST",
+                "status": 200,
+                "error_code": -32601,
+                "url": "/",
+                "request_id": "req-1",
+                "details": null
+            },
+            {
+                "timestamp": "2026-01-01T00:00:01.000Z",
+                "method": "eth_blockNumber",
+                "network": "mainnet",
+                "http_method": "POST",
+                "status": 200,
+                "error_code": null,
+                "url": "/",
+                "request_id": "req-2",
+                "details": null
+            }
+        ],
+        "next_at": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/logs",
+        body,
+        &["endpoint", "logs", "ep-1", "--from", "2026-01-01T00:00:00Z"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     let body = serde_json::json!({
         "data": {

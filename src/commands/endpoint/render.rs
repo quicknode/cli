@@ -239,13 +239,14 @@ impl Render for EndpointLogsView {
         set_header_bold(
             &mut t,
             ctx,
-            vec!["TIME", "METHOD", "STATUS", "NETWORK", "REQUEST_ID"],
+            vec!["TIME", "METHOD", "STATUS", "ERROR", "NETWORK", "REQUEST_ID"],
         );
         for l in &self.0.data {
             t.add_row(vec![
                 Cell::new(&l.timestamp),
                 opt_cell(&l.method),
                 opt_cell(&l.status),
+                opt_cell(&l.error_code),
                 opt_cell(&l.network),
                 opt_cell(&l.request_id),
             ]);
