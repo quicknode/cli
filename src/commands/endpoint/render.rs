@@ -102,7 +102,9 @@ impl Render for SingleEndpointView {
         ]);
         t.add_row(vec![Cell::new("http_url"), Cell::new(&e.http_url)]);
         t.add_row(vec![Cell::new("wss_url"), opt_cell(&e.wss_url)]);
-        if !e.tags.is_empty() {
+        if e.tags.is_empty() {
+            t.add_row(vec![Cell::new("tags"), Cell::new("—")]);
+        } else {
             let tags = e
                 .tags
                 .iter()
@@ -110,6 +112,83 @@ impl Render for SingleEndpointView {
                 .collect::<Vec<_>>()
                 .join(", ");
             t.add_row(vec![Cell::new("tags"), Cell::new(tags)]);
+        }
+        t.add_row(vec![
+            Cell::new("is_multichain"),
+            bool_cell(Some(e.is_multichain)),
+        ]);
+        if let Some(sec) = &e.security {
+            let opts = sec.options.as_ref();
+            let feature = |enabled: Option<bool>, count: usize| {
+                let mark = match enabled {
+                    Some(true) => "✓",
+                    Some(false) => "✗",
+                    None => "—",
+                };
+                Cell::new(format!("{mark} ({count})"))
+            };
+            t.add_row(vec![
+                Cell::new("security.tokens"),
+                feature(
+                    opts.and_then(|o| o.tokens),
+                    sec.tokens.as_deref().unwrap_or(&[]).len(),
+                ),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.jwts"),
+                feature(
+                    opts.and_then(|o| o.jwts),
+                    sec.jwts.as_deref().unwrap_or(&[]).len(),
+                ),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.domain_masks"),
+                feature(
+                    opts.and_then(|o| o.domain_masks),
+                    sec.domain_masks.as_deref().unwrap_or(&[]).len(),
+                ),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.ips"),
+                feature(
+                    opts.and_then(|o| o.ips),
+                    sec.ips.as_deref().unwrap_or(&[]).len(),
+                ),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.referrers"),
+                feature(
+                    opts.and_then(|o| o.referrers),
+                    sec.referrers.as_deref().unwrap_or(&[]).len(),
+                ),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.request_filters"),
+                feature(
+                    opts.and_then(|o| o.request_filters),
+                    sec.request_filters.as_deref().unwrap_or(&[]).len(),
+                ),
+            ]);
+            let ip_header = opts
+                .and_then(|o| o.ip_custom_header.as_ref())
+                .and_then(|h| h.value.clone());
+            t.add_row(vec![
+                Cell::new("security.ip_custom_header"),
+                opt_cell(&ip_header),
+            ]);
+        }
+        if let Some(rl) = &e.rate_limits {
+            t.add_row(vec![
+                Cell::new("rate_limits.by_ip"),
+                bool_cell(rl.rate_limit_by_ip),
+            ]);
+            t.add_row(vec![
+                Cell::new("rate_limits.account"),
+                opt_cell(&rl.account),
+            ]);
+            t.add_row(vec![Cell::new("rate_limits.rps"), opt_cell(&rl.rps)]);
+            t.add_row(vec![Cell::new("rate_limits.rpm"), opt_cell(&rl.rpm)]);
+            t.add_row(vec![Cell::new("rate_limits.rpd"), opt_cell(&rl.rpd)]);
         }
         write_table(w, &t)
     }
