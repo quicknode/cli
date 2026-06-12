@@ -38,7 +38,8 @@ pub enum SetCmd {
     /// Get the value stored under a key.
     Get { key: String },
     /// List all key/value entries.
-    Ls(SetsLsArgs),
+    #[command(visible_alias = "ls")]
+    List(SetsLsArgs),
     /// Delete a single set.
     Delete { key: String },
     /// Add and/or delete multiple sets in one call.
@@ -66,7 +67,8 @@ pub struct BulkArgs {
 #[derive(Debug, Subcommand)]
 pub enum ListCmd {
     /// List all list keys.
-    Ls(ListsLsArgs),
+    #[command(visible_alias = "ls")]
+    List(ListsLsArgs),
     /// Get items in a specific list (paginated).
     Get(ListGetArgs),
     /// Create a new list seeded with items.

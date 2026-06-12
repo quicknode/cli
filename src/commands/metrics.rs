@@ -39,6 +39,7 @@ pub struct AccountArgs {
 #[derive(Debug, ClapArgs)]
 pub struct EndpointArgs {
     /// Endpoint id.
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// Period.
     #[arg(long, value_parser = ["hour", "day", "week", "month"])]

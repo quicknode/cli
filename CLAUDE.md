@@ -70,6 +70,7 @@ Things to verify for each new endpoint:
 
 - **HTTP-noun → CLI-noun-verb**: `admin.get_endpoints` → `qn endpoint list`, `admin.show_endpoint` → `qn endpoint show <ID>`, `admin.update_endpoint_status(id, "paused")` → `qn endpoint pause <ID>` (split the verb out, since the user thinks "pause", not "update status to paused").
 - **Aliases**: every list-style command gets `#[command(visible_alias = "ls")]`. Plural top-level nouns get one too (`#[command(visible_alias = "endpoints")]`).
+- **Positional value names**: a field named `id` renders as an uninformative `<ID>` in help. Give every positional an explicit, resource-specific `#[arg(value_name = "ENDPOINT_ID")]` (uppercase, underscored: `STREAM_ID`, `WEBHOOK_ID`, `TEAM_ID`, …). Multi-word fields like `referrer_id` already render fine as `<REFERRER_ID>`.
 - **Hyphenation**: clap kebab-cases enum variants by default. `RateLimit` → `rate-limit`. Test invocations must use the kebab form (`qn endpoint rate-limit method-create`, not `ratelimit`).
 - **Negative numbers**: any `i64` flag that accepts `-1` (`--end`, etc.) needs `#[arg(long, allow_hyphen_values = true)]` or clap will read it as another flag.
 - **Multi-value flags**: prefer repeatable `--method foo --method bar` (clap `Vec<String>` with `#[arg(long = "method")]`). Optionally also accept `--methods foo,bar` via a second field with `value_delimiter = ','`. The command body extends one into the other.

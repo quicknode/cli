@@ -458,6 +458,255 @@ async fn endpoint_security_token_delete_without_yes_sends_nothing() {
 }
 
 #[tokio::test]
+async fn endpoint_security_referrer_remove_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/referrers/ref-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint", "security", "referrer", "remove", "ep-1", "ref-1", "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_referrer_remove_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/referrers/ref-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint", "security", "referrer", "remove", "ep-1", "ref-1",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_ip_remove_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/ips/ip-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint", "security", "ip", "remove", "ep-1", "ip-1", "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_ip_remove_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/ips/ip-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "ip", "remove", "ep-1", "ip-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_jwt_remove_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/jwts/jwt-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint", "security", "jwt", "remove", "ep-1", "jwt-1", "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_jwt_remove_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/jwts/jwt-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "jwt", "remove", "ep-1", "jwt-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_domain_mask_remove_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/domain_masks/dm-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "domain-mask",
+            "remove",
+            "ep-1",
+            "dm-1",
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_domain_mask_remove_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/domain_masks/dm-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "domain-mask",
+            "remove",
+            "ep-1",
+            "dm-1",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_request_filter_remove_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/request_filters/rf-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "request-filter",
+            "remove",
+            "ep-1",
+            "rf-1",
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_request_filter_remove_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/security/request_filters/rf-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "request-filter",
+            "remove",
+            "ep-1",
+            "rf-1",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_ip_header_remove_with_yes() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/ip_custom_header"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "ip-header",
+            "remove",
+            "ep-1",
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_ip_header_remove_without_yes_sends_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/v0/endpoints/ep-1/ip_custom_header"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "ip-header", "remove", "ep-1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn rate_limit_delete_override_with_yes() {
     let server = MockServer::start().await;
     Mock::given(method("DELETE"))

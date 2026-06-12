@@ -36,7 +36,7 @@ pub struct Range {
     /// Start time (RFC-3339, relative like `7d`, or `now`). Omit for account-to-date.
     #[arg(long)]
     pub from: Option<String>,
-    /// End time. Omit for now.
+    /// End time. Defaults to now.
     #[arg(long)]
     pub to: Option<String>,
 }

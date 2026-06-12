@@ -16,20 +16,31 @@ use crate::retry::retrying;
 #[derive(Debug, Subcommand)]
 pub enum RateLimitCmd {
     /// Show the endpoint's current per-bucket rate limits.
-    Get { id: String },
+    Get {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Set endpoint-level rate limits (any of rps/rpm/rpd; omitted are untouched).
     Set(SetArgs),
     /// Delete a user-set rate-limit override (plan defaults can't be deleted).
-    DeleteOverride { id: String, override_id: String },
+    DeleteOverride {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        override_id: String,
+    },
 
     /// List method-level rate limiters on the endpoint.
-    MethodList { id: String },
+    MethodList {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Create a new method-level rate limiter.
     MethodCreate(MethodCreateArgs),
     /// Update an existing method-level rate limiter.
     MethodUpdate(MethodUpdateArgs),
     /// Delete a method-level rate limiter.
     MethodDelete {
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
         method_rate_limit_id: String,
     },
@@ -37,6 +48,7 @@ pub enum RateLimitCmd {
 
 #[derive(Debug, ClapArgs)]
 pub struct SetArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// Requests-per-second cap.
     #[arg(long)]
@@ -51,6 +63,7 @@ pub struct SetArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct MethodCreateArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// Interval (second/minute/hour/day).
     #[arg(long, value_parser = ["second", "minute", "hour", "day"])]
@@ -68,6 +81,7 @@ pub struct MethodCreateArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct MethodUpdateArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     pub method_rate_limit_id: String,
     #[arg(long = "method")]

@@ -39,7 +39,7 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
                 println!("{}", resp.value);
             }
         }
-        SetCmd::Ls(a) => {
+        SetCmd::List(a) => {
             let params = GetSetsParams {
                 limit: a.limit,
                 cursor: a.cursor,
@@ -86,7 +86,7 @@ pub(super) async fn set(cmd: SetCmd, ctx: Ctx) -> Result<(), CliError> {
 
 pub(super) async fn list(cmd: ListCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
-        ListCmd::Ls(a) => {
+        ListCmd::List(a) => {
             let params = GetListsParams {
                 limit: a.limit,
                 cursor: a.cursor,

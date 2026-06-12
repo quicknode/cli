@@ -26,6 +26,10 @@ use crate::output::Format;
                   to save a key the first time.",
     propagate_version = true,
     disable_help_subcommand = true,
+    // The auto-generated -h/-V land under a separate "Options" heading; we
+    // re-declare them below so they group with the other global flags.
+    disable_help_flag = true,
+    disable_version_flag = true,
     after_help = "Examples:\n  \
         qn auth login\n  \
         qn endpoint create --chain ethereum --network mainnet\n  \
@@ -87,6 +91,14 @@ pub struct Cli {
     /// All four sub-clients (admin/streams/webhooks/kv) hang off this host.
     #[arg(long, global = true, hide = true)]
     pub base_url: Option<String>,
+
+    /// Print help (see a summary with '-h').
+    #[arg(short = 'h', long, global = true, action = ArgAction::Help)]
+    pub help: Option<bool>,
+
+    /// Print version.
+    #[arg(short = 'V', long, global = true, action = ArgAction::Version)]
+    pub version: Option<bool>,
 
     #[command(subcommand)]
     pub command: Command,

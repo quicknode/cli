@@ -33,16 +33,19 @@ pub enum TeamCmd {
     /// Show team detail.
     Show {
         /// Team id (numeric).
+        #[arg(value_name = "TEAM_ID")]
         id: i64,
     },
     /// Delete a team.
     Delete {
         /// Team id (numeric).
+        #[arg(value_name = "TEAM_ID")]
         id: i64,
     },
     /// List endpoints associated with a team.
     Endpoints {
         /// Team id (numeric).
+        #[arg(value_name = "TEAM_ID")]
         id: i64,
     },
     /// Replace the set of endpoints associated with a team.
@@ -55,6 +58,7 @@ pub enum TeamCmd {
 #[derive(Debug, ClapArgs)]
 pub struct SetEndpointsArgs {
     /// Team id (numeric).
+    #[arg(value_name = "TEAM_ID")]
     pub id: i64,
     /// Endpoint ids to associate (pass each as an additional positional arg).
     pub endpoint_ids: Vec<String>,

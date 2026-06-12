@@ -138,7 +138,8 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
         404 => "not found.".to_string(),
         429 => "rate limited by the Quicknode API. Try again shortly.".to_string(),
         500..=599 => format!(
-            "Quicknode API is having issues (HTTP {code}). Try again or check status.quicknode.com."
+            "something went wrong (HTTP {code}). Please try again; if the problem persists, \
+             contact support at https://support.quicknode.com."
         ),
         _ => format!("API returned HTTP {code}."),
     };

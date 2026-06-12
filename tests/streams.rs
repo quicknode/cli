@@ -82,6 +82,46 @@ async fn create_stream_webhook_destination() {
 }
 
 #[tokio::test]
+async fn create_stream_fix_block_reorgs_accepts_bool_and_sends_int() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/streams/rest/v1/streams"))
+        .and(body_partial_json(json!({ "fix_block_reorgs": 1 })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(stream_payload("s-new")))
+        .expect(2)
+        .mount(&server)
+        .await;
+    // `true` is the documented form; bare `1` keeps working via the boolish parser.
+    for value in ["true", "1"] {
+        let out = run_qn(
+            &server.uri(),
+            &[
+                "stream",
+                "create",
+                "--name",
+                "s1",
+                "--network",
+                "ethereum-mainnet",
+                "--dataset",
+                "block",
+                "--start",
+                "100",
+                "--end",
+                "-1",
+                "--region",
+                "usa-east",
+                "--webhook",
+                "https://hook.example/x",
+                "--fix-block-reorgs",
+                value,
+            ],
+        )
+        .await;
+        assert_eq!(out.exit_code, 0, "value={value} stderr={}", out.stderr);
+    }
+}
+
+#[tokio::test]
 async fn create_stream_webhook_destination_with_gzip() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

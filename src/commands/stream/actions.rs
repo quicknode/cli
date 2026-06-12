@@ -92,7 +92,8 @@ fn build_create_params(a: CreateArgs) -> Result<CreateStreamParams, CliError> {
         status: a.status.map(Into::into),
         notification_email: a.notification_email,
         charge_min_cap: None,
-        fix_block_reorgs: a.fix_block_reorgs,
+        // The API models this as 0/1.
+        fix_block_reorgs: a.fix_block_reorgs.map(i32::from),
         elastic_batch_enabled: a.elastic_batch_enabled.unwrap_or(false),
         extra_destinations: None,
     })
