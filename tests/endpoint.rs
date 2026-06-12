@@ -487,7 +487,9 @@ async fn endpoint_security_referrer_remove_without_yes_sends_nothing() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["endpoint", "security", "referrer", "remove", "ep-1", "ref-1"],
+        &[
+            "endpoint", "security", "referrer", "remove", "ep-1", "ref-1",
+        ],
     )
     .await;
     assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
@@ -504,7 +506,9 @@ async fn endpoint_security_ip_remove_with_yes() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["endpoint", "security", "ip", "remove", "ep-1", "ip-1", "--yes"],
+        &[
+            "endpoint", "security", "ip", "remove", "ep-1", "ip-1", "--yes",
+        ],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -538,7 +542,9 @@ async fn endpoint_security_jwt_remove_with_yes() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["endpoint", "security", "jwt", "remove", "ep-1", "jwt-1", "--yes"],
+        &[
+            "endpoint", "security", "jwt", "remove", "ep-1", "jwt-1", "--yes",
+        ],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -670,7 +676,14 @@ async fn endpoint_security_ip_header_remove_with_yes() {
         .await;
     let out = run_qn(
         &server.uri(),
-        &["endpoint", "security", "ip-header", "remove", "ep-1", "--yes"],
+        &[
+            "endpoint",
+            "security",
+            "ip-header",
+            "remove",
+            "ep-1",
+            "--yes",
+        ],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
