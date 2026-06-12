@@ -205,6 +205,61 @@ async fn endpoint_logs_table_includes_error_code() {
 }
 
 #[tokio::test]
+async fn team_show_lists_members_and_pending_invites() {
+    let body = serde_json::json!({
+        "data": {
+            "id": 7,
+            "name": "core",
+            "default_role": "viewer",
+            "members_count": 2,
+            "users": [
+                {
+                    "id": 1,
+                    "full_name": "Alice Example",
+                    "email": "alice@example.com",
+                    "role": "admin",
+                    "status": "active",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "photo_url": null
+                },
+                {
+                    "id": 2,
+                    "full_name": null,
+                    "email": "bob@example.com",
+                    "role": "viewer",
+                    "status": "active",
+                    "created_at": null,
+                    "photo_url": null
+                }
+            ],
+            "pending_invites": [
+                {
+                    "id": 3,
+                    "full_name": null,
+                    "email": "carol@example.com",
+                    "role": "viewer",
+                    "status": "pending",
+                    "created_at": null,
+                    "photo_url": null
+                }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout("/v0/teams/7", body, &["team", "show", "7"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn team_show_without_members_renders_fields_only() {
+    let body = serde_json::json!({
+        "data": { "id": 7, "name": "core", "default_role": null }
+    });
+    let out = table_stdout("/v0/teams/7", body, &["team", "show", "7"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     let body = serde_json::json!({
         "data": {
