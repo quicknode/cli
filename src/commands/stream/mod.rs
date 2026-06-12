@@ -131,9 +131,9 @@ pub struct CreateArgs {
     /// dataset_batch_size (defaults to 1).
     #[arg(long)]
     pub batch_size: Option<i64>,
-    /// fix_block_reorgs (0/1).
-    #[arg(long)]
-    pub fix_block_reorgs: Option<i32>,
+    /// Fix block reorgs (true/false).
+    #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
+    pub fix_block_reorgs: Option<bool>,
     /// elastic_batch_enabled.
     #[arg(long)]
     pub elastic_batch_enabled: Option<bool>,
