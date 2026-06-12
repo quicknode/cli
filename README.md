@@ -31,7 +31,7 @@ error: null
 
 Pick the recommended path for your platform. Other channels are listed under [Alternatives](#alternatives).
 
-### Homebrew (macOS, Linux)
+### Homebrew (macOS)
 
 ```sh
 brew install quicknode/tap/qn
@@ -110,15 +110,8 @@ You will need a Quicknode API key to get started. Once you have that, you can ru
    env var is set. The same layout applies on Windows:
    `%USERPROFILE%\.config\qn\config.toml`. Managed by `qn auth login`.
 
-There is deliberately **no environment-variable key source**: a key left
-exported in a shell is invisible state that outlives the session it was set
-for, and makes it far too easy to run a destructive command against the wrong
-account. For CI, write a config file and point `--config-file` at it (or pass
-`--api-key` from your secret store).
-
 If no source matches, `qn` exits with code 4 and tells you to run
-`qn auth login`. Regular commands never prompt — only `qn auth login` does.
-This keeps scripts and CI deterministic.
+`qn auth login`.
 
 ```sh
 qn auth login      # prompts for the key, writes it to ~/.config/qn/config.toml
@@ -252,13 +245,10 @@ qn completions powershell > qn.ps1
 
 ## Configuration via environment
 
-`qn` reads no API credentials from the environment (see
-[Authentication](#authentication) for why). The conventional variables are
-honored: `NO_COLOR` and `TERM=dumb` disable color, and
-`XDG_CONFIG_HOME`/`HOME` (`USERPROFILE` on Windows) locate the default
-config file. The CLI hands the
-key to the SDK explicitly; it does not read the SDK's `QN_SDK__*` environment
-namespace.
+The conventional variables are honored: `NO_COLOR` and `TERM=dumb` disable color, 
+and `XDG_CONFIG_HOME`/`HOME` (`USERPROFILE` on Windows) locate the default
+config file. The CLI hands the key to the Quicknode SDK explicitly; it does 
+not read the SDK's `QN_SDK__*` environment namespace.
 
 The hidden `--base-url <URL>` flag overrides the API host for all four
 sub-clients at once (used for integration tests and on-prem mirrors).
