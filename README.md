@@ -245,9 +245,9 @@ qn completions powershell > qn.ps1
 
 ## Configuration via environment
 
-The conventional variables are honored: `NO_COLOR` and `TERM=dumb` disable color, 
+The conventional variables are honored: `NO_COLOR` and `TERM=dumb` disable color,
 and `XDG_CONFIG_HOME`/`HOME` (`USERPROFILE` on Windows) locate the default
-config file. The CLI hands the key to the Quicknode SDK explicitly; it does 
+config file. The CLI hands the key to the Quicknode SDK explicitly; it does
 not read the SDK's `QN_SDK__*` environment namespace.
 
 The hidden `--base-url <URL>` flag overrides the API host for all four
