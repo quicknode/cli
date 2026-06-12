@@ -43,22 +43,35 @@ pub enum EndpointCmd {
     /// Create a new endpoint on a chain/network.
     Create(CreateArgs),
     /// Show full details for a single endpoint.
-    Show { id: String },
+    Show {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Update an endpoint's label.
     Update(UpdateArgs),
     /// Archive an endpoint (irreversible from the CLI).
     Archive(ArchiveArgs),
     /// Pause an endpoint (stops accepting requests).
-    Pause { id: String },
+    Pause {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Resume a paused endpoint.
-    Resume { id: String },
+    Resume {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Show the HTTP and WebSocket URLs for an endpoint.
-    Urls { id: String },
+    Urls {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Fetch request logs for an endpoint.
     Logs(LogsArgs),
     /// Fetch a single request log's full request/response payloads.
     LogDetails {
         /// Endpoint id.
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
         /// Request id (UUID from the logs listing).
         request_id: String,
@@ -66,9 +79,15 @@ pub enum EndpointCmd {
     /// Fetch metric series for an endpoint.
     Metrics(MetricsArgs),
     /// Enable multichain on an endpoint.
-    EnableMultichain { id: String },
+    EnableMultichain {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Disable multichain on an endpoint.
-    DisableMultichain { id: String },
+    DisableMultichain {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
 
     /// Manage endpoint tags (per-endpoint add/remove and account-wide list/rename/delete).
     #[command(subcommand, visible_alias = "tags")]
@@ -140,6 +159,7 @@ pub struct CreateArgs {
 #[derive(Debug, ClapArgs)]
 pub struct UpdateArgs {
     /// Endpoint id.
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// New label.
     #[arg(long)]
@@ -149,12 +169,14 @@ pub struct UpdateArgs {
 #[derive(Debug, ClapArgs)]
 pub struct ArchiveArgs {
     /// Endpoint id.
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
 }
 
 #[derive(Debug, ClapArgs)]
 pub struct LogsArgs {
     /// Endpoint id.
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// Start of the window (RFC-3339, relative duration like `1h`, or `now`).
     #[arg(long)]
@@ -176,6 +198,7 @@ pub struct LogsArgs {
 #[derive(Debug, ClapArgs)]
 pub struct MetricsArgs {
     /// Endpoint id.
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// Metric name (e.g. `method_calls_over_time`, `response_status_breakdown`).
     #[arg(long)]

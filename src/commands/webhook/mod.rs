@@ -28,7 +28,10 @@ pub enum WebhookCmd {
     #[command(visible_alias = "ls")]
     List(ListArgs),
     /// Show a single webhook.
-    Show { id: String },
+    Show {
+        #[arg(value_name = "WEBHOOK_ID")]
+        id: String,
+    },
     /// Create a webhook from a filter template.
     Create(Box<CreateArgs>),
     /// Update name/email/destination on a webhook (without changing the template).
@@ -36,11 +39,17 @@ pub enum WebhookCmd {
     /// Update the template arguments on a webhook (and optionally other fields).
     UpdateTemplate(Box<UpdateTemplateArgs>),
     /// Delete a webhook.
-    Delete { id: String },
+    Delete {
+        #[arg(value_name = "WEBHOOK_ID")]
+        id: String,
+    },
     /// Activate a webhook (resume delivery).
     Activate(ActivateArgs),
     /// Pause a webhook.
-    Pause { id: String },
+    Pause {
+        #[arg(value_name = "WEBHOOK_ID")]
+        id: String,
+    },
     /// Count of currently enabled webhooks.
     EnabledCount,
 }
@@ -112,6 +121,7 @@ pub struct CreateArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct UpdateArgs {
+    #[arg(value_name = "WEBHOOK_ID")]
     pub id: String,
     #[arg(long)]
     pub name: Option<String>,
@@ -128,6 +138,7 @@ pub struct UpdateArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct UpdateTemplateArgs {
+    #[arg(value_name = "WEBHOOK_ID")]
     pub id: String,
     /// New filter template (same flags as `create`).
     #[arg(long, value_enum)]
@@ -160,6 +171,7 @@ pub struct UpdateTemplateArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct ActivateArgs {
+    #[arg(value_name = "WEBHOOK_ID")]
     pub id: String,
     /// Where to resume from.
     #[arg(long, value_enum, default_value = "latest")]

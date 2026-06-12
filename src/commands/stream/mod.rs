@@ -39,15 +39,27 @@ pub enum StreamCmd {
     /// Create a stream (webhook destination). For non-webhook destinations, use --stream-config-file.
     Create(Box<CreateArgs>),
     /// Show a stream's full configuration and current state.
-    Show { id: String },
+    Show {
+        #[arg(value_name = "STREAM_ID")]
+        id: String,
+    },
     /// Update editable fields on a stream.
     Update(UpdateArgs),
     /// Delete a stream.
-    Delete { id: String },
+    Delete {
+        #[arg(value_name = "STREAM_ID")]
+        id: String,
+    },
     /// Activate (resume) a stream.
-    Activate { id: String },
+    Activate {
+        #[arg(value_name = "STREAM_ID")]
+        id: String,
+    },
     /// Pause a stream.
-    Pause { id: String },
+    Pause {
+        #[arg(value_name = "STREAM_ID")]
+        id: String,
+    },
     /// Run a filter against a block without creating a stream.
     TestFilter(TestFilterArgs),
     /// Count of currently enabled streams.
@@ -150,6 +162,7 @@ pub struct CreateArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct UpdateArgs {
+    #[arg(value_name = "STREAM_ID")]
     pub id: String,
     #[arg(long)]
     pub name: Option<String>,

@@ -22,11 +22,13 @@ pub enum SecurityCmd {
     /// Show the endpoint's full security configuration (tokens, referrers, IPs, ...).
     Show {
         /// Endpoint id.
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
     },
     /// List the security feature toggles and their current state.
     Options {
         /// Endpoint id.
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
     },
     /// Enable/disable individual security feature toggles.
@@ -72,6 +74,7 @@ impl Toggle {
 
 #[derive(Debug, ClapArgs)]
 pub struct SetOptionsArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     #[arg(long, value_enum)]
     pub tokens: Option<Toggle>,
@@ -96,25 +99,48 @@ pub struct SetOptionsArgs {
 #[derive(Debug, Subcommand)]
 pub enum TokenCmd {
     /// Generate a new auth token.
-    Create { id: String },
+    Create {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
     /// Delete an auth token.
-    Delete { id: String, token_id: String },
+    Delete {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        token_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum ReferrerCmd {
     /// Whitelist a referrer URL or domain.
-    Add { id: String, referrer: String },
+    Add {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        referrer: String,
+    },
     /// Remove a referrer.
-    Remove { id: String, referrer_id: String },
+    Remove {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        referrer_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum IpCmd {
     /// Whitelist an IP address.
-    Add { id: String, ip: String },
+    Add {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        ip: String,
+    },
     /// Remove an IP.
-    Remove { id: String, ip_id: String },
+    Remove {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        ip_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -122,11 +148,16 @@ pub enum JwtCmd {
     /// Configure JWT validation. Supply the PEM public key inline or via --public-key-file.
     Add(JwtAddArgs),
     /// Remove a JWT configuration.
-    Remove { id: String, jwt_id: String },
+    Remove {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        jwt_id: String,
+    },
 }
 
 #[derive(Debug, ClapArgs)]
 pub struct JwtAddArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// PEM public key string.
     #[arg(long)]
@@ -145,9 +176,17 @@ pub struct JwtAddArgs {
 #[derive(Debug, Subcommand)]
 pub enum DomainMaskCmd {
     /// Add a custom domain mask.
-    Add { id: String, domain: String },
+    Add {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        domain: String,
+    },
     /// Remove a domain mask.
-    Remove { id: String, domain_mask_id: String },
+    Remove {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        domain_mask_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -158,6 +197,7 @@ pub enum RequestFilterCmd {
     Update(RequestFilterUpdateArgs),
     /// Remove a request filter.
     Remove {
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
         request_filter_id: String,
     },
@@ -165,6 +205,7 @@ pub enum RequestFilterCmd {
 
 #[derive(Debug, ClapArgs)]
 pub struct RequestFilterCreateArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     /// RPC method to whitelist; pass --method multiple times or use --methods comma-list.
     #[arg(long = "method")]
@@ -176,6 +217,7 @@ pub struct RequestFilterCreateArgs {
 
 #[derive(Debug, ClapArgs)]
 pub struct RequestFilterUpdateArgs {
+    #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
     pub request_filter_id: String,
     #[arg(long = "method")]
@@ -187,9 +229,16 @@ pub struct RequestFilterUpdateArgs {
 #[derive(Debug, Subcommand)]
 pub enum IpHeaderCmd {
     /// Set the custom header used to identify the client IP.
-    Set { id: String, header_name: String },
+    Set {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+        header_name: String,
+    },
     /// Remove the custom IP header configuration.
-    Remove { id: String },
+    Remove {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
 }
 
 pub async fn run(cmd: SecurityCmd, ctx: Ctx) -> Result<(), CliError> {
@@ -349,10 +398,7 @@ async fn jwt(cmd: JwtCmd, ctx: Ctx) -> Result<(), CliError> {
             ctx.out.note(&format!("✓ Added JWT on {}", a.id));
         }
         JwtCmd::Remove { id, jwt_id } => {
-            confirm_mild(
-                &ctx,
-                &format!("Remove JWT {jwt_id} from endpoint {id}?"),
-            )?;
+            confirm_mild(&ctx, &format!("Remove JWT {jwt_id} from endpoint {id}?"))?;
             ctx.sdk.admin.delete_jwt(&id, &jwt_id).await?;
             ctx.out.note(&format!("✓ Removed JWT {jwt_id} on {id}"));
         }

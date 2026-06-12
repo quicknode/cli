@@ -34,6 +34,7 @@ pub enum TagCmd {
     /// Tag an endpoint. Creates the tag on the account if missing.
     Add {
         /// Endpoint id.
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
         /// Tag label.
         label: String,
@@ -41,6 +42,7 @@ pub enum TagCmd {
     /// Remove a tag from an endpoint. `tag_id` is the numeric tag id from `qn endpoint tag list`.
     Remove {
         /// Endpoint id.
+        #[arg(value_name = "ENDPOINT_ID")]
         id: String,
         /// Tag id (string).
         tag_id: String,
