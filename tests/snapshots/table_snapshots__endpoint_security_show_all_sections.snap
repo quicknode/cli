@@ -1,0 +1,37 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+OPTION            ENABLED    
+tokens            ✓          
+jwts              ✓          
+domain_masks      ✓          
+ips               ✓          
+referrers         ✓          
+request_filters   ✓          
+ip_custom_header  x-real-ip  
+
+TOKENS (2)
+ID     TOKEN  
+tok-1  0xabc  
+tok-2  0xdef  
+
+JWTS (1)
+ID     NAME  KID    
+jwt-1  ci    kid-1  
+
+REFERRERS (1)
+ID     REFERRER                 
+ref-1  https://app.example.com  
+
+DOMAIN_MASKS (1)
+ID    DOMAIN         
+dm-1  *.example.com  
+
+IPS (1)
+ID    IP           
+ip-1  203.0.113.7  
+
+REQUEST_FILTERS (1)
+ID    METHODS                    
+rf-1  eth_blockNumber, eth_call

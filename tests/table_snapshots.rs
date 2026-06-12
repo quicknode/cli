@@ -90,6 +90,83 @@ async fn endpoint_show_full_table() {
 }
 
 #[tokio::test]
+async fn endpoint_security_show_all_sections() {
+    let body = serde_json::json!({
+        "data": {
+            "options": {
+                "tokens": true,
+                "jwts": true,
+                "domainMasks": true,
+                "ips": true,
+                "referrers": true,
+                "requestFilters": true,
+                "ipCustomHeader": { "value": "x-real-ip" }
+            },
+            "tokens": [
+                { "id": "tok-1", "token": "0xabc" },
+                { "id": "tok-2", "token": "0xdef" }
+            ],
+            "jwts": [
+                { "id": "jwt-1", "public_key": "pk", "kid": "kid-1", "name": "ci" }
+            ],
+            "referrers": [
+                { "id": "ref-1", "referrer": "https://app.example.com" }
+            ],
+            "domain_masks": [
+                { "id": "dm-1", "domain": "*.example.com" }
+            ],
+            "ips": [
+                { "id": "ip-1", "ip": "203.0.113.7" }
+            ],
+            "request_filters": [
+                { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security",
+        body,
+        &["endpoint", "security", "show", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_show_single_token_omits_empty_sections() {
+    let body = serde_json::json!({
+        "data": {
+            "options": {
+                "tokens": true,
+                "jwts": false,
+                "domainMasks": false,
+                "ips": false,
+                "referrers": false,
+                "requestFilters": false,
+                "ipCustomHeader": { "value": null }
+            },
+            "tokens": [
+                { "id": "tok-1", "token": "0xabc" }
+            ],
+            "jwts": null,
+            "referrers": null,
+            "domain_masks": null,
+            "ips": null,
+            "request_filters": null
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security",
+        body,
+        &["endpoint", "security", "show", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     let body = serde_json::json!({
         "data": {

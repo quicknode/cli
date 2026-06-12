@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::output::{bool_cell, new_table, opt_cell, set_header_bold, write_table, Render};
 use crate::retry::retrying;
 
 #[derive(Debug, Subcommand)]
@@ -458,72 +458,114 @@ impl Render for SecurityShowView {
                 return Ok(());
             }
         };
+        let opts = data.options.as_ref();
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["FEATURE", "COUNT", "DETAIL"]);
-        let tokens = data.tokens.as_deref().unwrap_or(&[]);
+        set_header_bold(&mut t, ctx, vec!["OPTION", "ENABLED"]);
         t.add_row(vec![
             Cell::new("tokens"),
-            Cell::new(tokens.len()),
-            Cell::new(""),
+            bool_cell(opts.and_then(|o| o.tokens)),
         ]);
-        let referrers = data.referrers.as_deref().unwrap_or(&[]);
-        t.add_row(vec![
-            Cell::new("referrers"),
-            Cell::new(referrers.len()),
-            Cell::new(
-                referrers
-                    .iter()
-                    .filter_map(|r| r.referrer.clone())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-        ]);
-        let ips = data.ips.as_deref().unwrap_or(&[]);
-        t.add_row(vec![
-            Cell::new("ips"),
-            Cell::new(ips.len()),
-            Cell::new(
-                ips.iter()
-                    .map(|i| i.ip.clone())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-        ]);
-        let jwts = data.jwts.as_deref().unwrap_or(&[]);
         t.add_row(vec![
             Cell::new("jwts"),
-            Cell::new(jwts.len()),
-            Cell::new(""),
+            bool_cell(opts.and_then(|o| o.jwts)),
         ]);
-        let masks = data.domain_masks.as_deref().unwrap_or(&[]);
         t.add_row(vec![
             Cell::new("domain_masks"),
-            Cell::new(masks.len()),
-            Cell::new(
-                masks
-                    .iter()
-                    .map(|d| d.domain.clone())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
+            bool_cell(opts.and_then(|o| o.domain_masks)),
         ]);
-        let filters = data.request_filters.as_deref().unwrap_or(&[]);
+        t.add_row(vec![Cell::new("ips"), bool_cell(opts.and_then(|o| o.ips))]);
+        t.add_row(vec![
+            Cell::new("referrers"),
+            bool_cell(opts.and_then(|o| o.referrers)),
+        ]);
         t.add_row(vec![
             Cell::new("request_filters"),
-            Cell::new(filters.len()),
-            Cell::new(""),
+            bool_cell(opts.and_then(|o| o.request_filters)),
         ]);
-        let ip_header = data
-            .options
-            .as_ref()
+        let ip_header = opts
             .and_then(|o| o.ip_custom_header.as_ref())
             .and_then(|h| h.value.clone());
-        t.add_row(vec![
-            Cell::new("ip_custom_header"),
-            opt_cell(&ip_header),
-            Cell::new(""),
-        ]);
-        write_table(w, &t)
+        t.add_row(vec![Cell::new("ip_custom_header"), opt_cell(&ip_header)]);
+        write_table(w, &t)?;
+
+        // One section per configured item list; lists with no items render
+        // no section so the common single-feature case stays compact.
+        let section = |w: &mut dyn std::io::Write,
+                       title: &str,
+                       headers: Vec<&str>,
+                       rows: Vec<Vec<Cell>>|
+         -> std::io::Result<()> {
+            if rows.is_empty() {
+                return Ok(());
+            }
+            writeln!(w)?;
+            writeln!(w, "{} ({})", title, rows.len())?;
+            let mut t = new_table(ctx);
+            set_header_bold(&mut t, ctx, headers);
+            for row in rows {
+                t.add_row(row);
+            }
+            write_table(w, &t)
+        };
+
+        let tokens = data.tokens.as_deref().unwrap_or(&[]);
+        section(
+            w,
+            "TOKENS",
+            vec!["ID", "TOKEN"],
+            tokens
+                .iter()
+                .map(|t| vec![Cell::new(&t.id), Cell::new(&t.token)])
+                .collect(),
+        )?;
+        let jwts = data.jwts.as_deref().unwrap_or(&[]);
+        section(
+            w,
+            "JWTS",
+            vec!["ID", "NAME", "KID"],
+            jwts.iter()
+                .map(|j| vec![Cell::new(&j.id), Cell::new(&j.name), Cell::new(&j.kid)])
+                .collect(),
+        )?;
+        let referrers = data.referrers.as_deref().unwrap_or(&[]);
+        section(
+            w,
+            "REFERRERS",
+            vec!["ID", "REFERRER"],
+            referrers
+                .iter()
+                .map(|r| vec![Cell::new(&r.id), opt_cell(&r.referrer)])
+                .collect(),
+        )?;
+        let masks = data.domain_masks.as_deref().unwrap_or(&[]);
+        section(
+            w,
+            "DOMAIN_MASKS",
+            vec!["ID", "DOMAIN"],
+            masks
+                .iter()
+                .map(|d| vec![Cell::new(&d.id), Cell::new(&d.domain)])
+                .collect(),
+        )?;
+        let ips = data.ips.as_deref().unwrap_or(&[]);
+        section(
+            w,
+            "IPS",
+            vec!["ID", "IP"],
+            ips.iter()
+                .map(|i| vec![Cell::new(&i.id), Cell::new(&i.ip)])
+                .collect(),
+        )?;
+        let filters = data.request_filters.as_deref().unwrap_or(&[]);
+        section(
+            w,
+            "REQUEST_FILTERS",
+            vec!["ID", "METHODS"],
+            filters
+                .iter()
+                .map(|f| vec![Cell::new(&f.id), Cell::new(f.method.join(", "))])
+                .collect(),
+        )
     }
 }
 
