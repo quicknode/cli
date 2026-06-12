@@ -487,86 +487,95 @@ impl Render for SecurityShowView {
             .and_then(|h| h.value.clone());
         t.add_row(vec![Cell::new("ip_custom_header"), opt_cell(&ip_header)]);
         write_table(w, &t)?;
-
-        // One section per configured item list; lists with no items render
-        // no section so the common single-feature case stays compact.
-        let section = |w: &mut dyn std::io::Write,
-                       title: &str,
-                       headers: Vec<&str>,
-                       rows: Vec<Vec<Cell>>|
-         -> std::io::Result<()> {
-            if rows.is_empty() {
-                return Ok(());
-            }
-            writeln!(w)?;
-            writeln!(w, "{} ({})", title, rows.len())?;
-            let mut t = new_table(ctx);
-            set_header_bold(&mut t, ctx, headers);
-            for row in rows {
-                t.add_row(row);
-            }
-            write_table(w, &t)
-        };
-
-        let tokens = data.tokens.as_deref().unwrap_or(&[]);
-        section(
-            w,
-            "TOKENS",
-            vec!["ID", "TOKEN"],
-            tokens
-                .iter()
-                .map(|t| vec![Cell::new(&t.id), Cell::new(&t.token)])
-                .collect(),
-        )?;
-        let jwts = data.jwts.as_deref().unwrap_or(&[]);
-        section(
-            w,
-            "JWTS",
-            vec!["ID", "NAME", "KID"],
-            jwts.iter()
-                .map(|j| vec![Cell::new(&j.id), Cell::new(&j.name), Cell::new(&j.kid)])
-                .collect(),
-        )?;
-        let referrers = data.referrers.as_deref().unwrap_or(&[]);
-        section(
-            w,
-            "REFERRERS",
-            vec!["ID", "REFERRER"],
-            referrers
-                .iter()
-                .map(|r| vec![Cell::new(&r.id), opt_cell(&r.referrer)])
-                .collect(),
-        )?;
-        let masks = data.domain_masks.as_deref().unwrap_or(&[]);
-        section(
-            w,
-            "DOMAIN_MASKS",
-            vec!["ID", "DOMAIN"],
-            masks
-                .iter()
-                .map(|d| vec![Cell::new(&d.id), Cell::new(&d.domain)])
-                .collect(),
-        )?;
-        let ips = data.ips.as_deref().unwrap_or(&[]);
-        section(
-            w,
-            "IPS",
-            vec!["ID", "IP"],
-            ips.iter()
-                .map(|i| vec![Cell::new(&i.id), Cell::new(&i.ip)])
-                .collect(),
-        )?;
-        let filters = data.request_filters.as_deref().unwrap_or(&[]);
-        section(
-            w,
-            "REQUEST_FILTERS",
-            vec!["ID", "METHODS"],
-            filters
-                .iter()
-                .map(|f| vec![Cell::new(&f.id), Cell::new(f.method.join(", "))])
-                .collect(),
-        )
+        security_item_sections(w, ctx, data)
     }
+}
+
+/// Renders one titled table per configured security item list (TOKENS, JWTS,
+/// ...). Lists with no items render no section so lightly-configured
+/// endpoints stay compact. Shared between `endpoint security show` and
+/// `endpoint show`.
+pub(crate) fn security_item_sections(
+    w: &mut dyn std::io::Write,
+    ctx: &crate::output::OutputCtx,
+    data: &quicknode_sdk::admin::EndpointSecurity,
+) -> std::io::Result<()> {
+    let section = |w: &mut dyn std::io::Write,
+                   title: &str,
+                   headers: Vec<&str>,
+                   rows: Vec<Vec<Cell>>|
+     -> std::io::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        writeln!(w)?;
+        writeln!(w, "{} ({})", title, rows.len())?;
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, headers);
+        for row in rows {
+            t.add_row(row);
+        }
+        write_table(w, &t)
+    };
+
+    let tokens = data.tokens.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "TOKENS",
+        vec!["ID", "TOKEN"],
+        tokens
+            .iter()
+            .map(|t| vec![Cell::new(&t.id), Cell::new(&t.token)])
+            .collect(),
+    )?;
+    let jwts = data.jwts.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "JWTS",
+        vec!["ID", "NAME", "KID"],
+        jwts.iter()
+            .map(|j| vec![Cell::new(&j.id), Cell::new(&j.name), Cell::new(&j.kid)])
+            .collect(),
+    )?;
+    let referrers = data.referrers.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "REFERRERS",
+        vec!["ID", "REFERRER"],
+        referrers
+            .iter()
+            .map(|r| vec![Cell::new(&r.id), opt_cell(&r.referrer)])
+            .collect(),
+    )?;
+    let masks = data.domain_masks.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "DOMAIN_MASKS",
+        vec!["ID", "DOMAIN"],
+        masks
+            .iter()
+            .map(|d| vec![Cell::new(&d.id), Cell::new(&d.domain)])
+            .collect(),
+    )?;
+    let ips = data.ips.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "IPS",
+        vec!["ID", "IP"],
+        ips.iter()
+            .map(|i| vec![Cell::new(&i.id), Cell::new(&i.ip)])
+            .collect(),
+    )?;
+    let filters = data.request_filters.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "REQUEST_FILTERS",
+        vec!["ID", "METHODS"],
+        filters
+            .iter()
+            .map(|f| vec![Cell::new(&f.id), Cell::new(f.method.join(", "))])
+            .collect(),
+    )
 }
 
 #[derive(Serialize)]

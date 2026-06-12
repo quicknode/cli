@@ -62,8 +62,8 @@ async fn endpoint_show_full_table() {
                     "domainMasks": false,
                     "ips": false,
                     "referrers": false,
-                    "requestFilters": false,
-                    "ipCustomHeader": { "value": null }
+                    "requestFilters": true,
+                    "ipCustomHeader": { "value": "x-real-ip" }
                 },
                 "tokens": [
                     { "id": "tok-1", "token": "0xabc" }
@@ -72,7 +72,9 @@ async fn endpoint_show_full_table() {
                 "referrers": null,
                 "domain_masks": null,
                 "ips": null,
-                "request_filters": null
+                "request_filters": [
+                    { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] }
+                ]
             },
             "rate_limits": {
                 "rate_limit_by_ip": false,

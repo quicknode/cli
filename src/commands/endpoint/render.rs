@@ -190,7 +190,11 @@ impl Render for SingleEndpointView {
             t.add_row(vec![Cell::new("rate_limits.rpm"), opt_cell(&rl.rpm)]);
             t.add_row(vec![Cell::new("rate_limits.rpd"), opt_cell(&rl.rpd)]);
         }
-        write_table(w, &t)
+        write_table(w, &t)?;
+        if let Some(sec) = &e.security {
+            super::security::security_item_sections(w, ctx, sec)?;
+        }
+        Ok(())
     }
 }
 
