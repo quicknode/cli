@@ -28,7 +28,8 @@ pub struct AccountArgs {
     /// Period.
     #[arg(long, value_parser = ["hour", "day", "week", "month"])]
     pub period: String,
-    /// Metric name.
+    /// Metric name (e.g. `method_calls_over_time`, `metered_endpoint_data_over_time`,
+    /// `metered_endpoint_credits_over_time`, `credits_over_time`).
     #[arg(long)]
     pub metric: String,
     /// Percentile (for latency metrics).
@@ -44,7 +45,8 @@ pub struct EndpointArgs {
     /// Period.
     #[arg(long, value_parser = ["hour", "day", "week", "month"])]
     pub period: String,
-    /// Metric name.
+    /// Metric name (e.g. `method_calls_over_time`, `metered_endpoint_data_over_time`,
+    /// `metered_endpoint_credits_over_time`, `credits_over_time`, `response_status_breakdown`).
     #[arg(long)]
     pub metric: String,
 }

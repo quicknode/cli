@@ -200,7 +200,8 @@ pub struct MetricsArgs {
     /// Endpoint id.
     #[arg(value_name = "ENDPOINT_ID")]
     pub id: String,
-    /// Metric name (e.g. `method_calls_over_time`, `response_status_breakdown`).
+    /// Metric name (e.g. `method_calls_over_time`, `metered_endpoint_data_over_time`,
+    /// `metered_endpoint_credits_over_time`, `credits_over_time`, `response_status_breakdown`).
     #[arg(long)]
     pub metric: String,
     /// Period (`hour`, `day`, `week`, `month`).
