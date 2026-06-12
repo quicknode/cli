@@ -260,6 +260,35 @@ async fn team_show_without_members_renders_fields_only() {
 }
 
 #[tokio::test]
+async fn billing_payments_table_includes_status_and_marketplace() {
+    let body = serde_json::json!({
+        "data": {
+            "payments": [
+                {
+                    "amount": "49.00",
+                    "card_last_4": "4242",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "currency": "usd",
+                    "status": "succeeded",
+                    "marketplace_amount": "9.00"
+                },
+                {
+                    "amount": "49.00",
+                    "card_last_4": null,
+                    "created_at": "2026-02-01T00:00:00Z",
+                    "currency": "usd",
+                    "status": "failed",
+                    "marketplace_amount": null
+                }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout("/v0/billing/payments", body, &["billing", "payments"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     let body = serde_json::json!({
         "data": {

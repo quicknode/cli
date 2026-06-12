@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+CREATED               AMOUNT  CURRENCY  STATUS     CARD  MARKETPLACE  
+2026-01-01T00:00:00Z  49.00   usd       succeeded  4242  9.00         
+2026-02-01T00:00:00Z  49.00   usd       failed     —     —

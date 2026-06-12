@@ -100,13 +100,26 @@ impl Render for PaymentsView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["CREATED", "AMOUNT", "CURRENCY", "CARD"]);
+        set_header_bold(
+            &mut t,
+            ctx,
+            vec![
+                "CREATED",
+                "AMOUNT",
+                "CURRENCY",
+                "STATUS",
+                "CARD",
+                "MARKETPLACE",
+            ],
+        );
         for p in &data.payments {
             t.add_row(vec![
                 Cell::new(&p.created_at),
                 Cell::new(&p.amount),
                 Cell::new(&p.currency),
+                Cell::new(&p.status),
                 opt_cell(&p.card_last_4),
+                opt_cell(&p.marketplace_amount),
             ]);
         }
         write_table(w, &t)
