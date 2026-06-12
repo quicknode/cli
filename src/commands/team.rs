@@ -282,9 +282,10 @@ impl Render for TeamDetailView {
             writeln!(w)?;
             writeln!(w, "{} ({})", title, users.len())?;
             let mut t = new_table(ctx);
-            set_header_bold(&mut t, ctx, vec!["EMAIL", "NAME", "ROLE", "STATUS"]);
+            set_header_bold(&mut t, ctx, vec!["ID", "EMAIL", "NAME", "ROLE", "STATUS"]);
             for u in users {
                 t.add_row(vec![
+                    Cell::new(u.id),
                     Cell::new(&u.email),
                     opt_cell(&u.full_name),
                     opt_cell(&u.role),

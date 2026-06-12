@@ -9,10 +9,10 @@ default_role   viewer
 members_count  2       
 
 MEMBERS (2)
-EMAIL              NAME           ROLE    STATUS  
-alice@example.com  Alice Example  admin   active  
-bob@example.com    —              viewer  active  
+ID  EMAIL              NAME           ROLE    STATUS  
+1   alice@example.com  Alice Example  admin   active  
+2   bob@example.com    —              viewer  active  
 
 PENDING_INVITES (1)
-EMAIL              NAME  ROLE    STATUS   
-carol@example.com  —     viewer  pending
+ID  EMAIL              NAME  ROLE    STATUS   
+3   carol@example.com  —     viewer  pending
