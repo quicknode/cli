@@ -421,6 +421,220 @@ async fn endpoint_security_token_create() {
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
+fn security_options_payload(option: &str, status: &str) -> serde_json::Value {
+    json!({
+        "data": [{ "option": option, "status": status, "value": null }],
+        "error": null,
+    })
+}
+
+#[tokio::test]
+async fn endpoint_security_referrer_add_warns_when_option_disabled() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/referrers"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/ep-1/security_options"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(security_options_payload("referrers", "disabled")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "referrer", "add", "ep-1", "foo.com"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_referrer_add_skips_options_check_when_quiet() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/referrers"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/ep-1/security_options"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--quiet", "endpoint", "security", "referrer", "add", "ep-1", "foo.com",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_referrer_add_succeeds_when_options_check_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/referrers"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/ep-1/security_options"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "referrer", "add", "ep-1", "foo.com"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_domain_mask_add_checks_options() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/domain_masks"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/ep-1/security_options"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(security_options_payload("domainMasks", "enabled")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "domain-mask",
+            "add",
+            "ep-1",
+            "*.example.com",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+/// Subprocess test: the post-add warning lands on stderr with the exact
+/// enable command when the governing option is disabled.
+#[tokio::test]
+async fn security_referrer_add_disabled_option_warning_on_stderr() {
+    use assert_cmd::Command;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/referrers"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/ep-1/security_options"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(security_options_payload("referrers", "disabled")),
+        )
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("qn")
+        .unwrap()
+        .env_remove("HOME")
+        .env("HOME", std::env::temp_dir())
+        .args([
+            "--api-key",
+            "test",
+            "--base-url",
+            &server.uri(),
+            "--no-input",
+            "endpoint",
+            "security",
+            "referrer",
+            "add",
+            "ep-1",
+            "foo.com",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr={stderr}");
+    assert!(
+        stderr.contains("security option is disabled"),
+        "stderr missing warning:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("qn endpoint security set-options --referrers enabled ep-1"),
+        "stderr missing enable hint:\n{stderr}"
+    );
+}
+
+/// Subprocess test: no warning when the governing option is enabled.
+#[tokio::test]
+async fn security_referrer_add_enabled_option_no_warning_on_stderr() {
+    use assert_cmd::Command;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/referrers"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/ep-1/security_options"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(security_options_payload("referrers", "enabled")),
+        )
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("qn")
+        .unwrap()
+        .env_remove("HOME")
+        .env("HOME", std::env::temp_dir())
+        .args([
+            "--api-key",
+            "test",
+            "--base-url",
+            &server.uri(),
+            "--no-input",
+            "endpoint",
+            "security",
+            "referrer",
+            "add",
+            "ep-1",
+            "foo.com",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr={stderr}");
+    assert!(
+        stderr.contains("✓ Whitelisted referrer"),
+        "stderr missing success note:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains('⚠'),
+        "stderr unexpectedly contains a warning:\n{stderr}"
+    );
+}
+
 #[tokio::test]
 async fn endpoint_security_token_delete_with_yes() {
     let server = MockServer::start().await;
