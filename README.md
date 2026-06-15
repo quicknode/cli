@@ -46,13 +46,19 @@ scoop install quicknode/qn
 
 ### `.deb` (Debian, Ubuntu)
 
-Each GitHub release attaches `qn_<VERSION>_amd64.deb` and `qn_<VERSION>_arm64.deb`. Check your architecture with `dpkg --print-architecture`, then grab the matching file from the [latest release page](https://github.com/quicknode/cli/releases/latest):
+Each GitHub release attaches a `.deb` per architecture. These canonical URLs always point at the latest release — check your architecture with `dpkg --print-architecture` and pick the matching one:
 
 ```sh
-# replace <VERSION> with the version on the release page, e.g. 0.1.8
-curl -LO https://github.com/quicknode/cli/releases/download/v<VERSION>/qn_<VERSION>_amd64.deb
-sudo apt install ./qn_<VERSION>_amd64.deb
+# amd64 (Intel/AMD)
+curl -LO https://github.com/quicknode/cli/releases/latest/download/qn_amd64.deb
+sudo apt install ./qn_amd64.deb
+
+# arm64
+curl -LO https://github.com/quicknode/cli/releases/latest/download/qn_arm64.deb
+sudo apt install ./qn_arm64.deb
 ```
+
+Versioned files (`qn_<VERSION>_amd64.deb`) are also attached to each release for pinning.
 
 ### Arch Linux (AUR)
 
