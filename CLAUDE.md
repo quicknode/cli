@@ -183,6 +183,7 @@ For TTY-specific behavior (color, prompting), run `./target/debug/qn ...` in a r
 - **No secrets in logs**: API keys never go to stdout. `auth whoami` redacts to `****<last4>`. Never `dbg!` or `println!` an `SdkFullConfig`.
 - **`ctx.out.note`** for ✓ state-change confirmations on stderr (auto-suppressed by `--quiet`). The actual resource still goes to stdout via `emit` so pipelines see it.
 - **Don't read `std::env` inside command bodies.** Resolve through `Ctx` / `GlobalArgs`. Tests need to set behavior without mutating process env (which races across parallel tests). `OutputCtx::detect_with` is the testable form of `OutputCtx::detect` for this reason.
+- **Keep `src/commands/agent/context.md` in sync.** It's the embedded guide `qn agent context` prints, and it makes version-stamped claims about the command surface. Any change to the command catalog (the `Command` enum or a module's verbs), exit codes (`errors.rs`), gating (`confirm.rs`), retry behavior (`retry.rs`), the output contract (`output.rs` `Format`), or auth/config resolution (`config.rs`) **must** update `context.md` in the same commit. The version stamp is automatic (`CARGO_PKG_VERSION`); the prose accuracy is not — that's this rule's job.
 
 ## Anti-patterns we already hit and fixed
 

@@ -95,6 +95,10 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
     config::save_api_key(&path, &key)?;
     if !global.quiet {
         let _ = writeln!(std::io::stderr(), "✓ Saved API key to {}", path.display());
+        let _ = writeln!(
+            std::io::stderr(),
+            "Tip: run 'qn agent context' for a machine-readable usage guide."
+        );
     }
     Ok(())
 }

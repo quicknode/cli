@@ -3,6 +3,7 @@
 //! One module per top-level noun. Each exposes `Args` (the clap-derived
 //! argument struct) and `run(args, ctx) -> Result<(), CliError>`.
 
+pub mod agent;
 pub mod auth;
 pub mod billing;
 pub mod chain;
