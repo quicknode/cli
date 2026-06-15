@@ -35,7 +35,8 @@ use crate::output::Format;
         qn endpoint create --chain ethereum --network mainnet\n  \
         qn endpoint list -o json\n  \
         qn endpoint logs ep-1234 --from 1h\n  \
-        qn chain list",
+        qn chain list\n\n\
+        AI agents: run 'qn agent context' for a machine-readable usage guide.",
     // Group the global flags under their own heading in every subcommand's
     // --help, so command-specific flags surface first under "Options".
     next_help_heading = "Global options"
@@ -108,6 +109,9 @@ pub struct Cli {
 pub enum Command {
     /// Manage CLI authentication (API key).
     Auth(commands::auth::Args),
+
+    /// Resources for AI agents and automated tools.
+    Agent(commands::agent::Args),
 
     /// Manage RPC endpoints on your account.
     #[command(visible_alias = "endpoints")]
@@ -186,6 +190,7 @@ impl Cli {
                 Ok(())
             }
             Command::Auth(args) => commands::auth::run(args, global).await,
+            Command::Agent(args) => commands::agent::run(args, global).await,
             Command::Endpoint(args) => {
                 commands::endpoint::run(args, Ctx::from_global(global)?).await
             }
