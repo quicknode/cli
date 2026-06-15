@@ -6,8 +6,14 @@ name: Publish Debian packages
 # Packages the prebuilt linux-gnu binaries from the GitHub release
 # into .deb files (amd64 + arm64) and uploads each as a release asset.
 #
-# v1 ships .deb files attached to releases — users install via
-# `dpkg -i ./qn_X.Y.Z_amd64.deb` or `apt install ./qn_X.Y.Z_amd64.deb`.
+# Each arch is uploaded under two names: a versioned one
+# (`qn_X.Y.Z_amd64.deb`) for pinning/archival, and a version-less one
+# (`qn_amd64.deb`) that gives a stable canonical URL via GitHub's
+# `releases/latest/download/<file>` redirect. The version lives in the
+# package's control metadata, so apt/dpkg install the right version
+# regardless of the filename.
+#
+# Users install via `apt install ./qn_amd64.deb` (or the versioned file).
 # A hosted apt repo (aptly/reprepro + GPG) is out of scope.
 on:
   workflow_call:
@@ -86,6 +92,10 @@ jobs:
           cargo deb --no-build --no-strip \
             --target ${{ matrix.rust_target }} \
             --output qn_${{ steps.meta.outputs.version }}_${{ matrix.deb_arch }}.deb
+          # Canonical copy with a version-less name, so
+          # releases/latest/download/qn_<arch>.deb stays a stable URL.
+          cp qn_${{ steps.meta.outputs.version }}_${{ matrix.deb_arch }}.deb \
+            qn_${{ matrix.deb_arch }}.deb
 
       - name: Upload .deb to release
         env:
@@ -93,4 +103,5 @@ jobs:
         run: |
           gh release upload "${{ steps.meta.outputs.tag }}" \
             qn_${{ steps.meta.outputs.version }}_${{ matrix.deb_arch }}.deb \
+            qn_${{ matrix.deb_arch }}.deb \
             --clobber
