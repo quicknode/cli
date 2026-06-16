@@ -333,6 +333,19 @@ pub fn write_pagination_footer(
     }
 }
 
+/// Wraps `text` in an OSC 8 terminal-hyperlink escape so a clean visible
+/// label can point at a different target URL. Terminals that support OSC 8
+/// (iTerm2, kitty, wezterm, recent gnome-terminal, …) render `text` as a
+/// clickable link to `url`; terminals that don't simply show `text`.
+///
+/// The two arguments are intentionally separate: callers can display one URL
+/// and link to another (e.g. a clean URL with the click target carrying query
+/// params). Suppression is the caller's job — when hyperlinks aren't wanted,
+/// print the plain text instead of calling this.
+pub(crate) fn osc8_link(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +528,30 @@ mod tests {
         assert!(Format::Toon.is_structured());
         assert!(!Format::Table.is_structured());
         assert!(!Format::Md.is_structured());
+    }
+
+    #[test]
+    fn osc8_link_frames_text_with_escape_and_target() {
+        let s = osc8_link("https://example.com/x", "click here");
+        assert_eq!(
+            s,
+            "\x1b]8;;https://example.com/x\x1b\\click here\x1b]8;;\x1b\\"
+        );
+    }
+
+    #[test]
+    fn osc8_link_display_text_can_differ_from_target() {
+        // The visible label stays clean while the click target carries params.
+        let clean = "https://www.quicknode.com/signup";
+        let tagged = "https://www.quicknode.com/signup?utm_source=cli";
+        let s = osc8_link(tagged, clean);
+        // The target appears in the escape; the visible label is the clean URL.
+        assert!(s.contains(tagged), "target missing: {s:?}");
+        assert!(s.contains(clean), "label missing: {s:?}");
+        // The clean label is what sits between the two escape sequences.
+        let label_start = s.find("\x1b\\").unwrap() + 2;
+        let label_end = s[label_start..].find('\x1b').unwrap() + label_start;
+        assert_eq!(&s[label_start..label_end], clean);
     }
 
     #[test]

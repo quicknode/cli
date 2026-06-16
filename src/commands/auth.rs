@@ -14,6 +14,43 @@ use quicknode_sdk::QuicknodeSdk;
 use crate::config::{self, KeySource};
 use crate::context::{sdk_config, GlobalArgs};
 use crate::errors::CliError;
+use crate::output::osc8_link;
+
+/// The signup URL shown to the user in the login welcome. Stays clean.
+const SIGNUP_URL: &str = "https://www.quicknode.com/signup";
+
+/// The click target for the signup link: the clean URL plus CLI attribution
+/// params. Carried via an OSC 8 hyperlink so it never appears in the visible
+/// text. Must keep [`SIGNUP_URL`] as its prefix (asserted in tests).
+const SIGNUP_URL_TAGGED: &str =
+    "https://www.quicknode.com/signup?utm_source=cli&utm_medium=cli&utm_campaign=clams";
+
+/// Whether to emit an OSC 8 hyperlink for the signup line. Mirrors the
+/// color-suppression rules in [`crate::output::OutputCtx::detect_with`]: a
+/// hyperlink is an ANSI escape, so the same opt-outs apply. The welcome only
+/// prints on the interactive TTY path, so no TTY check is needed here. Taking
+/// the flag + env values as arguments keeps this testable without mutating
+/// process env (which races across parallel tests).
+fn hyperlinks_enabled(
+    no_color: bool,
+    no_color_env: Option<std::ffi::OsString>,
+    term_env: Option<String>,
+) -> bool {
+    !no_color
+        && no_color_env.map_or(true, |v| v.is_empty())
+        && term_env.map_or(true, |t| t != "dumb")
+}
+
+/// The signup line for the login welcome: an OSC 8 hyperlink (clean visible
+/// text, tagged target) when `hyperlinks` is true, otherwise the plain clean
+/// URL with no params.
+fn signup_link(hyperlinks: bool) -> String {
+    if hyperlinks {
+        osc8_link(SIGNUP_URL_TAGGED, SIGNUP_URL)
+    } else {
+        SIGNUP_URL.to_string()
+    }
+}
 
 #[derive(Debug, ClapArgs)]
 #[command(after_help = "Examples:\n  \
@@ -71,13 +108,19 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
                 ));
             }
             if !global.quiet {
+                let signup = signup_link(hyperlinks_enabled(
+                    global.no_color,
+                    std::env::var_os("NO_COLOR"),
+                    std::env::var("TERM").ok(),
+                ));
                 let _ = writeln!(
                     std::io::stderr(),
                     "Welcome! The qn CLI uses a Quicknode API key to manage your account.\n\
                      Your key is stored locally in {}.\n\n  \
                      Get an API key:  https://dashboard.quicknode.com/api-keys\n  \
-                     Need an account? https://www.quicknode.com/signup\n",
-                    path.display()
+                     Need an account? {}\n",
+                    path.display(),
+                    signup
                 );
             }
             config::prompt_for_api_key()?
@@ -182,7 +225,7 @@ fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validate
 
 #[cfg(test)]
 mod tests {
-    use super::redact;
+    use super::{hyperlinks_enabled, redact, signup_link, SIGNUP_URL, SIGNUP_URL_TAGGED};
 
     #[test]
     fn redact_short_keys_returns_just_stars() {
@@ -202,5 +245,65 @@ mod tests {
         let out = redact("αβγδεζη");
         assert_eq!(out.chars().count(), 8); // "****" + last 4 chars
         assert!(out.ends_with("δεζη"));
+    }
+
+    #[test]
+    fn tagged_signup_url_extends_clean_url_with_utm_params() {
+        // The visible label and the click target must not drift apart: the
+        // tagged target is the clean URL plus the CLI attribution params.
+        assert!(
+            SIGNUP_URL_TAGGED.starts_with(SIGNUP_URL),
+            "tagged URL must keep the clean URL as its prefix"
+        );
+        assert!(SIGNUP_URL_TAGGED.contains("utm_source=cli"));
+        assert!(SIGNUP_URL_TAGGED.contains("utm_medium=cli"));
+        assert!(SIGNUP_URL_TAGGED.contains("utm_campaign=clams"));
+        // The clean URL carries no params — nothing is shown to the user.
+        assert!(!SIGNUP_URL.contains('?'));
+    }
+
+    #[test]
+    fn signup_link_hyperlink_hides_params_in_visible_text() {
+        let link = signup_link(true);
+        // Visible label is the clean URL; the params live in the escape target.
+        assert!(link.contains(SIGNUP_URL_TAGGED), "target missing");
+        assert!(link.contains('\x1b'), "expected OSC 8 escape");
+    }
+
+    #[test]
+    fn signup_link_plain_is_clean_url_without_params() {
+        let link = signup_link(false);
+        assert_eq!(link, SIGNUP_URL);
+        assert!(!link.contains('\x1b'));
+        assert!(!link.contains("utm_"));
+    }
+
+    #[test]
+    fn hyperlinks_disabled_by_no_color_flag() {
+        assert!(!hyperlinks_enabled(true, None, None));
+    }
+
+    #[test]
+    fn hyperlinks_disabled_by_no_color_env() {
+        assert!(!hyperlinks_enabled(false, Some("1".into()), None));
+    }
+
+    #[test]
+    fn empty_no_color_env_does_not_disable_hyperlinks() {
+        assert!(hyperlinks_enabled(false, Some("".into()), None));
+    }
+
+    #[test]
+    fn hyperlinks_disabled_by_term_dumb() {
+        assert!(!hyperlinks_enabled(false, None, Some("dumb".into())));
+    }
+
+    #[test]
+    fn hyperlinks_enabled_with_no_overrides() {
+        assert!(hyperlinks_enabled(
+            false,
+            None,
+            Some("xterm-256color".into())
+        ));
     }
 }
