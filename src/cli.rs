@@ -145,7 +145,39 @@ pub enum Command {
     /// Manage the Quicknode KV store (sets and lists).
     Kv(commands::kv::Args),
 
-    /// Generate shell completions.
+    /// Generate shell completion scripts.
+    ///
+    /// When installing qn through a package manager, it's possible that no
+    /// additional shell configuration is necessary to gain completion support.
+    /// Homebrew and distro packages place the script for you.
+    ///
+    /// If you need to set up completions manually, follow the instructions
+    /// below. The exact config file locations might vary based on your system.
+    /// Make sure to restart your shell before testing whether completions are
+    /// working.
+    #[command(after_long_help = "### bash\n\n  \
+        First, ensure that you install `bash-completion` using your package manager.\n\n  \
+        After, add this to your `~/.bashrc`:\n\n      \
+        eval \"$(qn completions bash)\"\n\n\
+        ### zsh\n\n  \
+        Homebrew already creates this `_qn` file for you on `brew install`. To\n  \
+        set it up manually, generate the script into a directory on your\n  \
+        `$fpath` (Apple Silicon shown; Intel brew uses\n  \
+        `/usr/local/share/zsh/site-functions`):\n\n      \
+        qn completions zsh > /opt/homebrew/share/zsh/site-functions/_qn\n\n  \
+        Ensure that the following is present in your `~/.zshrc`:\n\n      \
+        autoload -U compinit\n      \
+        compinit\n\n  \
+        See the zsh manual for details:\n  \
+        https://zsh.sourceforge.io/Doc/Release/Completion-System.html\n\n\
+        ### fish\n\n  \
+        Generate a `qn.fish` completion script:\n\n      \
+        qn completions fish > ~/.config/fish/completions/qn.fish\n\n\
+        ### PowerShell\n\n  \
+        Add the following line to your profile script (`$PROFILE`):\n\n      \
+        qn completions powershell | Out-String | Invoke-Expression\n\n  \
+        Or append the generated script so it loads each session:\n\n      \
+        qn completions powershell >> $PROFILE")]
     Completions {
         /// Shell to generate completions for.
         #[arg(value_enum)]
