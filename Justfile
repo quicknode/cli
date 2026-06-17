@@ -49,6 +49,13 @@ release-cargo-publish:
 # "homebrew" to publish-jobs in dist-workspace.toml, the cargo-dist
 # workflow takes over, and this recipe becomes a manual-recovery fallback.
 #
+# cargo-dist's homebrew template installs the binary but doesn't wire up
+# shell completions, so this recipe patches the generated formula to run
+# `qn completions <shell>` at install time. The patch is idempotent and
+# hard-fails if cargo-dist's install-method anchor goes missing — if you
+# hit that error, the template changed and the patch below needs updating.
+# When homebrew publishing is automated in CI, this patch moves with it.
+#
 # Usage: just release-update-homebrew-tap 0.1.0 ~/qn/homebrew-tap
 #
 # Precondition: tap_path is a clean local clone of quicknode/homebrew-tap
@@ -78,6 +85,30 @@ release-update-homebrew-tap version tap_path:
   mkdir -p Formula
   cp /tmp/qn.rb Formula/qn.rb
   rm /tmp/qn.rb
+  # Wire up shell completions: cargo-dist's formula installs the binary but
+  # not completions. `qn completions <shell>` is a pure local generator (no
+  # key, no network), so it's safe to run during `brew install`. Insert the
+  # helper after the `install_binary_aliases!` anchor in the generated
+  # install method. Idempotent (skip if already present); fail loud if the
+  # anchor is gone so a cargo-dist template change can't silently drop it.
+  if ! grep -q 'generate_completions_from_executable' Formula/qn.rb; then
+    if ! grep -q '^[[:space:]]*install_binary_aliases!$' Formula/qn.rb; then
+      echo "Error: 'install_binary_aliases!' anchor not found in generated qn.rb." >&2
+      echo "cargo-dist's formula template may have changed; the completions" >&2
+      echo "patch in release-update-homebrew-tap needs updating." >&2
+      exit 1
+    fi
+    awk '
+      { print }
+      /^[[:space:]]*install_binary_aliases!$/ {
+        match($0, /^[[:space:]]*/)
+        indent = substr($0, 1, RLENGTH)
+        print ""
+        print indent "generate_completions_from_executable(bin/\"qn\", \"completions\")"
+      }
+    ' Formula/qn.rb > Formula/qn.rb.tmp
+    mv Formula/qn.rb.tmp Formula/qn.rb
+  fi
   git add Formula/qn.rb
   if git diff --cached --quiet; then
     echo "Formula/qn.rb is already at v{{version}} on main. Nothing to do."

@@ -37,6 +37,9 @@ Pick the recommended path for your platform. Other channels are listed under [Al
 brew install quicknode/tap/qn
 ```
 
+Homebrew installs shell completions automatically — open a new shell after
+install (zsh users may need one `compinit` refresh) and `qn <TAB>` works.
+
 ### Scoop (Windows)
 
 ```powershell
@@ -241,6 +244,9 @@ qn team list
 ```
 
 ## Shell completions
+
+Homebrew installs completions automatically (see above). For other install
+methods, generate them yourself:
 
 ```sh
 qn completions zsh  > ~/.zfunc/_qn        # zsh
