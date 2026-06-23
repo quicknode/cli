@@ -1,6 +1,6 @@
 [package]
 name = "quicknode-cli"
-version = "0.1.12"
+version = "0.2.0"
 edition = "2021"
 description = "Command-line interface for the Quicknode SDK"
 license = "MIT"
