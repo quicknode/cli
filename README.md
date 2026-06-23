@@ -38,7 +38,11 @@ brew install quicknode/tap/qn
 ```
 
 Homebrew installs shell completions automatically — open a new shell after
-install (zsh users may need one `compinit` refresh) and `qn <TAB>` works.
+install and `qn <TAB>` works. zsh users may have one extra requirement: zsh only
+autoloads a completion when its directory is on `$fpath` before `compinit` runs
+at shell startup. If `qn <TAB>` lists files instead of subcommands, the Homebrew
+completions directory is missing from `$fpath` — see the
+[zsh completion-system manual](https://zsh.sourceforge.io/Doc/Release/Completion-System.html).
 
 ### Scoop (Windows)
 
@@ -245,14 +249,57 @@ qn team list
 
 ## Shell completions
 
-Homebrew installs completions automatically (see above). For other install
-methods, generate them yourself:
+When installing qn through a package manager, it's possible that no additional
+shell configuration is necessary — Homebrew (see above) and distro packages
+place the script for you. To set up completions manually, follow the
+instructions below (`qn completions --help` prints the same). Exact config file
+locations may vary by system; restart your shell before testing.
+
+### bash
+
+Install `bash-completion` with your package manager, then add to `~/.bashrc`:
 
 ```sh
-qn completions zsh  > ~/.zfunc/_qn        # zsh
-qn completions bash > /etc/bash_completion.d/qn  # bash
+eval "$(qn completions bash)"
+```
+
+### zsh
+
+Homebrew already creates this `_qn` file for you on `brew install`. To set it up
+manually, generate the script into a directory on your `$fpath` (Apple Silicon
+shown; Intel brew uses `/usr/local/share/zsh/site-functions`):
+
+```sh
+qn completions zsh > /opt/homebrew/share/zsh/site-functions/_qn
+```
+
+Ensure that the following is present in your `~/.zshrc`:
+
+```sh
+autoload -U compinit
+compinit
+```
+
+See the [zsh completion-system manual](https://zsh.sourceforge.io/Doc/Release/Completion-System.html) for details.
+
+### fish
+
+```sh
 qn completions fish > ~/.config/fish/completions/qn.fish
-qn completions powershell > qn.ps1
+```
+
+### PowerShell
+
+Add this line to your profile script (`$PROFILE`):
+
+```powershell
+qn completions powershell | Out-String | Invoke-Expression
+```
+
+Or append the generated script so it loads each session:
+
+```powershell
+qn completions powershell >> $PROFILE
 ```
 
 ## Configuration via environment
