@@ -167,7 +167,7 @@ pub struct JwtAddArgs {
     pub public_key_file: Option<PathBuf>,
     /// Key id (`kid`).
     #[arg(long)]
-    pub kid: Option<String>,
+    pub kid: String,
     /// Human-readable name.
     #[arg(long)]
     pub name: Option<String>,

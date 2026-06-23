@@ -3,11 +3,18 @@
 use std::path::PathBuf;
 
 use quicknode_sdk::webhooks::{
-    ActivateWebhookParams, BitcoinWalletFilterTemplate, CreateWebhookFromTemplateParams,
-    EvmAbiFilterTemplate, EvmContractEventsTemplate, EvmWalletFilterTemplate, GetWebhooksParams,
-    HyperliquidWalletEventsFilterTemplate, SolanaWalletFilterTemplate,
+    ActivateWebhookParams, BitcoinWalletFilterByListTemplate, BitcoinWalletFilterInput,
+    BitcoinWalletFilterTemplate, CreateWebhookFromTemplateParams, EvmAbiFilterByListTemplate,
+    EvmAbiFilterInput, EvmAbiFilterTemplate, EvmContractEventsByListTemplate,
+    EvmContractEventsInput, EvmContractEventsTemplate, EvmWalletFilterByListTemplate,
+    EvmWalletFilterInput, EvmWalletFilterTemplate, GetWebhooksParams,
+    HyperliquidWalletEventsFilterByListTemplate, HyperliquidWalletEventsFilterInput,
+    HyperliquidWalletEventsFilterTemplate, SolanaWalletFilterByListTemplate,
+    SolanaWalletFilterInput, SolanaWalletFilterTemplate,
+    StellarWalletTransactionsFilterByListTemplate, StellarWalletTransactionsFilterInput,
     StellarWalletTransactionsFilterTemplate, TemplateArgs, UpdateWebhookParams,
-    UpdateWebhookTemplateParams, WebhookDestinationAttributes, XrplWalletFilterTemplate,
+    UpdateWebhookTemplateParams, WebhookDestinationAttributes, XrplWalletFilterByListTemplate,
+    XrplWalletFilterInput, XrplWalletFilterTemplate,
 };
 
 use super::render::{WebhookView, WebhooksListView};
@@ -35,15 +42,19 @@ pub(super) async fn show(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 pub(super) async fn create(a: CreateArgs, ctx: Ctx) -> Result<(), CliError> {
-    let template_args = build_template_args(
-        a.template,
-        a.wallets,
-        a.accounts,
-        a.contracts,
-        a.event_hashes,
-        a.abi,
-        a.abi_file,
-    )?;
+    let template_args = build_template_args(TemplateInputs {
+        kind: a.template,
+        wallets: a.wallets,
+        accounts: a.accounts,
+        contracts: a.contracts,
+        event_hashes: a.event_hashes,
+        abi: a.abi,
+        abi_file: a.abi_file,
+        wallets_list_name: a.wallets_list_name,
+        accounts_list_name: a.accounts_list_name,
+        contracts_list_name: a.contracts_list_name,
+        event_hashes_list_name: a.event_hashes_list_name,
+    })?;
     let params = CreateWebhookFromTemplateParams {
         name: a.name,
         network: a.network,
@@ -76,11 +87,7 @@ pub(super) async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
         ));
     }
     let destination = match a.url {
-        Some(url) => Some(WebhookDestinationAttributes {
-            url,
-            security_token: a.security_token,
-            compression: a.compression,
-        }),
+        Some(url) => Some(build_destination(url, a.security_token, a.compression)?),
         None if a.security_token.is_some() || a.compression.is_some() => {
             return Err(CliError::Arg(
                 "to change destination fields, also supply --url".into(),
@@ -99,20 +106,23 @@ pub(super) async fn update(a: UpdateArgs, ctx: Ctx) -> Result<(), CliError> {
 }
 
 pub(super) async fn update_template(a: UpdateTemplateArgs, ctx: Ctx) -> Result<(), CliError> {
-    let template_args = build_template_args(
-        a.template,
-        a.wallets,
-        a.accounts,
-        a.contracts,
-        a.event_hashes,
-        a.abi,
-        a.abi_file,
-    )?;
-    let destination = a.url.map(|url| WebhookDestinationAttributes {
-        url,
-        security_token: a.security_token,
-        compression: a.compression,
-    });
+    let template_args = build_template_args(TemplateInputs {
+        kind: a.template,
+        wallets: a.wallets,
+        accounts: a.accounts,
+        contracts: a.contracts,
+        event_hashes: a.event_hashes,
+        abi: a.abi,
+        abi_file: a.abi_file,
+        wallets_list_name: a.wallets_list_name,
+        accounts_list_name: a.accounts_list_name,
+        contracts_list_name: a.contracts_list_name,
+        event_hashes_list_name: a.event_hashes_list_name,
+    })?;
+    let destination = match a.url {
+        Some(url) => Some(build_destination(url, a.security_token, a.compression)?),
+        None => None,
+    };
     let params = UpdateWebhookTemplateParams {
         name: a.name,
         notification_email: a.notification_email,
@@ -175,7 +185,9 @@ pub(super) async fn enabled_count(ctx: Ctx) -> Result<(), CliError> {
     }
 }
 
-fn build_template_args(
+/// All template-selection inputs gathered from the CLI flags. Each template
+/// reads the subset it needs; the rest stay unused for that variant.
+struct TemplateInputs {
     kind: TemplateKind,
     wallets: Vec<String>,
     accounts: Vec<String>,
@@ -183,88 +195,218 @@ fn build_template_args(
     event_hashes: Vec<String>,
     abi: Option<String>,
     abi_file: Option<PathBuf>,
-) -> Result<TemplateArgs, CliError> {
-    let event_hashes_opt = if event_hashes.is_empty() {
-        None
-    } else {
-        Some(event_hashes)
-    };
-    match kind {
-        TemplateKind::EvmWallet => {
-            require_wallets(&wallets)?;
-            Ok(TemplateArgs::EvmWalletFilter(EvmWalletFilterTemplate {
-                wallets,
-            }))
-        }
-        TemplateKind::SolanaWallet => {
-            if accounts.is_empty() {
-                return Err(CliError::Arg("supply at least one --account".into()));
+    wallets_list_name: Option<String>,
+    accounts_list_name: Option<String>,
+    contracts_list_name: Option<String>,
+    event_hashes_list_name: Option<String>,
+}
+
+/// Resolved value source for a single template field: either inline values
+/// supplied directly, or the name of a saved list to reference.
+enum FilterSource {
+    Inline(Vec<String>),
+    ByList(String),
+}
+
+fn build_template_args(t: TemplateInputs) -> Result<TemplateArgs, CliError> {
+    match t.kind {
+        TemplateKind::EvmWallet => Ok(match wallets_source(t.wallets, t.wallets_list_name)? {
+            FilterSource::Inline(wallets) => TemplateArgs::EvmWalletFilter(
+                EvmWalletFilterInput::Inline(EvmWalletFilterTemplate { wallets }),
+            ),
+            FilterSource::ByList(wallets_list_name) => TemplateArgs::EvmWalletFilter(
+                EvmWalletFilterInput::ByList(EvmWalletFilterByListTemplate { wallets_list_name }),
+            ),
+        }),
+        TemplateKind::BitcoinWallet => Ok(match wallets_source(t.wallets, t.wallets_list_name)? {
+            FilterSource::Inline(wallets) => TemplateArgs::BitcoinWalletFilter(
+                BitcoinWalletFilterInput::Inline(BitcoinWalletFilterTemplate { wallets }),
+            ),
+            FilterSource::ByList(wallets_list_name) => {
+                TemplateArgs::BitcoinWalletFilter(BitcoinWalletFilterInput::ByList(
+                    BitcoinWalletFilterByListTemplate { wallets_list_name },
+                ))
             }
-            Ok(TemplateArgs::SolanaWalletFilter(
-                SolanaWalletFilterTemplate { accounts },
-            ))
-        }
-        TemplateKind::BitcoinWallet => {
-            require_wallets(&wallets)?;
-            Ok(TemplateArgs::BitcoinWalletFilter(
-                BitcoinWalletFilterTemplate { wallets },
-            ))
-        }
-        TemplateKind::XrplWallet => {
-            require_wallets(&wallets)?;
-            Ok(TemplateArgs::XrplWalletFilter(XrplWalletFilterTemplate {
-                wallets,
-            }))
-        }
+        }),
+        TemplateKind::XrplWallet => Ok(match wallets_source(t.wallets, t.wallets_list_name)? {
+            FilterSource::Inline(wallets) => TemplateArgs::XrplWalletFilter(
+                XrplWalletFilterInput::Inline(XrplWalletFilterTemplate { wallets }),
+            ),
+            FilterSource::ByList(wallets_list_name) => TemplateArgs::XrplWalletFilter(
+                XrplWalletFilterInput::ByList(XrplWalletFilterByListTemplate { wallets_list_name }),
+            ),
+        }),
         TemplateKind::HyperliquidWalletEvents => {
-            require_wallets(&wallets)?;
-            Ok(TemplateArgs::HyperliquidWalletEventsFilter(
-                HyperliquidWalletEventsFilterTemplate { wallets },
-            ))
+            Ok(match wallets_source(t.wallets, t.wallets_list_name)? {
+                FilterSource::Inline(wallets) => TemplateArgs::HyperliquidWalletEventsFilter(
+                    HyperliquidWalletEventsFilterInput::Inline(
+                        HyperliquidWalletEventsFilterTemplate { wallets },
+                    ),
+                ),
+                FilterSource::ByList(wallets_list_name) => {
+                    TemplateArgs::HyperliquidWalletEventsFilter(
+                        HyperliquidWalletEventsFilterInput::ByList(
+                            HyperliquidWalletEventsFilterByListTemplate { wallets_list_name },
+                        ),
+                    )
+                }
+            })
         }
         TemplateKind::StellarWalletTransactions => {
-            require_wallets(&wallets)?;
-            Ok(TemplateArgs::StellarWalletTransactionsSourceAccountFilter(
-                StellarWalletTransactionsFilterTemplate { wallets },
-            ))
+            Ok(match wallets_source(t.wallets, t.wallets_list_name)? {
+                FilterSource::Inline(wallets) => {
+                    TemplateArgs::StellarWalletTransactionsSourceAccountFilter(
+                        StellarWalletTransactionsFilterInput::Inline(
+                            StellarWalletTransactionsFilterTemplate { wallets },
+                        ),
+                    )
+                }
+                FilterSource::ByList(wallets_list_name) => {
+                    TemplateArgs::StellarWalletTransactionsSourceAccountFilter(
+                        StellarWalletTransactionsFilterInput::ByList(
+                            StellarWalletTransactionsFilterByListTemplate { wallets_list_name },
+                        ),
+                    )
+                }
+            })
+        }
+        TemplateKind::SolanaWallet => {
+            let source = filter_source(
+                t.accounts,
+                t.accounts_list_name,
+                "--account",
+                "--accounts-list-name",
+            )?;
+            Ok(match source {
+                FilterSource::Inline(accounts) => TemplateArgs::SolanaWalletFilter(
+                    SolanaWalletFilterInput::Inline(SolanaWalletFilterTemplate { accounts }),
+                ),
+                FilterSource::ByList(accounts_list_name) => {
+                    TemplateArgs::SolanaWalletFilter(SolanaWalletFilterInput::ByList(
+                        SolanaWalletFilterByListTemplate { accounts_list_name },
+                    ))
+                }
+            })
         }
         TemplateKind::EvmContractEvents => {
-            if contracts.is_empty() {
-                return Err(CliError::Arg("supply at least one --contract".into()));
-            }
-            Ok(TemplateArgs::EvmContractEvents(EvmContractEventsTemplate {
-                contracts,
-                event_hashes: event_hashes_opt,
-            }))
+            let source = filter_source(
+                t.contracts,
+                t.contracts_list_name,
+                "--contract",
+                "--contracts-list-name",
+            )?;
+            Ok(match source {
+                FilterSource::Inline(contracts) => TemplateArgs::EvmContractEvents(
+                    EvmContractEventsInput::Inline(EvmContractEventsTemplate {
+                        contracts,
+                        event_hashes: t.event_hashes,
+                    }),
+                ),
+                FilterSource::ByList(contracts_list_name) => TemplateArgs::EvmContractEvents(
+                    EvmContractEventsInput::ByList(EvmContractEventsByListTemplate {
+                        contracts_list_name,
+                        event_hashes_list_name: t.event_hashes_list_name,
+                    }),
+                ),
+            })
         }
         TemplateKind::EvmAbi => {
-            if contracts.is_empty() {
-                return Err(CliError::Arg("supply at least one --contract".into()));
-            }
-            let abi_text = match (abi, abi_file) {
-                (Some(s), None) => s,
-                (None, Some(p)) => std::fs::read_to_string(&p)?,
-                (None, None) => {
-                    return Err(CliError::Arg("supply --abi or --abi-file".into()));
+            let abi_text = read_abi(t.abi, t.abi_file)?;
+            // The ABI is always inline content; only the contracts can come
+            // from a saved list, which selects the ByList variant.
+            Ok(match t.contracts_list_name {
+                Some(contracts_list_name) => {
+                    if !t.contracts.is_empty() {
+                        return Err(CliError::Arg(
+                            "supply either --contract or --contracts-list-name, not both".into(),
+                        ));
+                    }
+                    TemplateArgs::EvmAbiFilter(EvmAbiFilterInput::ByList(
+                        EvmAbiFilterByListTemplate {
+                            abi_json: abi_text,
+                            contracts_list_name: Some(contracts_list_name),
+                        },
+                    ))
                 }
-                (Some(_), Some(_)) => {
-                    return Err(CliError::Arg(
-                        "supply only one of --abi or --abi-file".into(),
-                    ));
+                None => {
+                    if t.contracts.is_empty() {
+                        return Err(CliError::Arg(
+                            "supply at least one --contract (or --contracts-list-name)".into(),
+                        ));
+                    }
+                    TemplateArgs::EvmAbiFilter(EvmAbiFilterInput::Inline(EvmAbiFilterTemplate {
+                        abi: abi_text,
+                        contracts: t.contracts,
+                    }))
                 }
-            };
-            Ok(TemplateArgs::EvmAbiFilter(EvmAbiFilterTemplate {
-                abi: abi_text,
-                contracts,
-            }))
+            })
         }
     }
 }
 
-fn require_wallets(wallets: &[String]) -> Result<(), CliError> {
-    if wallets.is_empty() {
-        Err(CliError::Arg("supply at least one --wallet".into()))
-    } else {
-        Ok(())
+/// Wallet-style templates all key off the same `--wallet` / `--wallets-list-name` pair.
+fn wallets_source(
+    wallets: Vec<String>,
+    wallets_list_name: Option<String>,
+) -> Result<FilterSource, CliError> {
+    filter_source(
+        wallets,
+        wallets_list_name,
+        "--wallet",
+        "--wallets-list-name",
+    )
+}
+
+/// Resolve an inline-values-vs-saved-list choice, rejecting "both" and "neither".
+fn filter_source(
+    inline: Vec<String>,
+    list_name: Option<String>,
+    inline_flag: &str,
+    list_flag: &str,
+) -> Result<FilterSource, CliError> {
+    match list_name {
+        Some(name) => {
+            if !inline.is_empty() {
+                return Err(CliError::Arg(format!(
+                    "supply either {inline_flag} or {list_flag}, not both"
+                )));
+            }
+            Ok(FilterSource::ByList(name))
+        }
+        None => {
+            if inline.is_empty() {
+                return Err(CliError::Arg(format!(
+                    "supply at least one {inline_flag} (or {list_flag})"
+                )));
+            }
+            Ok(FilterSource::Inline(inline))
+        }
     }
+}
+
+fn read_abi(abi: Option<String>, abi_file: Option<PathBuf>) -> Result<String, CliError> {
+    match (abi, abi_file) {
+        (Some(s), None) => Ok(s),
+        (None, Some(p)) => Ok(std::fs::read_to_string(&p)?),
+        (None, None) => Err(CliError::Arg("supply --abi or --abi-file".into())),
+        (Some(_), Some(_)) => Err(CliError::Arg(
+            "supply only one of --abi or --abi-file".into(),
+        )),
+    }
+}
+
+/// Build a destination from an explicit URL, requiring compression (the API
+/// needs a non-optional value whenever a destination is sent).
+fn build_destination(
+    url: String,
+    security_token: Option<String>,
+    compression: Option<String>,
+) -> Result<WebhookDestinationAttributes, CliError> {
+    let compression = compression
+        .ok_or_else(|| CliError::Arg("--url requires --compression (`gzip` or `none`)".into()))?;
+    Ok(WebhookDestinationAttributes {
+        url,
+        security_token,
+        compression,
+    })
 }

@@ -145,11 +145,17 @@ qn stream activate <id>
 
 ```sh
 qn webhook create --name wallet-watch --network ethereum-mainnet \
-  --url https://hook.example.com --template evm-wallet \
+  --url https://hook.example.com --compression none --template evm-wallet \
   --wallet 0xabc...                                      # → id
 qn webhook show <id>                                     # inspect before activating
 qn webhook activate <id>
 ```
+
+`--compression` (`gzip` or `none`) is required on create. Instead of inline
+values, a template can reference a saved list with the matching
+`--*-list-name` flag (e.g. `--wallets-list-name`, `--accounts-list-name`,
+`--contracts-list-name`); supply either the inline flag or the list-name flag,
+not both.
 
 **KV put / get / list:**
 

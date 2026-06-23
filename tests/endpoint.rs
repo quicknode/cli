@@ -4,7 +4,7 @@ mod common;
 
 use common::run_qn;
 use serde_json::json;
-use wiremock::matchers::{body_json, header, method, path};
+use wiremock::matchers::{body_json, body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn endpoint_payload(id: &str) -> serde_json::Value {
@@ -779,6 +779,63 @@ async fn endpoint_security_jwt_remove_without_yes_sends_nothing() {
     )
     .await;
     assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_jwt_add_with_kid() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/jwts"))
+        .and(body_partial_json(
+            json!({ "public_key": "pk", "kid": "kid-1" }),
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "jwt",
+            "add",
+            "ep-1",
+            "--public-key",
+            "pk",
+            "--kid",
+            "kid-1",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_jwt_add_requires_kid() {
+    let server = MockServer::start().await;
+    // --kid is required; the request never fires.
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/jwts"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "jwt",
+            "add",
+            "ep-1",
+            "--public-key",
+            "pk",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("kid"), "stderr={}", out.stderr);
 }
 
 #[tokio::test]
