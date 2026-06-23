@@ -90,7 +90,7 @@ pub struct CreateArgs {
     pub security_token: Option<String>,
     /// Payload compression (`gzip` or `none`).
     #[arg(long)]
-    pub compression: Option<String>,
+    pub compression: String,
     /// Optional notification email.
     #[arg(long)]
     pub notification_email: Option<String>,
@@ -117,6 +117,19 @@ pub struct CreateArgs {
     /// For abi template: path to a file with the contract ABI JSON.
     #[arg(long)]
     pub abi_file: Option<PathBuf>,
+
+    /// For wallet-style templates: reference a saved wallets list by name (instead of `--wallet`).
+    #[arg(long)]
+    pub wallets_list_name: Option<String>,
+    /// For Solana wallet template: reference a saved accounts list by name (instead of `--account`).
+    #[arg(long)]
+    pub accounts_list_name: Option<String>,
+    /// For contract-events and abi templates: reference a saved contracts list by name (instead of `--contract`).
+    #[arg(long)]
+    pub contracts_list_name: Option<String>,
+    /// For contract-events template: reference a saved event-hashes list by name.
+    #[arg(long)]
+    pub event_hashes_list_name: Option<String>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -156,6 +169,19 @@ pub struct UpdateTemplateArgs {
     #[arg(long)]
     pub abi_file: Option<PathBuf>,
 
+    /// For wallet-style templates: reference a saved wallets list by name (instead of `--wallet`).
+    #[arg(long)]
+    pub wallets_list_name: Option<String>,
+    /// For Solana wallet template: reference a saved accounts list by name (instead of `--account`).
+    #[arg(long)]
+    pub accounts_list_name: Option<String>,
+    /// For contract-events and abi templates: reference a saved contracts list by name (instead of `--contract`).
+    #[arg(long)]
+    pub contracts_list_name: Option<String>,
+    /// For contract-events template: reference a saved event-hashes list by name.
+    #[arg(long)]
+    pub event_hashes_list_name: Option<String>,
+
     /// Optionally also rename.
     #[arg(long)]
     pub name: Option<String>,
@@ -165,6 +191,7 @@ pub struct UpdateTemplateArgs {
     pub url: Option<String>,
     #[arg(long)]
     pub security_token: Option<String>,
+    /// Payload compression (`gzip` or `none`); required when `--url` is supplied.
     #[arg(long)]
     pub compression: Option<String>,
 }

@@ -41,7 +41,7 @@ async fn create_webhook_evm_wallet() {
         .and(body_partial_json(json!({
             "name": "w1",
             "network": "ethereum-mainnet",
-            "destination_attributes": { "url": "https://hook.example/x" },
+            "destination_attributes": { "url": "https://hook.example/x", "compression": "none" },
             "templateId": "evmWalletFilter",
             "templateArgs": { "wallets": ["0xabc"] }
         })))
@@ -59,6 +59,8 @@ async fn create_webhook_evm_wallet() {
             "ethereum-mainnet",
             "--url",
             "https://hook.example/x",
+            "--compression",
+            "none",
             "--template",
             "evm-wallet",
             "--wallet",
@@ -94,6 +96,8 @@ async fn create_webhook_evm_contract_events() {
             "ethereum-mainnet",
             "--url",
             "https://hook.example/y",
+            "--compression",
+            "none",
             "--template",
             "evm-contract-events",
             "--contract",
@@ -182,6 +186,8 @@ async fn webhook_create_missing_wallets_errors() {
             "ethereum-mainnet",
             "--url",
             "https://hook.example",
+            "--compression",
+            "none",
             "--template",
             "evm-wallet",
         ],
@@ -189,6 +195,147 @@ async fn webhook_create_missing_wallets_errors() {
     .await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
     assert!(out.stderr.contains("--wallet"), "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn create_webhook_by_list() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhooks/rest/v1/webhooks/template/evmWalletFilter"))
+        .and(body_partial_json(json!({
+            "destination_attributes": { "compression": "gzip" },
+            "templateId": "evmWalletFilter",
+            "templateArgs": { "walletsListName": "my-list" }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(webhook_payload("wh-l")))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "webhook",
+            "create",
+            "--name",
+            "w-list",
+            "--network",
+            "ethereum-mainnet",
+            "--url",
+            "https://hook.example/l",
+            "--compression",
+            "gzip",
+            "--template",
+            "evm-wallet",
+            "--wallets-list-name",
+            "my-list",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn create_webhook_evm_abi_by_list() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webhooks/rest/v1/webhooks/template/evmAbiFilter"))
+        .and(body_partial_json(json!({
+            "templateId": "evmAbiFilter",
+            "templateArgs": { "abiJson": "[]", "contractsListName": "my-contracts" }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(webhook_payload("wh-a")))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "webhook",
+            "create",
+            "--name",
+            "w-abi",
+            "--network",
+            "ethereum-mainnet",
+            "--url",
+            "https://hook.example/a",
+            "--compression",
+            "none",
+            "--template",
+            "evm-abi",
+            "--abi",
+            "[]",
+            "--contracts-list-name",
+            "my-contracts",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn create_webhook_inline_and_list_conflict() {
+    let server = MockServer::start().await;
+    // Supplying both inline and list-name is a client-side error; nothing fires.
+    Mock::given(method("POST"))
+        .and(path("/webhooks/rest/v1/webhooks/template/evmWalletFilter"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(webhook_payload("wh-x")))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "webhook",
+            "create",
+            "--name",
+            "w1",
+            "--network",
+            "ethereum-mainnet",
+            "--url",
+            "https://hook.example/x",
+            "--compression",
+            "none",
+            "--template",
+            "evm-wallet",
+            "--wallet",
+            "0xabc",
+            "--wallets-list-name",
+            "my-list",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("not both"), "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn create_webhook_missing_compression_errors() {
+    let server = MockServer::start().await;
+    // --compression is required; the request never fires.
+    Mock::given(method("POST"))
+        .and(path("/webhooks/rest/v1/webhooks/template/evmWalletFilter"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(webhook_payload("wh-x")))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "webhook",
+            "create",
+            "--name",
+            "w1",
+            "--network",
+            "ethereum-mainnet",
+            "--url",
+            "https://hook.example/x",
+            "--template",
+            "evm-wallet",
+            "--wallet",
+            "0xabc",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("compression"), "stderr={}", out.stderr);
 }
 
 // ---- 400 error rendering ---- //
@@ -228,6 +375,8 @@ async fn create_webhook_400_renders_bullets_with_typo_suggestion() {
             "ethereum-mainnetsds",
             "--url",
             "https://hook.example/x",
+            "--compression",
+            "none",
             "--template",
             "evm-wallet",
             "--wallet",
@@ -277,6 +426,8 @@ async fn create_webhook_400_far_typo_no_suggestion() {
             "sfjla",
             "--url",
             "https://hook.example/x",
+            "--compression",
+            "none",
             "--template",
             "evm-wallet",
             "--wallet",
