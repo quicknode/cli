@@ -170,7 +170,7 @@ pub struct JwtAddArgs {
     pub kid: String,
     /// Human-readable name.
     #[arg(long)]
-    pub name: Option<String>,
+    pub name: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -358,7 +358,7 @@ async fn referrer(cmd: ReferrerCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         ReferrerCmd::Add { id, referrer } => {
             let req = CreateReferrerRequest {
-                referrer: Some(referrer.clone()),
+                referrer: referrer.clone(),
             };
             ctx.sdk.admin.create_referrer(&id, &req).await?;
             ctx.out
@@ -381,9 +381,7 @@ async fn referrer(cmd: ReferrerCmd, ctx: Ctx) -> Result<(), CliError> {
 async fn ip(cmd: IpCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         IpCmd::Add { id, ip } => {
-            let req = CreateIpRequest {
-                ip: Some(ip.clone()),
-            };
+            let req = CreateIpRequest { ip: ip.clone() };
             ctx.sdk.admin.create_ip(&id, &req).await?;
             ctx.out.note(&format!("✓ Whitelisted IP {ip} on {id}"));
             warn_if_option_disabled(&ctx, &id, "ips", "ips", "this IP").await;
@@ -404,8 +402,8 @@ async fn jwt(cmd: JwtCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         JwtCmd::Add(a) => {
             let public_key = match (a.public_key, a.public_key_file) {
-                (Some(s), None) => Some(s),
-                (None, Some(p)) => Some(std::fs::read_to_string(&p)?),
+                (Some(s), None) => s,
+                (None, Some(p)) => std::fs::read_to_string(&p)?,
                 (None, None) => {
                     return Err(CliError::Arg(
                         "supply --public-key or --public-key-file".to_string(),
@@ -471,9 +469,7 @@ async fn request_filter(cmd: RequestFilterCmd, ctx: Ctx) -> Result<(), CliError>
             if methods.is_empty() {
                 return Err(CliError::Arg("supply at least one --method".to_string()));
             }
-            let req = CreateRequestFilterRequest {
-                method: Some(methods),
-            };
+            let req = CreateRequestFilterRequest { method: methods };
             let resp = ctx.sdk.admin.create_request_filter(&a.id, &req).await?;
             let d = resp.data.as_ref().ok_or_else(|| {
                 CliError::Format("API returned success but no data; nothing was created".into())
