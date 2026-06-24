@@ -117,6 +117,13 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
 - `kv` — `set` (put, get, list, delete, bulk) and `list` (list, get, create, append,
   contains, remove-item, update, delete)
 - `sql` — query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
+- `tooling-access` — status, enable, disable (provisions the endpoint `rpc` uses)
+- `rpc` — make a JSON-RPC call against the account's Tooling Access endpoint;
+  the session JWT is minted and refreshed automatically. `qn rpc <method> [json-params]`
+  (params is a JSON array or object, or `-` to read from stdin). On a
+  not-yet-enabled account it auto-enables with `--yes` (or prompts on a TTY).
+  Multichain: `--network <key>` targets a specific chain by its key (e.g.
+  `solana-mainnet`, `polygon`); `qn rpc --list-networks` lists the available keys.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -170,6 +177,19 @@ qn kv set put my-key my-value
 qn kv set get my-key
 qn kv set list
 ```
+
+**Make on-chain calls (no endpoint to provision):**
+
+```sh
+qn tooling-access enable --yes        # one-time; idempotent, admin role required
+qn rpc eth_blockNumber                # → "0x…" (default network)
+qn rpc eth_getBalance '["0xabc...", "latest"]'
+qn rpc --list-networks                # available network keys for this endpoint
+qn rpc getSlot --network solana-mainnet
+```
+
+`qn rpc` mints and refreshes the session JWT for you; the only one-time step is
+enabling Tooling Access (or pass `--yes` to `qn rpc` to enable on first use).
 
 ## 8. Gotchas & safety rails
 

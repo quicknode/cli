@@ -1496,6 +1496,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yml",
+ "sha2",
  "tempfile",
  "thiserror 1.0.69",
  "time",
@@ -1509,8 +1510,6 @@ dependencies = [
 [[package]]
 name = "quicknode-sdk"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23681a7c94665c8717f3f7eafb8da9080d8d2e0eeb3ea9c108eed38e30901ea9"
 dependencies = [
  "config",
  "reqwest 0.13.4",
@@ -1518,6 +1517,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
  "url",
 ]
 

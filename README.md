@@ -278,6 +278,39 @@ qn sql schema hyperliquid-core-mainnet
 Queries are read-only (SELECT) and capped at 1000 rows per request; page through
 larger result sets with `LIMIT`/`OFFSET` in the SQL.
 
+### On-chain RPC
+
+Make JSON-RPC calls with no endpoint to provision. `qn rpc` mints and refreshes a
+short-lived session JWT automatically; the only one-time step is enabling Tooling
+Access (or pass `--yes` to enable on first use).
+
+```sh
+qn tooling-access enable          # one-time; idempotent, requires an admin role
+qn tooling-access status
+
+qn rpc eth_blockNumber
+qn rpc eth_getBalance '["0xabc...", "latest"]'
+qn rpc eth_call '{"to":"0x..."}'
+echo '[...]' | qn rpc eth_call -   # read params from stdin
+
+qn rpc eth_blockNumber --yes      # auto-enable Tooling Access if needed
+
+# Multichain: the endpoint serves many chains. Target one by its network key.
+qn rpc --list-networks            # list available network keys for the endpoint
+qn rpc getSlot --network solana-mainnet
+qn rpc eth_chainId --network polygon
+```
+
+The network map is cached in `~/.config/qn/networks.toml` (per endpoint, 24h TTL),
+so `--network` calls reuse it without re-fetching. Network keys are the endpoint's
+own `multichain_urls` keys (note these can differ from chain slugs, e.g. `polygon`
+not `matic`); `--list-networks` shows the exact set.
+
+The session token is cached under `~/.config/qn/tokens.toml` (0600), scoped to the
+API key, so subsequent calls skip the mint round trip while it's valid. Results are
+schemaless JSON; `-o json|yaml|toon` controls the format (`table`/`md` fall back to
+JSON).
+
 ### Other
 
 ```sh
