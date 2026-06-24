@@ -50,9 +50,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub config_file: Option<std::path::PathBuf>,
 
-    /// Output format. `table` is the default human view; the others are
+    /// Output format. `table` is the human view; the others are
     /// pipeline-friendly serialized forms. If unset, falls back to the
-    /// `[output] format = "…"` value in ~/.config/qn/config.toml, then `table`.
+    /// `[output] format = "…"` value in ~/.config/qn/config.toml, then the
+    /// TTY-aware default: `table` when stdout is a terminal, `json` otherwise.
     #[arg(short = 'o', long = "format", global = true, value_enum)]
     pub format: Option<Format>,
 

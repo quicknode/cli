@@ -15,16 +15,42 @@ ep-1  production  active  ethereum/mainnet  shared     yes    https://ep-1.examp
 ep-2  —           paused  solana/mainnet    dedicated  no     https://ep-2.example    —
 showing 1–2 of 2
 
-# LLM-optimized TOON format (non-TTY default)
+# Piped / non-TTY output defaults to JSON
 $ qn endpoint list | cat
-data[2]{id,name,label,status,chain,network,is_dedicated,is_flat_rate,http_url,wss_url,tags,is_multichain}:
-  "ep-1","ep-1","production",active,ethereum,mainnet,false,false,"https://ep-1.example",null,"prod, eu",false
-  "ep-2","ep-2",null,paused,solana,mainnet,true,false,"https://ep-2.example",null,"",false
-pagination:
-  total: 2
-  limit: 20
-  offset: 0
-error: null
+{
+  "data": [
+    {
+      "id": "ep-1",
+      "name": "ep-1",
+      "label": "production",
+      "status": "active",
+      "chain": "ethereum",
+      "network": "mainnet",
+      "is_dedicated": false,
+      "is_flat_rate": false,
+      "http_url": "https://ep-1.example",
+      "wss_url": null,
+      "tags": ["prod", "eu"],
+      "is_multichain": false
+    },
+    {
+      "id": "ep-2",
+      "name": "ep-2",
+      "label": null,
+      "status": "paused",
+      "chain": "solana",
+      "network": "mainnet",
+      "is_dedicated": true,
+      "is_flat_rate": false,
+      "http_url": "https://ep-2.example",
+      "wss_url": null,
+      "tags": [],
+      "is_multichain": false
+    }
+  ],
+  "pagination": { "total": 2, "limit": 20, "offset": 0 },
+  "error": null
+}
 ```
 
 ## Installation
@@ -139,10 +165,10 @@ Pick a format with `--format <FMT>` (alias `-o <FMT>`):
 | `--format` | Best for |
 | --- | --- |
 | `table` | Humans on a TTY. Pretty UTF-8 tables with optional color. Default when stdout is a terminal. |
-| `json`  | Scripts and pipelines (`jq`, `gron`, …). |
+| `json`  | Scripts and pipelines (`jq`, `gron`, …). Default when stdout is **not** a terminal (piped / agent invocations). |
 | `yaml`  | Same shape as JSON, easier to skim by eye. |
 | `md`    | GitHub-flavored markdown — paste into PRs, issues, docs. |
-| `toon`  | [Token-Oriented Object Notation](https://github.com/toon-format/toon-rust) — compact serialization optimized for LLM prompts. Default when stdout is **not** a terminal (piped / agent invocations). |
+| `toon`  | [Token-Oriented Object Notation](https://github.com/toon-format/toon-rust) — compact serialization optimized for LLM prompts. |
 
 Other output flags:
 
@@ -159,7 +185,7 @@ format = "yaml"   # default --format value
 wide = true       # always show extra columns in table/md output
 ```
 
-CLI flags win over config values. Built-in defaults: `format = "table"` when stdout is a TTY, `"toon"` otherwise; `wide = false`.
+CLI flags win over config values. Built-in defaults: `format = "table"` when stdout is a TTY, `"json"` otherwise; `wide = false`.
 
 `qn` follows the [Command Line Interface Guidelines](https://clig.dev/): data on stdout, diagnostics on stderr, meaningful exit codes (0 success, 2 API error, 3 network error, 4 auth/config, 5 needs confirmation), and a documented `-h`/`--help` at every subcommand level.
 
