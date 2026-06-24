@@ -37,7 +37,7 @@ network call.
 
 ## 2. Output contract
 
-- Default format is `table` on a TTY and **`toon`** when stdout is not a TTY (piped).
+- Default format is `table` on a TTY and **`json`** when stdout is not a TTY (piped).
 - Data goes to **stdout**; diagnostics, prompts, and ✓ confirmations go to **stderr**.
 - Formats: `table`, `md`, `json`, `yaml`, `toon`. The structured forms
   (`json`/`yaml`/`toon`) always include every field — `--wide` is not needed and
@@ -169,7 +169,7 @@ qn kv set list
 
 - Mutations are never retried; re-running a failed create can double-provision (§5).
 - No account-wide wipe command exists by design (§4).
-- Piped output defaults to `toon`, not `json` (§2).
+- Piped output defaults to `json`; pass `-o toon` for the compact LLM form (§2).
 - `--base-url` overrides the API host; it exists for testing.
 - For *this* command, `-o yaml`/`-o toon`/`-o table` print Markdown (with a note on
   stderr); `-o json` produces the `{version, guide}` envelope.

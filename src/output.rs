@@ -2,7 +2,7 @@
 //!
 //! Five formats, selected by the global `--format/-o` flag. When the flag and
 //! the config file both leave the format unset, the default is TTY-aware:
-//! `table` when stdout is a terminal (interactive use), `toon` otherwise
+//! `table` when stdout is a terminal (interactive use), `json` otherwise
 //! (piped / agent invocations). See [`crate::context::GlobalArgs::resolve_output`].
 //!
 //! - `table`: comfy-table with UTF-8 borders for humans on a TTY.

@@ -21,7 +21,7 @@ pub struct GlobalArgs {
     /// (`~/.config/qn/config.toml`).
     pub config_file: Option<std::path::PathBuf>,
     /// `None` means the user didn't pass `--format`; resolve via config file
-    /// (then the TTY-aware default: `Table` on a TTY, `Toon` off) when we
+    /// (then the TTY-aware default: `Table` on a TTY, `Json` off) when we
     /// build the [`Ctx`].
     pub format: Option<Format>,
     pub wide: bool,
@@ -38,7 +38,7 @@ pub struct GlobalArgs {
 
 impl GlobalArgs {
     /// Resolve the output format: CLI flag > config file > TTY-aware default
-    /// (`Table` on a TTY, `Toon` off).
+    /// (`Table` on a TTY, `Json` off).
     /// Used by [`Ctx::from_global`] and `auth` (which doesn't build a Ctx).
     pub fn resolve_format(&self, stdout_is_tty: bool) -> Format {
         self.resolve_output(stdout_is_tty).0
@@ -47,7 +47,7 @@ impl GlobalArgs {
     /// Resolve `(format, wide)` together so we only read the config file once.
     ///
     /// For each: CLI flag > config file > built-in default. The format default
-    /// is TTY-aware: `Table` when stdout is a terminal, `Toon` otherwise (so
+    /// is TTY-aware: `Table` when stdout is a terminal, `Json` otherwise (so
     /// agents / piped callers get a structured format by default). `--wide` is
     /// purely additive — the flag sets it true; the config file can also set
     /// it true; otherwise it's false.
@@ -85,7 +85,7 @@ fn resolve_output_inner(
     let format = flag_format.or(cfg_format).unwrap_or(if stdout_is_tty {
         Format::Table
     } else {
-        Format::Toon
+        Format::Json
     });
     let wide = flag_wide || cfg_wide;
     (format, wide)
@@ -240,8 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn default_is_toon_when_stdout_is_not_a_tty() {
+    fn default_is_json_when_stdout_is_not_a_tty() {
         let (f, _) = resolve_output_inner(None, false, None, false, false);
+        assert_eq!(f, Format::Json);
+    }
+
+    #[test]
+    fn config_toon_overrides_non_tty_default() {
+        let (f, _) = resolve_output_inner(None, false, Some(Format::Toon), false, false);
         assert_eq!(f, Format::Toon);
     }
 
