@@ -746,6 +746,50 @@ async fn endpoint_security_ip_remove_without_yes_sends_nothing() {
 }
 
 #[tokio::test]
+async fn endpoint_security_ip_add() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/ips"))
+        .and(body_json(json!({ "ip": "1.2.3.4" })))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["endpoint", "security", "ip", "add", "ep-1", "1.2.3.4"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_request_filter_create() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/request_filters"))
+        .and(body_json(json!({ "method": ["eth_call"] })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "id": "rf-1" } })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "request-filter",
+            "create",
+            "ep-1",
+            "--method",
+            "eth_call",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn endpoint_security_jwt_remove_with_yes() {
     let server = MockServer::start().await;
     Mock::given(method("DELETE"))
@@ -787,7 +831,7 @@ async fn endpoint_security_jwt_add_with_kid() {
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/jwts"))
         .and(body_partial_json(
-            json!({ "public_key": "pk", "kid": "kid-1" }),
+            json!({ "public_key": "pk", "kid": "kid-1", "name": "my-jwt" }),
         ))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
@@ -805,10 +849,41 @@ async fn endpoint_security_jwt_add_with_kid() {
             "pk",
             "--kid",
             "kid-1",
+            "--name",
+            "my-jwt",
         ],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn endpoint_security_jwt_add_requires_name() {
+    let server = MockServer::start().await;
+    // --name is required (quicknode-sdk 0.4); the request never fires.
+    Mock::given(method("POST"))
+        .and(path("/v0/endpoints/ep-1/security/jwts"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "endpoint",
+            "security",
+            "jwt",
+            "add",
+            "ep-1",
+            "--public-key",
+            "pk",
+            "--kid",
+            "kid-1",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("name"), "stderr={}", out.stderr);
 }
 
 #[tokio::test]
