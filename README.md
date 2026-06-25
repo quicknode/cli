@@ -260,6 +260,24 @@ qn kv list contains allowlist 0xabc
 qn kv list get allowlist
 ```
 
+### SQL
+
+```sh
+# Run a query inline, from a file, or from stdin (--file -)
+qn sql query "SELECT action_type, user FROM hyperliquid_system_actions ORDER BY block_time DESC LIMIT 3" --cluster-id hyperliquid-core-mainnet
+qn sql query --file query.sql --cluster-id hyperliquid-core-mainnet
+cat query.sql | qn sql query --file - --cluster-id hyperliquid-core-mainnet
+
+# Pipe rows into jq (stats print to stderr, so stdout stays clean)
+qn sql query "SELECT 1" --cluster-id hyperliquid-core-mainnet -o json | jq '.data'
+
+# Inspect a cluster's tables, columns, and types
+qn sql schema hyperliquid-core-mainnet
+```
+
+Queries are read-only (SELECT) and capped at 1000 rows per request; page through
+larger result sets with `LIMIT`/`OFFSET` in the SQL.
+
 ### Other
 
 ```sh

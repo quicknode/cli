@@ -146,6 +146,9 @@ pub enum Command {
     /// Manage the Quicknode KV store (sets and lists).
     Kv(commands::kv::Args),
 
+    /// Run SQL queries and inspect cluster schemas.
+    Sql(commands::sql::Args),
+
     /// Generate shell completion scripts.
     ///
     /// When installing qn through a package manager, it's possible that no
@@ -235,6 +238,7 @@ impl Cli {
             Command::Stream(args) => commands::stream::run(args, Ctx::from_global(global)?).await,
             Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
             Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
+            Command::Sql(args) => commands::sql::run(args, Ctx::from_global(global)?).await,
         }
     }
 }

@@ -1,0 +1,18 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+Hyperliquid (HyperCore) · hyperliquid-core-mainnet · 2 tables
+
+hyperliquid_agents (SharedReplacingMergeTree, 3322574607 rows)
+  partition: toYYYYMM(snapshot_time)
+  sorting: block_number, agent
+COLUMN        TYPE             
+agent         FixedString(42)  
+block_number  UInt64           
+
+hyperliquid_agents_view (View, 0 rows)
+  partition: —
+  sorting: —
+COLUMN  TYPE             
+agent   FixedString(42)

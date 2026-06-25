@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ACTION_TYPE            BLOCK    USER   
+SystemSpotSendAction   1234567  0xabc  
+SystemSendAssetAction  1234566  —

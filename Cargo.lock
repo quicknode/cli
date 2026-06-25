@@ -1508,9 +1508,9 @@ dependencies = [
 
 [[package]]
 name = "quicknode-sdk"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2493a477a7bbc09fadf8f0eef58d3407b8739465b30b40af5e27e5d37cbf40f1"
+checksum = "721404747d5a5ecc4d0d8c655d0ca1c776f7394cc03609db42bf921bebacafae"
 dependencies = [
  "config",
  "reqwest 0.13.4",

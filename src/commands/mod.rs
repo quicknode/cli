@@ -10,6 +10,7 @@ pub mod chain;
 pub mod endpoint;
 pub mod kv;
 pub mod metrics;
+pub mod sql;
 pub mod stream;
 pub mod team;
 pub mod usage;
