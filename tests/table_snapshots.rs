@@ -363,3 +363,103 @@ async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     let out = table_stdout("/v0/endpoints/ep-1", body, &["endpoint", "show", "ep-1"]).await;
     insta::assert_snapshot!(out);
 }
+
+/// Like [`table_stdout`] but mounts the body at `POST url_path`, for commands
+/// that issue a POST (e.g. `sql query`).
+async fn table_stdout_post(url_path: &str, body: serde_json::Value, args: &[&str]) -> String {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(url_path))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let uri = server.uri();
+    let mut argv = vec![
+        "--api-key",
+        "test",
+        "--base-url",
+        uri.as_str(),
+        "--no-input",
+        "--format",
+        "table",
+    ];
+    argv.extend(args);
+    let output = assert_cmd::Command::cargo_bin("qn")
+        .unwrap()
+        .env_remove("HOME")
+        .env("HOME", std::env::temp_dir())
+        .args(&argv)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn sql_query_table_renders_unquoted_scalars_and_null_dash() {
+    let body = serde_json::json!({
+        "meta": [
+            {"name": "action_type", "type": "LowCardinality(String)"},
+            {"name": "block", "type": "UInt64"},
+            {"name": "user", "type": "Nullable(String)"}
+        ],
+        "data": [
+            {"action_type": "SystemSpotSendAction", "block": 1234567, "user": "0xabc"},
+            {"action_type": "SystemSendAssetAction", "block": 1234566, "user": null}
+        ],
+        "rows": 2,
+        "rows_before_limit_at_least": 2,
+        "statistics": {"elapsed": 0.0067, "rows_read": 31341, "bytes_read": 1247178},
+        "credits": 135
+    });
+    let out = table_stdout_post(
+        "/sql/rest/v1/query",
+        body,
+        &["sql", "query", "SELECT 1", "--cluster-id", "c1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn sql_schema_table_renders_nested_table_blocks() {
+    let body = serde_json::json!({
+        "chain": "Hyperliquid (HyperCore)",
+        "cluster_id": "hyperliquid-core-mainnet",
+        "tables": [
+            {
+                "name": "hyperliquid_agents",
+                "engine": "SharedReplacingMergeTree",
+                "total_rows": 3322574607i64,
+                "partition_key": "toYYYYMM(snapshot_time)",
+                "sorting_key": ["block_number", "agent"],
+                "columns": [
+                    {"name": "agent", "type": "FixedString(42)"},
+                    {"name": "block_number", "type": "UInt64"}
+                ]
+            },
+            {
+                "name": "hyperliquid_agents_view",
+                "engine": "View",
+                "total_rows": 0,
+                "partition_key": "",
+                "sorting_key": [],
+                "columns": [
+                    {"name": "agent", "type": "FixedString(42)"}
+                ]
+            }
+        ]
+    });
+    let out = table_stdout(
+        "/sql/rest/v1/schema/hyperliquid-core-mainnet",
+        body,
+        &["sql", "schema", "hyperliquid-core-mainnet"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}

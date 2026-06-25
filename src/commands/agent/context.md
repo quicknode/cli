@@ -91,6 +91,8 @@ if you need it.
   `qn endpoint show <id>` reflects whether it took effect.
 - `qn stream test-filter` evaluates a filter against historical data and changes
   nothing — it is read-only and safe to retry.
+- `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
+  so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
 
 ## 6. Command catalog
 
@@ -111,6 +113,7 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   enabled-count
 - `kv` — `set` (put, get, list, delete, bulk) and `list` (list, get, create, append,
   contains, remove-item, update, delete)
+- `sql` — query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.

@@ -5,7 +5,7 @@
 use std::io::IsTerminal;
 
 use quicknode_sdk::{
-    AdminConfig, HttpConfig, KvStoreConfig, QuicknodeSdk, SdkFullConfig, StreamsConfig,
+    AdminConfig, HttpConfig, KvStoreConfig, QuicknodeSdk, SdkFullConfig, SqlConfig, StreamsConfig,
     WebhooksConfig,
 };
 
@@ -161,6 +161,9 @@ impl Ctx {
             });
             full.kvstore = Some(KvStoreConfig {
                 base_url: Some(format!("{trimmed}/kv/rest/v1/")),
+            });
+            full.sql = Some(SqlConfig {
+                base_url: Some(format!("{trimmed}/sql/rest/v1/")),
             });
         }
 
