@@ -153,7 +153,7 @@ fn logout(global: GlobalArgs) -> Result<(), CliError> {
                 .to_string(),
         )
     })?;
-    config::delete_config(&path)?;
+    config::clear_api_key(&path)?;
     if !global.quiet {
         let _ = writeln!(std::io::stderr(), "✓ Removed saved API key");
     }

@@ -26,6 +26,9 @@ Non-interactive paths:
 - Pass `--api-key <KEY>` on every invocation, or
 - Write the key once: `qn auth login --api-key <KEY>` (saves the config file).
 
+`qn auth logout` removes the saved API key but preserves your `[output]`
+preferences in the config file.
+
 Config file location:
 
 - Linux/macOS: `$XDG_CONFIG_HOME/qn/config.toml`, else `~/.config/qn/config.toml`.
