@@ -130,7 +130,23 @@ pub fn load_from(path: &Path) -> Result<Option<ConfigFile>, CliError> {
 pub fn save_api_key(path: &Path, api_key: &str) -> Result<(), CliError> {
     let mut cfg = load_from(path)?.unwrap_or_default();
     cfg.api.key = Some(api_key.to_string());
-    let text = toml::to_string_pretty(&cfg).map_err(|e| CliError::ConfigWrite {
+    write_config(path, &cfg)
+}
+
+/// Removes the saved API key while preserving the rest of the config (output
+/// preferences). Used by `qn auth logout` so logging out doesn't reset
+/// `[output]` settings the user deliberately chose.
+pub fn clear_api_key(path: &Path) -> Result<(), CliError> {
+    let mut cfg = load_from(path)?.unwrap_or_default();
+    cfg.api.key = None;
+    write_config(path, &cfg)
+}
+
+/// Atomically writes `cfg` to `path`: serialize, write to a 0600 tempfile in the
+/// same directory, fsync, then rename into place. Shared by [`save_api_key`] and
+/// [`clear_api_key`].
+fn write_config(path: &Path, cfg: &ConfigFile) -> Result<(), CliError> {
+    let text = toml::to_string_pretty(cfg).map_err(|e| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other(e),
     })?;
@@ -194,15 +210,6 @@ pub fn save_api_key(path: &Path, api_key: &str) -> Result<(), CliError> {
     })?;
 
     Ok(())
-}
-
-/// Deletes the saved config file. No error if it didn't exist.
-pub fn delete_config(path: &Path) -> Result<(), CliError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
 }
 
 /// Resolves an API key per the documented precedence: flag > config file.
@@ -432,14 +439,41 @@ mod tests {
     }
 
     #[test]
-    fn delete_is_idempotent() {
+    fn clear_api_key_preserves_output_section() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        delete_config(&path).unwrap(); // no file yet
-        save_api_key(&path, "k").unwrap();
-        delete_config(&path).unwrap();
-        delete_config(&path).unwrap(); // already gone
-        assert!(!path.exists());
+        std::fs::write(
+            &path,
+            "[api]\nkey = \"k\"\n\n[output]\nformat = \"json\"\nwide = true\n",
+        )
+        .unwrap();
+        clear_api_key(&path).unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key, None);
+        assert_eq!(cfg.output.format, Some(Format::Json));
+        assert!(cfg.output.wide);
+    }
+
+    #[test]
+    fn clear_api_key_with_no_existing_file_writes_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        clear_api_key(&path).unwrap();
+        assert!(path.exists());
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clear_api_key_writes_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_api_key(&path, "secret").unwrap();
+        clear_api_key(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
     }
 
     #[cfg(unix)]
