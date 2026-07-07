@@ -285,6 +285,7 @@ qn usage summary --from 7d
 qn usage by-endpoint --from 30d -o yaml
 qn metrics account --period day --metric credits_over_time
 qn chain list
+qn chain credits ethereum
 qn billing invoices
 qn endpoint bulk pause ep-1 ep-2 ep-3
 qn endpoint tag list

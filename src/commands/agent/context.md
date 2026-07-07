@@ -35,8 +35,8 @@ Config file location:
 - Windows: `%USERPROFILE%\.config\qn\config.toml`.
 
 Verify the resolved key against the API: `qn auth whoami` (prints the key redacted
-to `****<last4>` and confirms it works). `qn auth status` does the same without the
-network call.
+to `****<last4>`, the account id/name and plan, and confirms it works). `qn auth
+status` does the same without the network call (no account details).
 
 ## 2. Output contract
 
@@ -108,7 +108,7 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
 - `team` — list, create, show, delete, endpoints, set-endpoints; nested: `member`
 - `usage` — summary, by-endpoint, by-method, by-chain, by-tag
 - `metrics` — account, endpoint
-- `chain` — list
+- `chain` — list, credits
 - `billing` — invoices, payments
 - `stream` — list, show, create, update, delete, activate, pause, test-filter,
   enabled-count
