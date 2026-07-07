@@ -118,6 +118,41 @@ pub fn sdk_config(api_key: String) -> SdkFullConfig {
     full
 }
 
+/// Points every sub-client at a custom host, suffixing each with its own base
+/// path. Shared by `Ctx::from_global` and the `auth` commands so `--base-url`
+/// applies uniformly (useful for wiremock tests and on-prem mirrors).
+fn apply_base_url(full: &mut SdkFullConfig, trimmed: &str) {
+    full.admin = Some(AdminConfig {
+        base_url: Some(format!("{trimmed}/v0/")),
+    });
+    full.streams = Some(StreamsConfig {
+        base_url: Some(format!("{trimmed}/streams/rest/v1/")),
+    });
+    full.webhooks = Some(WebhooksConfig {
+        base_url: Some(format!("{trimmed}/webhooks/rest/v1/")),
+    });
+    full.kvstore = Some(KvStoreConfig {
+        base_url: Some(format!("{trimmed}/kv/rest/v1/")),
+    });
+    full.sql = Some(SqlConfig {
+        base_url: Some(format!("{trimmed}/sql/rest/v1/")),
+    });
+}
+
+/// Like [`sdk_config`] but also honors an optional `--base-url` override.
+/// Used by the `auth` commands, which build the SDK outside [`Ctx`].
+pub fn sdk_config_with_base(
+    api_key: String,
+    base_url: Option<&str>,
+) -> Result<SdkFullConfig, CliError> {
+    let mut full = sdk_config(api_key);
+    if let Some(base) = base_url {
+        let trimmed = validate_base_url(base)?;
+        apply_base_url(&mut full, trimmed.as_str());
+    }
+    Ok(full)
+}
+
 pub struct Ctx {
     pub sdk: QuicknodeSdk,
     pub out: OutputCtx,
@@ -149,22 +184,7 @@ impl Ctx {
         // so we suffix correctly.
         if let Some(base) = &global.base_url {
             let trimmed = validate_base_url(base)?;
-            let trimmed = trimmed.as_str();
-            full.admin = Some(AdminConfig {
-                base_url: Some(format!("{trimmed}/v0/")),
-            });
-            full.streams = Some(StreamsConfig {
-                base_url: Some(format!("{trimmed}/streams/rest/v1/")),
-            });
-            full.webhooks = Some(WebhooksConfig {
-                base_url: Some(format!("{trimmed}/webhooks/rest/v1/")),
-            });
-            full.kvstore = Some(KvStoreConfig {
-                base_url: Some(format!("{trimmed}/kv/rest/v1/")),
-            });
-            full.sql = Some(SqlConfig {
-                base_url: Some(format!("{trimmed}/sql/rest/v1/")),
-            });
+            apply_base_url(&mut full, trimmed.as_str());
         }
 
         let sdk = QuicknodeSdk::new(&full)?;

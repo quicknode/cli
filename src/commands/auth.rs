@@ -2,9 +2,9 @@
 //!
 //! Login: prompts for the key (hidden input), writes `~/.config/qn/config.toml`.
 //! Logout: deletes that file.
-//! Whoami: shows where the resolved key came from, and confirms it works by
-//! calling a low-cost API (chain list).
-//! Status: same as whoami minus the network round-trip.
+//! Whoami: shows where the resolved key came from and the account identity
+//! (id, name, plan), and confirms it works by calling the account-info API.
+//! Status: same as whoami minus the network round-trip (no account details).
 
 use std::io::{IsTerminal, Write};
 
@@ -12,7 +12,7 @@ use clap::{Args as ClapArgs, Subcommand};
 use quicknode_sdk::QuicknodeSdk;
 
 use crate::config::{self, KeySource};
-use crate::context::{sdk_config, GlobalArgs};
+use crate::context::{sdk_config_with_base, GlobalArgs};
 use crate::errors::CliError;
 use crate::output::osc8_link;
 
@@ -132,8 +132,11 @@ async fn login(args: LoginArgs, global: GlobalArgs) -> Result<(), CliError> {
     }
 
     // Quick validation against the API so we don't silently save a bogus key.
-    let sdk = QuicknodeSdk::new(&sdk_config(key.clone()))?;
-    crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await?;
+    let sdk = QuicknodeSdk::new(&sdk_config_with_base(
+        key.clone(),
+        global.base_url.as_deref(),
+    )?)?;
+    crate::retry::retrying(global.retries, || sdk.admin.account_info()).await?;
 
     config::save_api_key(&path, &key)?;
     if !global.quiet {
@@ -162,17 +165,25 @@ fn logout(global: GlobalArgs) -> Result<(), CliError> {
 
 fn status(global: GlobalArgs) -> Result<(), CliError> {
     let (key, source) = resolve_non_interactive(&global)?;
-    print_status(&global, source, &redact(&key), None);
+    print_status(&global, source, &redact(&key), None, None);
     Ok(())
 }
 
 async fn whoami(global: GlobalArgs) -> Result<(), CliError> {
     let (key, source) = resolve_non_interactive(&global)?;
     let redacted = redact(&key);
-    let sdk = QuicknodeSdk::new(&sdk_config(key))?;
-    let result = crate::retry::retrying(global.retries, || sdk.admin.list_chains()).await;
-    let ok = result.is_ok();
-    print_status(&global, source, &redacted, Some(ok));
+    let sdk = QuicknodeSdk::new(&sdk_config_with_base(key, global.base_url.as_deref())?)?;
+    // account_info doubles as the liveness probe: one call validates the key
+    // and returns the account identity we display below.
+    let result = crate::retry::retrying(global.retries, || sdk.admin.account_info()).await;
+    let account = result.as_ref().ok().and_then(|r| r.data.clone());
+    print_status(
+        &global,
+        source,
+        &redacted,
+        Some(result.is_ok()),
+        account.as_ref(),
+    );
     result.map(|_| ()).map_err(Into::into)
 }
 
@@ -196,11 +207,43 @@ fn redact(key: &str) -> String {
     }
 }
 
-fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validated: Option<bool>) {
+/// Renders a subscription as a compact `plan_name (status, interval)` string,
+/// skipping any absent part. Returns `None` when there is nothing to show.
+fn plan_summary(sub: &quicknode_sdk::admin::AccountSubscription) -> Option<String> {
+    let name = sub.plan_name.as_deref();
+    let mut quals = Vec::new();
+    if let Some(s) = sub.status.as_deref() {
+        quals.push(s);
+    }
+    if let Some(i) = sub.interval.as_deref() {
+        quals.push(i);
+    }
+    match (name, quals.is_empty()) {
+        (None, true) => None,
+        (Some(n), true) => Some(n.to_string()),
+        (None, false) => Some(quals.join(", ")),
+        (Some(n), false) => Some(format!("{n} ({})", quals.join(", "))),
+    }
+}
+
+fn print_status(
+    global: &GlobalArgs,
+    source: KeySource,
+    redacted: &str,
+    validated: Option<bool>,
+    account: Option<&quicknode_sdk::admin::AccountInfo>,
+) {
+    let sub = account.and_then(|a| a.subscription.as_ref());
+    let plan = sub.and_then(plan_summary);
     let v = serde_json::json!({
         "source": source.label(),
         "key": redacted,
         "validated": validated,
+        "account_id": account.map(|a| a.id),
+        "account_name": account.map(|a| a.name.clone()),
+        "plan": plan,
+        "plan_status": sub.and_then(|s| s.status.clone()),
+        "plan_interval": sub.and_then(|s| s.interval.clone()),
     });
     let stdout_is_tty = std::io::stdout().is_terminal();
     match global.resolve_format(stdout_is_tty) {
@@ -216,6 +259,10 @@ fn print_status(global: &GlobalArgs, source: KeySource, redacted: &str, validate
         crate::output::Format::Table | crate::output::Format::Md => {
             println!("source : {}", source.label());
             println!("key    : {}", redacted);
+            if let Some(a) = account {
+                println!("account: {} ({})", a.id, a.name);
+                println!("plan   : {}", plan.as_deref().unwrap_or("<none>"));
+            }
             if let Some(ok) = validated {
                 println!("status : {}", if ok { "valid" } else { "rejected by API" });
             }

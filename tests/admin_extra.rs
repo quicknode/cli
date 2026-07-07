@@ -166,6 +166,70 @@ async fn chain_list() {
 }
 
 #[tokio::test]
+async fn chain_credits() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/api-credits/ethereum"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "method": "eth_chainId", "credits": 20 },
+                { "method": "eth_call", "credits": 20 }
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["chain", "credits", "ethereum"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn chain_credits_unknown_slug_404() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/api-credits/not-a-chain"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_string("{\"message\":\"chain not found\"}"),
+        )
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["chain", "credits", "not-a-chain"]).await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("not found"), "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn auth_whoami_shows_account() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/account/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "id": 12345,
+                "name": "Acme Inc",
+                "created_at": "2024-01-01T00:00:00Z",
+                "billing_version": "v6",
+                "subscription": { "plan_name": "Build", "status": "active", "interval": "monthly" }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["auth", "whoami"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn auth_whoami_unauthorized_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/account/info"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("{\"message\":\"unauthorized\"}"))
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["auth", "whoami"]).await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn metrics_account_with_percentile() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
