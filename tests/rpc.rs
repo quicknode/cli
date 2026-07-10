@@ -587,6 +587,156 @@ async fn network_routes_to_mapped_url() {
     assert!(cached.contains("solana-mainnet"), "cache: {cached}");
 }
 
+// --network when Tooling Access is disabled routes through the enable gate.
+// In the harness (non-TTY + --no-input) without --yes that gate can't prompt,
+// so it ends in the actionable "run qn tooling-access enable" error (exit 5)
+// and no URL-map fetch or RPC call is made.
+#[tokio::test]
+async fn network_when_disabled_without_yes_prompts_to_enable() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "enabled": false, "endpoint_url": null, "endpoint_id": null },
+            "error": null
+        })))
+        .mount(&server)
+        .await;
+    // No enable, no URL-map fetch, no RPC call should be reached.
+    Mock::given(method("PATCH"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/3/urls"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "getSlot",
+            "--network",
+            "solana-mainnet",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "should fail");
+    // Same actionable message as the default lane's mint-400 path.
+    assert!(
+        out.stderr.contains("tooling-access enable"),
+        "expected enable hint, got: {}",
+        out.stderr
+    );
+}
+
+// --network when disabled + --yes: enable, re-fetch status (now enabled with an
+// id), fetch the per-network map, and route the call to the mapped URL.
+#[tokio::test]
+async fn network_when_disabled_with_yes_enables_and_routes() {
+    let server = MockServer::start().await;
+    let solana_url = format!("{}/solana", server.uri());
+
+    // Status flips to enabled after the enable PATCH: first GET reports disabled,
+    // subsequent GETs report enabled with an id.
+    struct StatusSeq {
+        calls: AtomicUsize,
+        default_url: String,
+    }
+    impl wiremock::Respond for StatusSeq {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": { "enabled": false, "endpoint_url": null, "endpoint_id": null },
+                    "error": null
+                }))
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": { "enabled": true, "endpoint_url": self.default_url, "endpoint_id": 3 },
+                    "error": null
+                }))
+            }
+        }
+    }
+    Mock::given(method("GET"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(StatusSeq {
+            calls: AtomicUsize::new(0),
+            default_url: format!("{}/default", server.uri()),
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "enabled": true, "endpoint_url": format!("{}/default", server.uri()) },
+            "error": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v0/endpoints/3/urls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "http_url": format!("{}/default", server.uri()),
+                "wss_url": null,
+                "multichain_urls": {
+                    "solana-mainnet": { "http_url": solana_url, "wss_url": null }
+                }
+            },
+            "error": null
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/solana"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "12345"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    // Seed a cached token so the call uses it rather than minting (the enable
+    // flow, not token acquisition, is what this test exercises).
+    write_token_cache(
+        &dir,
+        &format!("{}/default", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "getSlot",
+            "--network",
+            "solana-mainnet",
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
 // --list-networks prints the available keys without making an RPC call.
 #[tokio::test]
 async fn list_networks_prints_keys() {
