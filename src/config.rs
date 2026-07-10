@@ -47,11 +47,23 @@ pub struct ConfigFile {
     pub api: ApiSection,
     #[serde(default)]
     pub output: OutputSection,
+    #[serde(default)]
+    pub rpc: RpcSection,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ApiSection {
     pub key: Option<String>,
+}
+
+/// `[rpc]` section: RPC-specific defaults. `endpoint_url`, when set, routes
+/// `qn rpc call` at a fully-formed custom HTTP URL instead of the account's
+/// Tooling Access endpoint (self-authenticating: no JWT minted). A per-call
+/// `--endpoint-url` overrides it. Mirrors the SDK's `RpcConfig.endpoint_url`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct RpcSection {
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -693,6 +705,42 @@ mod tests {
         std::fs::write(&path, "[output]\nwide = true\n").unwrap();
         let cfg = load_from(&path).unwrap().unwrap();
         assert!(cfg.output.wide);
+    }
+
+    #[test]
+    fn rpc_endpoint_url_round_trips_through_config_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[api]\nkey = \"k\"\n\n[rpc]\nendpoint_url = \"https://my-endpoint.example/rpc\"\n",
+        )
+        .unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(
+            cfg.rpc.endpoint_url.as_deref(),
+            Some("https://my-endpoint.example/rpc")
+        );
+    }
+
+    #[test]
+    fn rpc_section_is_optional() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[api]\nkey = \"k\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.rpc.endpoint_url, None);
+    }
+
+    #[test]
+    fn save_api_key_preserves_rpc_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc]\nendpoint_url = \"https://x/rpc\"\n").unwrap();
+        save_api_key(&path, "new-key").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
+        assert_eq!(cfg.rpc.endpoint_url.as_deref(), Some("https://x/rpc"));
     }
 
     #[test]

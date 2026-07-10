@@ -38,10 +38,8 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
     match args.cmd {
         ToolingAccessCmd::Status => {
             // status is read-only, so retry on transient failures.
-            let resp = retrying(ctx.global.retries, || {
-                ctx.sdk.admin.tooling_access_status()
-            })
-            .await?;
+            let resp =
+                retrying(ctx.global.retries, || ctx.sdk.admin.tooling_access_status()).await?;
             crate::output::emit(&ctx.out, &StatusView(resp))
         }
         // enable/disable mutate account state — never retry.

@@ -118,12 +118,15 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   contains, remove-item, update, delete)
 - `sql` — query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
 - `tooling-access` — status, enable, disable (provisions the endpoint `rpc` uses)
-- `rpc` — make a JSON-RPC call against the account's Tooling Access endpoint;
-  the session JWT is minted and refreshed automatically. `qn rpc <method> [json-params]`
-  (params is a JSON array or object, or `-` to read from stdin). On a
+- `rpc` — make JSON-RPC calls. `qn rpc call <method> [json-params]` calls the
+  account's Tooling Access endpoint (params is a JSON array or object, or `-` to
+  read from stdin); the session JWT is minted and refreshed automatically. On a
   not-yet-enabled account it auto-enables with `--yes` (or prompts on a TTY).
   Multichain: `--network <key>` targets a specific chain by its key (e.g.
-  `solana-mainnet`, `polygon`); `qn rpc --list-networks` lists the available keys.
+  `solana-mainnet`, `polygon`); `qn rpc list-networks` (alias `ls`) lists the
+  available keys. Custom endpoint: `--endpoint-url <URL>` (or `[rpc] endpoint_url`
+  in config) sends the call to a fully-formed HTTP URL that authenticates itself
+  (no token minted); it's mutually exclusive with `--network`.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -182,14 +185,16 @@ qn kv set list
 
 ```sh
 qn tooling-access enable --yes        # one-time; idempotent, admin role required
-qn rpc eth_blockNumber                # → "0x…" (default network)
-qn rpc eth_getBalance '["0xabc...", "latest"]'
-qn rpc --list-networks                # available network keys for this endpoint
-qn rpc getSlot --network solana-mainnet
+qn rpc call eth_blockNumber           # → "0x…" (default network)
+qn rpc call eth_getBalance '["0xabc...", "latest"]'
+qn rpc list-networks                  # available network keys for this endpoint
+qn rpc call getSlot --network solana-mainnet
+qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc
 ```
 
-`qn rpc` mints and refreshes the session JWT for you; the only one-time step is
-enabling Tooling Access (or pass `--yes` to `qn rpc` to enable on first use).
+`qn rpc call` mints and refreshes the session JWT for you; the only one-time step
+is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
+`--endpoint-url` (or `[rpc] endpoint_url` in config) bypasses that entirely.
 
 ## 8. Gotchas & safety rails
 

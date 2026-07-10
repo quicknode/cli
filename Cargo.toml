@@ -21,7 +21,7 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-quicknode-sdk = "0.6"
+quicknode-sdk = "0.7"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -51,12 +51,6 @@ assert_cmd = "2"
 predicates = "3"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
-
-# Local development: build against the working copy of the SDK core crate
-# instead of the published quicknode-sdk = "0.3". Remove before committing /
-# releasing; bump the dependency version once the SDK changes are published.
-[patch.crates-io]
-quicknode-sdk = { path = "../sdk/crates/core" }
 
 # The profile that 'dist' will build with
 [profile.dist]

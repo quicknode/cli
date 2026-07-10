@@ -1,19 +1,25 @@
-//! `qn rpc <method> [params]` — make a JSON-RPC call against the account's
-//! Tooling Access endpoint.
+//! `qn rpc call <method> [params]` — make a JSON-RPC call against the account's
+//! Tooling Access endpoint (or a custom URL), and `qn rpc list-networks` — list
+//! the multichain endpoint's available network keys.
 //!
-//! No endpoint URL or token to manage: the SDK mints and refreshes a
-//! short-lived session JWT automatically. Because each CLI invocation is a
-//! fresh process, we persist that JWT to `tokens.toml` and re-seed it next time
-//! (see `crate::config` token cache), so a valid token means no control-plane
-//! round trip.
+//! By default there's no endpoint URL or token to manage: the SDK mints and
+//! refreshes a short-lived session JWT automatically. Because each CLI
+//! invocation is a fresh process, we persist that JWT to `tokens.toml` and
+//! re-seed it next time (see `crate::config` token cache), so a valid token
+//! means no control-plane round trip.
 //!
 //! On a never-provisioned account the first call fails with "not enabled"; we
 //! offer to enable (prompt on a TTY, `--yes` for scripts/agents, otherwise an
 //! actionable error), then retry.
+//!
+//! A custom endpoint URL (`--endpoint-url` per call, or `[rpc] endpoint_url` in
+//! config) is a separate lane: the SDK sends the call straight to that URL with
+//! no JWT minted or attached. That lane never touches the token cache or the
+//! Tooling Access enable/probe recovery.
 
 use std::io::Read;
 
-use clap::Args as ClapArgs;
+use clap::{Args as ClapArgs, Subcommand};
 use serde_json::Value;
 
 use crate::confirm::{decide_without_prompt, ConfirmCfg, Severity};
@@ -24,16 +30,32 @@ use crate::retry::retrying;
 use crate::{config, confirm};
 
 #[derive(Debug, ClapArgs)]
-#[command(after_help = "Examples:\n  \
-    qn rpc eth_blockNumber\n  \
-    qn rpc eth_getBalance '[\"0xabc...\", \"latest\"]'\n  \
-    qn rpc getSlot --network solana-mainnet\n  \
-    qn rpc --list-networks\n  \
-    echo '[...]' | qn rpc eth_call -")]
+#[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Args {
-    /// The JSON-RPC method, e.g. `eth_blockNumber`. Omit only with
-    /// `--list-networks`.
-    pub method: Option<String>,
+    #[command(subcommand)]
+    pub cmd: RpcCmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RpcCmd {
+    /// Make a JSON-RPC call.
+    #[command(after_help = "Examples:\n  \
+        qn rpc call eth_blockNumber\n  \
+        qn rpc call eth_getBalance '[\"0xabc...\", \"latest\"]'\n  \
+        qn rpc call getSlot --network solana-mainnet\n  \
+        qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc\n  \
+        echo '[...]' | qn rpc call eth_call -")]
+    Call(CallArgs),
+
+    /// List the endpoint's available network keys (no RPC call).
+    #[command(visible_alias = "ls")]
+    ListNetworks,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct CallArgs {
+    /// The JSON-RPC method, e.g. `eth_blockNumber`.
+    pub method: String,
 
     /// JSON params: an array (positional) or object (by-name). Pass `-` to read
     /// the JSON from stdin. Omit for no params (sends `[]`).
@@ -44,24 +66,55 @@ pub struct Args {
 
     /// Target network on the multichain endpoint, by its key (e.g.
     /// `solana-mainnet`, `polygon`, `btc`). Omit for the endpoint's default
-    /// network. Run `qn rpc --list-networks` to see available keys.
+    /// network. Run `qn rpc list-networks` to see available keys.
     #[arg(long)]
     pub network: Option<String>,
 
-    /// List the endpoint's available network keys and exit (no RPC call).
-    #[arg(long, conflicts_with_all = ["params", "network"])]
-    pub list_networks: bool,
+    /// Send the call to a fully-formed custom HTTP URL instead of the account's
+    /// Tooling Access endpoint. The URL is self-authenticating: no session token
+    /// is minted or attached. Overrides `[rpc] endpoint_url` in config. Mutually
+    /// exclusive with `--network` (a custom URL is not multichain-routed).
+    #[arg(long, conflicts_with = "network", value_name = "URL")]
+    pub endpoint_url: Option<String>,
 }
 
 pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
+    match args.cmd {
+        RpcCmd::Call(call) => run_call(call, global).await,
+        RpcCmd::ListNetworks => run_list_networks(global).await,
+    }
+}
+
+/// `qn rpc list-networks` — always targets the account's Tooling Access
+/// multichain endpoint (a custom `endpoint_url` has no network map), so it
+/// ignores any configured or flagged custom URL.
+async fn run_list_networks(global: GlobalArgs) -> Result<(), CliError> {
+    let config_path = global.resolve_config_path();
+    let networks_path = config::networks_cache_path(config_path.as_deref());
+    let token_path = config::token_cache_path(config_path.as_deref());
+    let seed = match (&token_path, resolve_key_quietly(&global)) {
+        (Some(p), Some(key)) => config::load_token(p, &key),
+        _ => None,
+    };
+    let (ctx, _api_key) = Ctx::from_global_with_rpc_seed(global, seed, None)?;
+    let map = ensure_networks(&ctx, networks_path.as_deref()).await?;
+    emit_networks(&ctx, &map)
+}
+
+async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
     let params = parse_params(args.params.as_deref())?;
 
-    if !args.list_networks && args.method.is_none() {
-        return Err(CliError::Arg(
-            "missing JSON-RPC method (e.g. 'qn rpc eth_blockNumber'), or pass --list-networks"
-                .to_string(),
-        ));
-    }
+    // A custom URL (per-call flag, else the `[rpc] endpoint_url` config default)
+    // is a separate lane: no JWT, no token cache, no Tooling Access recovery.
+    // Validate the flag here; the config value is validated when `Ctx` builds it.
+    let flag_endpoint_url = match args.endpoint_url.as_deref() {
+        Some(u) => Some(crate::context::validate_endpoint_url(u)?),
+        None => None,
+    };
+    let config_endpoint_url = load_config_endpoint_url(&global);
+    let custom_url = flag_endpoint_url
+        .clone()
+        .or_else(|| config_endpoint_url.clone());
 
     // Load any cached token to seed the SDK and avoid a mint round trip. We need
     // the resolved API key to scope the cache, so resolve the config path first.
@@ -77,31 +130,41 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
         _ => None,
     };
 
-    let (ctx, api_key) = Ctx::from_global_with_rpc_seed(global, seed)?;
+    let (ctx, api_key) = Ctx::from_global_with_rpc_seed(global, seed, config_endpoint_url)?;
 
-    // Multichain selection (--network or --list-networks) needs the per-network
-    // URL map. Resolve it lazily — only when a network is involved — so the
-    // common default-network call path stays a single round trip.
-    if args.list_networks {
-        let map = ensure_networks(&ctx, networks_path.as_deref()).await?;
-        return emit_networks(&ctx, &map);
-    }
+    // Multichain selection (--network) needs the per-network URL map. Resolve it
+    // lazily — only when a network is involved — so the common default-network
+    // call path stays a single round trip. (A custom URL conflicts with
+    // --network at the clap layer, so this only runs on the Tooling Access lane.)
     if args.network.is_some() {
         let map = ensure_networks(&ctx, networks_path.as_deref()).await?;
         ctx.sdk.rpc.set_networks(map);
     }
 
-    let method = args.method.as_deref().unwrap_or_default();
+    let method = args.method.as_str();
 
-    // First attempt. Both ways of discovering "Tooling Access is disabled"
-    // converge on the same flow: offer to enable (y/N on a TTY, --yes to
-    // auto-enable, actionable error otherwise), then retry.
+    // First attempt. When a custom URL is active, the call goes straight there
+    // (self-authenticating) and any error surfaces directly — the Tooling Access
+    // enable/probe recovery below only applies to the token-minting lane.
+    //
+    // On the Tooling Access lane, both ways of discovering "disabled" converge on
+    // the same flow: offer to enable (y/N on a TTY, --yes to auto-enable,
+    // actionable error otherwise), then retry.
     //   - mint returns the "not enabled" 400 (no usable token), or
     //   - the call connect/timeouts against a stale-but-unexpired cached token
     //     and a status probe confirms the endpoint is disabled (possibly
     //     out-of-band). That path also clears the stale token first.
-    let result = match call_once(&ctx, method, &params, args.network.clone()).await {
+    let result = match call_once(
+        &ctx,
+        method,
+        &params,
+        args.network.clone(),
+        custom_url.clone(),
+    )
+    .await
+    {
         Ok(v) => v,
+        Err(e) if custom_url.is_some() => return Err(map_unknown_network(e)),
         Err(e) if is_not_enabled(&e) => {
             maybe_enable(&ctx).await?;
             call_after_enable(&ctx, method, &params, args.network.clone()).await?
@@ -123,19 +186,55 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
                 return Err(e);
             }
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(map_unknown_network(e)),
     };
 
-    // Snapshot the (possibly refreshed) token and write it back. We always
-    // persist when a token is present: the write is an idempotent atomic
-    // replace, the token is short-lived, and re-writing an unchanged token is
-    // harmless. Best-effort — a cache write failure must not fail the call,
-    // which already succeeded; the next run simply re-mints.
+    // Snapshot the (possibly refreshed) token and write it back. On the custom-URL
+    // lane no token is minted, so `current_token()` is `None` and nothing is
+    // written — the existing cache is left untouched. Otherwise we always persist
+    // when a token is present: the write is an idempotent atomic replace, the
+    // token is short-lived, and re-writing an unchanged token is harmless.
+    // Best-effort — a cache write failure must not fail the call, which already
+    // succeeded; the next run simply re-mints.
     if let (Some(p), Some(current)) = (&token_path, ctx.sdk.rpc.current_token()) {
         let _ = config::save_token(p, &api_key, &current);
     }
 
     emit_result(&ctx, &result)
+}
+
+/// Reads `[rpc] endpoint_url` from the resolved config file, if any. Swallows
+/// load errors (a broken config surfaces later when `Ctx` builds); returns the
+/// raw value, which `Ctx::build` validates.
+fn load_config_endpoint_url(global: &GlobalArgs) -> Option<String> {
+    let path = global.resolve_config_path()?;
+    match config::load_from(&path) {
+        Ok(Some(cfg)) => cfg.rpc.endpoint_url,
+        _ => None,
+    }
+}
+
+/// Re-render the SDK's "unknown network" config error with CLI wording that
+/// points at `qn rpc list-networks`, dropping the SDK-internal
+/// `set_networks()` hint. Any other error passes through unchanged.
+fn map_unknown_network(err: CliError) -> CliError {
+    if let CliError::Sdk(quicknode_sdk::errors::SdkError::Config(msg)) = &err {
+        if msg.contains("unknown network") {
+            // Keep the "Available: ..." list the SDK computed; replace only the
+            // SDK-internal seeding hint with the CLI discovery command.
+            let available = msg
+                .split_once("Available:")
+                .map(|(_, rest)| rest.trim())
+                .filter(|s| !s.is_empty());
+            let mut out = "unknown network key for this endpoint.".to_string();
+            if let Some(list) = available {
+                out.push_str(&format!(" Available: {list}"));
+            }
+            out.push_str("\nRun 'qn rpc list-networks' to see valid keys.");
+            return CliError::Arg(out);
+        }
+    }
+    err
 }
 
 /// Current unix time in seconds, for the networks-cache TTL.
@@ -155,10 +254,7 @@ async fn ensure_networks(
     networks_path: Option<&std::path::Path>,
 ) -> Result<std::collections::HashMap<String, String>, CliError> {
     // Need the endpoint id to scope the cache and fetch URLs.
-    let status = retrying(ctx.global.retries, || {
-        ctx.sdk.admin.tooling_access_status()
-    })
-    .await?;
+    let status = retrying(ctx.global.retries, || ctx.sdk.admin.tooling_access_status()).await?;
     let Some(endpoint_id) = status.endpoint_id else {
         return Err(CliError::Arg(
             "this account's Tooling Access endpoint did not report an id, so per-network \
@@ -226,11 +322,18 @@ async fn call_once(
     method: &str,
     params: &Option<Value>,
     network: Option<String>,
+    endpoint_url: Option<String>,
 ) -> Result<Value, CliError> {
     // RPC reads are safe to retry on transient transport failures, same as
-    // other read-only commands. The SDK handles its own one-shot 401 refresh.
+    // other read-only commands, on both the Tooling Access and custom-URL lanes.
+    // The SDK handles its own one-shot 401 refresh (Tooling Access lane only).
     retrying(ctx.global.retries, || {
-        ctx.sdk.rpc.call(method, params.clone(), network.clone())
+        ctx.sdk.rpc.call(
+            method,
+            params.clone(),
+            network.clone(),
+            endpoint_url.clone(),
+        )
     })
     .await
     .map_err(Into::into)
@@ -259,10 +362,12 @@ async fn call_after_enable(
     let deadline = tokio::time::Instant::now() + POST_ENABLE_BUDGET;
     let mut backoff = std::time::Duration::from_millis(500);
     loop {
+        // Post-enable retry only runs on the Tooling Access lane (a custom URL
+        // bypasses the enable flow entirely), so no custom endpoint_url here.
         match ctx
             .sdk
             .rpc
-            .call(method, params.clone(), network.clone())
+            .call(method, params.clone(), network.clone(), None)
             .await
         {
             Ok(v) => return Ok(v),
@@ -335,8 +440,8 @@ async fn maybe_enable(ctx: &Ctx) -> Result<(), CliError> {
         Err(e) => return Err(e),
     };
 
-    let proceed = proceed
-        || confirm::prompt_yes_no("Tooling Access is not enabled. Enable it now?")?;
+    let proceed =
+        proceed || confirm::prompt_yes_no("Tooling Access is not enabled. Enable it now?")?;
     if !proceed {
         return Err(CliError::Cancelled);
     }

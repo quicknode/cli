@@ -171,20 +171,27 @@ impl Ctx {
     /// `CliError::NoApiKey` — regular commands do not prompt; the user is
     /// directed to `qn auth login`.
     pub fn from_global(global: GlobalArgs) -> Result<Self, CliError> {
-        Self::build(global, None).map(|(ctx, _)| ctx)
+        Self::build(global, None, None).map(|(ctx, _)| ctx)
     }
 
-    /// Like [`from_global`](Self::from_global) but seeds the RPC client's token
-    /// cache with `seed` (a JWT loaded from disk by `qn rpc`). Also returns the
-    /// resolved API key so the caller can scope and write back the token cache.
+    /// Like [`from_global`](Self::from_global) but for `qn rpc`: seeds the RPC
+    /// client's token cache with `seed` (a JWT loaded from disk) and sets the
+    /// client-wide custom endpoint URL from `config_endpoint_url` (the
+    /// `[rpc] endpoint_url` config default). Also returns the resolved API key
+    /// so the caller can scope and write back the token cache.
     pub fn from_global_with_rpc_seed(
         global: GlobalArgs,
         seed: Option<CachedToken>,
+        config_endpoint_url: Option<String>,
     ) -> Result<(Self, String), CliError> {
-        Self::build(global, seed)
+        Self::build(global, seed, config_endpoint_url)
     }
 
-    fn build(global: GlobalArgs, rpc_seed: Option<CachedToken>) -> Result<(Self, String), CliError> {
+    fn build(
+        global: GlobalArgs,
+        rpc_seed: Option<CachedToken>,
+        rpc_endpoint_url: Option<String>,
+    ) -> Result<(Self, String), CliError> {
         let config_path = global.resolve_config_path();
         let stdout_is_tty = std::io::stdout().is_terminal();
         let (format, wide) = global.resolve_output(stdout_is_tty);
@@ -198,9 +205,19 @@ impl Ctx {
 
         let mut full = sdk_config(api_key.clone());
 
-        if rpc_seed.is_some() {
+        // The `[rpc] endpoint_url` config default becomes the client-wide custom
+        // URL (a per-call `--endpoint-url` overrides it in the call itself). We
+        // validate it here so a malformed config value fails with a clear error
+        // rather than at call time. `seed` and `endpoint_url` coexist harmlessly:
+        // the SDK ignores the seed when a custom URL is set.
+        let rpc_endpoint_url = match rpc_endpoint_url {
+            Some(u) => Some(validate_endpoint_url(&u)?),
+            None => None,
+        };
+        if rpc_seed.is_some() || rpc_endpoint_url.is_some() {
             full.rpc = Some(RpcConfig {
                 seed: rpc_seed,
+                endpoint_url: rpc_endpoint_url,
                 ..Default::default()
             });
         }
@@ -276,6 +293,22 @@ fn validate_base_url(base: &str) -> Result<String, CliError> {
     Ok(base.trim_end_matches('/').to_string())
 }
 
+/// Validates a custom RPC endpoint URL (`--endpoint-url` or `[rpc] endpoint_url`).
+/// Unlike [`validate_base_url`], a fully-formed RPC URL carries a path
+/// (`https://host/rpc`), so paths are allowed here. We only confirm it parses
+/// and uses an http(s) scheme — enough to reject garbage and non-network schemes
+/// with a clear CLI error before any call, while leaving the rest to the SDK.
+pub(crate) fn validate_endpoint_url(url: &str) -> Result<String, CliError> {
+    let parsed = url::Url::parse(url)
+        .map_err(|_| CliError::Arg(format!("--endpoint-url '{url}' is not a valid URL")))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(url.to_string()),
+        other => Err(CliError::Arg(format!(
+            "--endpoint-url scheme '{other}' is not allowed; use http or https"
+        ))),
+    }
+}
+
 /// Validates and normalizes a `--base-prefix` to a leading-slash, no-trailing-
 /// slash path fragment (e.g. `/console-api`). Rejects anything that smuggles in
 /// a host or query so it can only ever extend the path of `--base-url`: no
@@ -301,10 +334,7 @@ fn validate_base_prefix(prefix: &str) -> Result<String, CliError> {
         return Ok(String::new());
     }
     let normalized = format!("/{inner}");
-    if normalized
-        .split('/')
-        .any(|seg| matches!(seg, "." | ".."))
-    {
+    if normalized.split('/').any(|seg| matches!(seg, "." | "..")) {
         return Err(CliError::Arg(
             "--base-prefix must not contain '.' or '..' path segments".into(),
         ));
@@ -407,8 +437,30 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_url_allows_http_https_with_path() {
+        assert_eq!(
+            validate_endpoint_url("https://my-endpoint.example/rpc").unwrap(),
+            "https://my-endpoint.example/rpc"
+        );
+        assert_eq!(
+            validate_endpoint_url("http://127.0.0.1:8080/some/path?x=1").unwrap(),
+            "http://127.0.0.1:8080/some/path?x=1"
+        );
+    }
+
+    #[test]
+    fn endpoint_url_rejects_non_http_schemes_and_garbage() {
+        for bad in ["ftp://x/rpc", "file:///etc/passwd", "not a url", ""] {
+            assert!(validate_endpoint_url(bad).is_err(), "should reject {bad}");
+        }
+    }
+
+    #[test]
     fn base_prefix_normalizes_slashes() {
-        assert_eq!(validate_base_prefix("/console-api").unwrap(), "/console-api");
+        assert_eq!(
+            validate_base_prefix("/console-api").unwrap(),
+            "/console-api"
+        );
         assert_eq!(validate_base_prefix("console-api").unwrap(), "/console-api");
         assert_eq!(
             validate_base_prefix("/console-api/").unwrap(),

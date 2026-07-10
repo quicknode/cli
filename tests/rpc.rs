@@ -59,7 +59,7 @@ async fn seeded_token_skips_mint() {
 
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber"],
+        &["--config-file", &cfg, "rpc", "call", "eth_blockNumber"],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -86,7 +86,14 @@ async fn already_enabled_yes_does_not_wait() {
     let started = std::time::Instant::now();
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber", "--yes"],
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--yes",
+        ],
     )
     .await;
     let elapsed = started.elapsed();
@@ -127,7 +134,7 @@ async fn no_cache_mints_then_calls() {
     let cfg = cfg_path(&dir);
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber"],
+        &["--config-file", &cfg, "rpc", "call", "eth_blockNumber"],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -155,7 +162,14 @@ async fn json_rpc_error_exits_nonzero() {
 
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_getBalance", "[\"bad\"]"],
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_getBalance",
+            "[\"bad\"]",
+        ],
     )
     .await;
     // SdkError::Rpc is neither Api nor Http → generic exit 1.
@@ -180,7 +194,7 @@ async fn not_enabled_without_yes_is_actionable_error() {
     // command should fail with the actionable "run 'qn tooling-access enable'".
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber"],
+        &["--config-file", &cfg, "rpc", "call", "eth_blockNumber"],
     )
     .await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
@@ -247,7 +261,14 @@ async fn not_enabled_with_yes_auto_enables_and_retries() {
     let cfg = cfg_path(&dir);
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber", "--yes"],
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--yes",
+        ],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -285,7 +306,7 @@ async fn account_switch_invalidates_cached_token() {
 
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber"],
+        &["--config-file", &cfg, "rpc", "call", "eth_blockNumber"],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -318,7 +339,15 @@ async fn connect_failure_with_disabled_status_prompts_to_enable() {
 
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber", "--retries", "0"],
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--retries",
+            "0",
+        ],
     )
     .await;
     assert_ne!(out.exit_code, 0, "should fail");
@@ -383,7 +412,16 @@ async fn connect_failure_with_disabled_status_auto_enables_with_yes() {
 
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "eth_blockNumber", "--retries", "0", "--yes"],
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--retries",
+            "0",
+            "--yes",
+        ],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -438,6 +476,7 @@ async fn network_routes_to_mapped_url() {
             "--config-file",
             &cfg,
             "rpc",
+            "call",
             "getSlot",
             "--network",
             "solana-mainnet",
@@ -482,11 +521,16 @@ async fn list_networks_prints_keys() {
     let cfg = cfg_path(&dir);
     write_token_cache(&dir, &format!("{}/default", server.uri()), TEST_KEY_HASH);
 
-    let out = run_qn(&server.uri(), &["--config-file", &cfg, "rpc", "--list-networks"]).await;
+    let out = run_qn(
+        &server.uri(),
+        &["--config-file", &cfg, "rpc", "list-networks"],
+    )
+    .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
-// Unknown --network surfaces an error (the SDK lists valid keys).
+// Unknown --network surfaces a CLI error that points at `qn rpc list-networks`
+// (the SDK's raw "unknown network" message is intercepted and re-rendered).
 #[tokio::test]
 async fn unknown_network_errors() {
     let server = MockServer::start().await;
@@ -518,13 +562,256 @@ async fn unknown_network_errors() {
 
     let out = run_qn(
         &server.uri(),
-        &["--config-file", &cfg, "rpc", "getSlot", "--network", "nope-mainnet"],
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "getSlot",
+            "--network",
+            "nope-mainnet",
+        ],
     )
     .await;
     assert_ne!(out.exit_code, 0, "should fail on unknown network");
+    // The CLI-rendered message keeps the available-keys list and points the
+    // user at the discovery command, dropping the SDK-internal seeding hint.
     assert!(
-        out.stderr.contains("unknown network") || out.stderr.contains("nope-mainnet"),
+        out.stderr.contains("qn rpc list-networks"),
+        "expected list-networks hint, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("solana-mainnet"),
+        "expected available keys, got: {}",
+        out.stderr
+    );
+}
+
+// A custom --endpoint-url sends the call straight to that URL. No token is
+// minted (the mint route is not mounted, so a stray mint would 404) and the
+// call succeeds against the custom host.
+#[tokio::test]
+async fn endpoint_url_flag_routes_call_without_minting() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/custom/rpc"))
+        .and(body_partial_json(json!({ "method": "eth_blockNumber" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0xcafe"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    let url = format!("{}/custom/rpc", server.uri());
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--endpoint-url",
+            &url,
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    // Custom-URL lane never mints, so nothing is written to the token cache.
+    assert!(
+        !dir.path().join("tokens.toml").exists(),
+        "custom-URL call must not write a token cache"
+    );
+}
+
+// `[rpc] endpoint_url` in the config file routes a call there with no flag.
+#[tokio::test]
+async fn config_endpoint_url_routes_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/from-config/rpc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x1"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let url = format!("{}/from-config/rpc", server.uri());
+    std::fs::write(
+        &path,
+        format!("[api]\nkey = \"test\"\n\n[rpc]\nendpoint_url = \"{url}\"\n"),
+    )
+    .unwrap();
+    let cfg = path.to_str().unwrap();
+
+    let out = run_qn(
+        &server.uri(),
+        &["--config-file", cfg, "rpc", "call", "eth_blockNumber"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+// A per-call --endpoint-url overrides the config-file default.
+#[tokio::test]
+async fn flag_endpoint_url_overrides_config() {
+    let server = MockServer::start().await;
+    // Only the flag's URL is mounted; the config URL would 404 if used.
+    Mock::given(method("POST"))
+        .and(path("/flag/rpc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x1"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let cfg_url = format!("{}/config/rpc", server.uri());
+    std::fs::write(
+        &path,
+        format!("[api]\nkey = \"test\"\n\n[rpc]\nendpoint_url = \"{cfg_url}\"\n"),
+    )
+    .unwrap();
+    let cfg = path.to_str().unwrap();
+    let flag_url = format!("{}/flag/rpc", server.uri());
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--endpoint-url",
+            &flag_url,
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+// A failing custom-URL call surfaces the error directly: it must NOT probe
+// Tooling Access status or attempt to enable it. Both admin endpoints assert
+// zero hits.
+#[tokio::test]
+async fn custom_url_failure_bypasses_enable_recovery() {
+    let server = MockServer::start().await;
+    // The custom endpoint returns a JSON-RPC error (a real, non-transport failure).
+    Mock::given(method("POST"))
+        .and(path("/custom/rpc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1,
+            "error": { "code": -32601, "message": "method not found" }
+        })))
+        .mount(&server)
+        .await;
+    // The Tooling Access status probe and enable must never be reached.
+    Mock::given(method("GET"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    let url = format!("{}/custom/rpc", server.uri());
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--endpoint-url",
+            &url,
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "custom-URL JSON-RPC error should fail");
+}
+
+// A malformed --endpoint-url is rejected before any request is made.
+#[tokio::test]
+async fn endpoint_url_rejects_bad_scheme() {
+    let server = MockServer::start().await;
+    // Nothing should be requested.
+    Mock::given(method("POST"))
+        .and(path("/rpc"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--endpoint-url",
+            "ftp://example.com/rpc",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "bad scheme should be rejected");
+    assert!(
+        out.stderr.contains("http or https"),
         "stderr={}",
         out.stderr
     );
+}
+
+// --endpoint-url and --network are mutually exclusive at the clap layer; the
+// parse error fires before any request.
+#[tokio::test]
+async fn endpoint_url_conflicts_with_network() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--endpoint-url",
+            "https://x/rpc",
+            "--network",
+            "solana-mainnet",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "conflicting flags should fail to parse");
 }
