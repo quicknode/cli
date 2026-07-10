@@ -119,8 +119,9 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
 - `sql` — query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
 - `tooling-access` — status, enable, disable (provisions the endpoint `rpc` uses)
 - `rpc` — make JSON-RPC calls. `qn rpc call <method> [json-params]` calls the
-  account's Tooling Access endpoint (params is a JSON array or object, or `-` to
-  read from stdin); the session JWT is minted and refreshed automatically. On a
+  account's Tooling Access endpoint (params is a JSON array or object inline, or
+  `--params-file <PATH>` / `-f` to read from a file, or `-` for stdin); the
+  session JWT is minted and refreshed automatically. On a
   not-yet-enabled account it auto-enables with `--yes` (or prompts on a TTY).
   Multichain: `--network <key>` targets a specific chain by its key (e.g.
   `solana-mainnet`, `polygon`); `qn rpc list-networks` (alias `ls`) lists the

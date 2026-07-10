@@ -291,7 +291,8 @@ qn tooling-access status
 qn rpc call eth_blockNumber
 qn rpc call eth_getBalance '["0xabc...", "latest"]'
 qn rpc call eth_call '{"to":"0x..."}'
-echo '[...]' | qn rpc call eth_call -   # read params from stdin
+qn rpc call eth_call --params-file params.json   # read params from a file (-f)
+echo '[...]' | qn rpc call eth_call -             # read params from stdin
 
 qn rpc call eth_blockNumber --yes      # auto-enable Tooling Access if needed
 

@@ -815,3 +815,119 @@ async fn endpoint_url_conflicts_with_network() {
     .await;
     assert_ne!(out.exit_code, 0, "conflicting flags should fail to parse");
 }
+
+// --params-file reads the JSON params from a file; the parsed params reach the
+// request body just like an inline positional value would.
+#[tokio::test]
+async fn params_file_reads_json_from_file() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rpc"))
+        .and(body_partial_json(json!({
+            "method": "eth_getBalance",
+            "params": ["0xabc", "latest"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x0"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    let params_path = dir.path().join("params.json");
+    std::fs::write(&params_path, r#"["0xabc", "latest"]"#).unwrap();
+    let params_file = params_path.to_str().unwrap();
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_getBalance",
+            "--params-file",
+            params_file,
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+// A missing --params-file path fails with an actionable error before any call.
+#[tokio::test]
+async fn params_file_missing_path_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rpc"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    let missing = dir.path().join("does-not-exist.json");
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_getBalance",
+            "-f",
+            missing.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "missing params file should fail");
+    assert!(
+        out.stderr.contains("could not read params file"),
+        "stderr={}",
+        out.stderr
+    );
+}
+
+// The positional params and --params-file are mutually exclusive at the clap
+// layer; passing both fails to parse before any request.
+#[tokio::test]
+async fn params_positional_and_file_conflict() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rpc"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_path(&dir);
+    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    let params_path = dir.path().join("params.json");
+    std::fs::write(&params_path, "[]").unwrap();
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_getBalance",
+            "[\"inline\"]",
+            "--params-file",
+            params_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert_ne!(
+        out.exit_code, 0,
+        "positional + --params-file should conflict"
+    );
+}

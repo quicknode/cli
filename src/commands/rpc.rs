@@ -18,8 +18,9 @@
 //! Tooling Access enable/probe recovery.
 
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
-use clap::{Args as ClapArgs, Subcommand};
+use clap::{ArgGroup, Args as ClapArgs, Subcommand};
 use serde_json::Value;
 
 use crate::confirm::{decide_without_prompt, ConfirmCfg, Severity};
@@ -44,7 +45,9 @@ pub enum RpcCmd {
         qn rpc call eth_getBalance '[\"0xabc...\", \"latest\"]'\n  \
         qn rpc call getSlot --network solana-mainnet\n  \
         qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc\n  \
-        echo '[...]' | qn rpc call eth_call -")]
+        qn rpc call eth_call --params-file params.json\n  \
+        echo '[...]' | qn rpc call eth_call -\n  \
+        cat params.json | qn rpc call eth_call -f -")]
     Call(CallArgs),
 
     /// List the endpoint's available network keys (no RPC call).
@@ -53,16 +56,23 @@ pub enum RpcCmd {
 }
 
 #[derive(Debug, ClapArgs)]
+#[command(group(ArgGroup::new("params_source").args(["params", "params_file"])))]
 pub struct CallArgs {
     /// The JSON-RPC method, e.g. `eth_blockNumber`.
     pub method: String,
 
     /// JSON params: an array (positional) or object (by-name). Pass `-` to read
-    /// the JSON from stdin. Omit for no params (sends `[]`).
+    /// the JSON from stdin. Omit for no params (sends `[]`). Mutually exclusive
+    /// with --params-file.
     ///
     /// To auto-enable Tooling Access when it isn't provisioned yet, pass the
     /// global `--yes`/`-y` flag (required in non-interactive contexts).
     pub params: Option<String>,
+
+    /// Read JSON params from a file, or from stdin when the path is `-`.
+    /// Mutually exclusive with the positional params argument.
+    #[arg(long, short = 'f', value_name = "PATH")]
+    pub params_file: Option<PathBuf>,
 
     /// Target network on the multichain endpoint, by its key (e.g.
     /// `solana-mainnet`, `polygon`, `btc`). Omit for the endpoint's default
@@ -102,7 +112,7 @@ async fn run_list_networks(global: GlobalArgs) -> Result<(), CliError> {
 }
 
 async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let params = parse_params(args.params.as_deref())?;
+    let params = parse_params(args.params.as_deref(), args.params_file.as_deref())?;
 
     // A custom URL (per-call flag, else the `[rpc] endpoint_url` config default)
     // is a separate lane: no JWT, no token cache, no Tooling Access recovery.
@@ -453,19 +463,22 @@ async fn maybe_enable(ctx: &Ctx) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Parse the params argument: `None` → no params; `Some("-")` → read JSON from
-/// stdin; otherwise parse the string as a JSON value.
-fn parse_params(arg: Option<&str>) -> Result<Option<Value>, CliError> {
-    let raw = match arg {
-        None => return Ok(None),
-        Some("-") => {
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(CliError::Io)?;
-            buf
-        }
-        Some(s) => s.to_string(),
+/// Resolve params from the inline positional arg or `--params-file`, then parse
+/// as JSON. `None`/`None` → no params (sends `[]`). Either source accepts `-` to
+/// read from stdin. The clap `ArgGroup` guarantees at most one is set. An empty
+/// value (after trimming) is treated as no params.
+fn parse_params(arg: Option<&str>, file: Option<&Path>) -> Result<Option<Value>, CliError> {
+    let raw = match (arg, file) {
+        (None, None) => return Ok(None),
+        (Some("-"), _) => read_stdin("params")?,
+        (Some(s), _) => s.to_string(),
+        (None, Some(path)) if path.as_os_str() == "-" => read_stdin("params")?,
+        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| {
+            CliError::Arg(format!(
+                "could not read params file '{}': {e}",
+                path.display()
+            ))
+        })?,
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -474,6 +487,15 @@ fn parse_params(arg: Option<&str>) -> Result<Option<Value>, CliError> {
     let value: Value = serde_json::from_str(trimmed)
         .map_err(|e| CliError::Arg(format!("params is not valid JSON: {e}")))?;
     Ok(Some(value))
+}
+
+/// Read all of stdin as a UTF-8 string, labeling errors with `what`.
+fn read_stdin(what: &str) -> Result<String, CliError> {
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|e| CliError::Arg(format!("could not read {what} from stdin: {e}")))?;
+    Ok(buf)
 }
 
 /// Emit the RPC result. RPC results are schemaless JSON, so JSON is the real
