@@ -59,6 +59,7 @@ pub enum RpcCmd {
 #[command(group(ArgGroup::new("params_source").args(["params", "params_file"])))]
 pub struct CallArgs {
     /// The JSON-RPC method, e.g. `eth_blockNumber`.
+    #[arg(value_name = "METHOD")]
     pub method: String,
 
     /// JSON params: an array (positional) or object (by-name). Pass `-` to read
@@ -67,6 +68,7 @@ pub struct CallArgs {
     ///
     /// To auto-enable Tooling Access when it isn't provisioned yet, pass the
     /// global `--yes`/`-y` flag (required in non-interactive contexts).
+    #[arg(value_name = "PARAMS")]
     pub params: Option<String>,
 
     /// Read JSON params from a file, or from stdin when the path is `-`.

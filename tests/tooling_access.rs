@@ -47,7 +47,7 @@ async fn enable_sends_enabled_true() {
 }
 
 #[tokio::test]
-async fn disable_sends_enabled_false() {
+async fn disable_with_yes_sends_enabled_false() {
     let server = MockServer::start().await;
     Mock::given(method("PATCH"))
         .and(path("/v0/tooling-access"))
@@ -60,8 +60,24 @@ async fn disable_sends_enabled_false() {
         .mount(&server)
         .await;
 
-    let out = run_qn(&server.uri(), &["tooling-access", "disable"]).await;
+    let out = run_qn(&server.uri(), &["tooling-access", "disable", "--yes"]).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn disable_without_yes_needs_confirmation_and_makes_no_request() {
+    let server = MockServer::start().await;
+    // A non-TTY without --yes must not reach the control plane.
+    Mock::given(method("PATCH"))
+        .and(path("/v0/tooling-access"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let out = run_qn(&server.uri(), &["tooling-access", "disable"]).await;
+    // NeedsConfirmation → exit 5.
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
 }
 
 #[tokio::test]

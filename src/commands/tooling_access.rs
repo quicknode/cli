@@ -9,6 +9,7 @@ use clap::{Args as ClapArgs, Subcommand};
 use comfy_table::Cell;
 use serde::Serialize;
 
+use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, write_table, Render};
@@ -30,7 +31,8 @@ pub enum ToolingAccessCmd {
     Status,
     /// Enable (provision) Tooling Access. Idempotent; requires an admin role.
     Enable,
-    /// Disable Tooling Access, pausing the endpoint. Idempotent.
+    /// Disable Tooling Access, cutting off blockchain access for all Quicknode
+    /// developer tooling on this account. Idempotent.
     Disable,
 }
 
@@ -49,6 +51,12 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
             crate::output::emit(&ctx.out, &StatusView(resp))
         }
         ToolingAccessCmd::Disable => {
+            confirm_mild(
+                &ctx,
+                "Disable Tooling Access? This disables blockchain access \
+                 for all Quicknode developer tooling on this account \
+                 until you re-enable it",
+            )?;
             let resp = ctx.sdk.admin.disable_tooling_access().await?;
             ctx.out.note("✓ Disabled Tooling Access");
             crate::output::emit(&ctx.out, &StatusView(resp))
