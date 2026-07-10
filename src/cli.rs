@@ -94,6 +94,12 @@ pub struct Cli {
     #[arg(long, global = true, hide = true)]
     pub base_url: Option<String>,
 
+    /// Path prefix inserted between the host and each sub-client's path (e.g.
+    /// `/console-api`). For reverse-proxy / gateway environments. Requires
+    /// `--base-url`.
+    #[arg(long, global = true, hide = true)]
+    pub base_prefix: Option<String>,
+
     /// Print help (see a summary with '-h').
     #[arg(short = 'h', long, global = true, action = ArgAction::Help)]
     pub help: Option<bool>,
@@ -148,6 +154,13 @@ pub enum Command {
 
     /// Run SQL queries and inspect cluster schemas.
     Sql(commands::sql::Args),
+
+    /// Make JSON-RPC calls against your Tooling Access endpoint.
+    Rpc(commands::rpc::Args),
+
+    /// Manage Tooling Access (the endpoint `qn rpc` uses).
+    #[command(name = "tooling-access")]
+    ToolingAccess(commands::tooling_access::Args),
 
     /// Generate shell completion scripts.
     ///
@@ -206,6 +219,7 @@ impl Cli {
             yes_count: self.yes,
             retries: self.retries,
             base_url: self.base_url.clone(),
+            base_prefix: self.base_prefix.clone(),
         }
     }
 
@@ -239,6 +253,12 @@ impl Cli {
             Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
             Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
             Command::Sql(args) => commands::sql::run(args, Ctx::from_global(global)?).await,
+            // rpc builds its own Ctx (it seeds the SDK from the on-disk token
+            // cache before construction), so it takes `global` directly.
+            Command::Rpc(args) => commands::rpc::run(args, global).await,
+            Command::ToolingAccess(args) => {
+                commands::tooling_access::run(args, Ctx::from_global(global)?).await
+            }
         }
     }
 }

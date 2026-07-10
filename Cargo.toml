@@ -21,7 +21,7 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-quicknode-sdk = "0.6"
+quicknode-sdk = "0.7"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -39,6 +39,9 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 base64 = "0.22"
 tempfile = "3"
 url = "2"
+# Stable fingerprint of the API key for scoping the JWT token cache to an
+# account. The key itself is never written to the cache — only this hash.
+sha2 = "0.10"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false }

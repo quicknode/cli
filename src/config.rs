@@ -47,11 +47,23 @@ pub struct ConfigFile {
     pub api: ApiSection,
     #[serde(default)]
     pub output: OutputSection,
+    #[serde(default)]
+    pub rpc: RpcSection,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ApiSection {
     pub key: Option<String>,
+}
+
+/// `[rpc]` section: RPC-specific defaults. `endpoint_url`, when set, routes
+/// `qn rpc call` at a fully-formed custom HTTP URL instead of the account's
+/// Tooling Access endpoint (self-authenticating: no JWT minted). A per-call
+/// `--endpoint-url` overrides it. Mirrors the SDK's `RpcConfig.endpoint_url`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct RpcSection {
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -210,6 +222,283 @@ fn write_config(path: &Path, cfg: &ConfigFile) -> Result<(), CliError> {
     })?;
 
     Ok(())
+}
+
+// ── Tooling Access token cache ───────────────────────────────────────────────
+//
+// Each `qn rpc` is a fresh process, so the SDK's in-memory JWT cache starts
+// empty every time. We persist the short-lived (~10 min) session token next to
+// the config (`tokens.toml`) and re-seed the SDK on the next invocation,
+// avoiding a control-plane round trip while the token is still valid.
+//
+// Only the short-lived JWT is written here — never the long-lived API key. The
+// entry is scoped to the account by a fingerprint (SHA-256) of the API key, so
+// switching keys transparently invalidates a stale token rather than presenting
+// one account's JWT to another's endpoint.
+
+use quicknode_sdk::CachedToken;
+
+/// On-disk shape of `~/.config/qn/tokens.toml`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct TokenCacheFile {
+    #[serde(default)]
+    pub token: Option<CachedTokenEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedTokenEntry {
+    /// SHA-256 hex of the API key this token was minted for. Never the key.
+    pub key_hash: String,
+    pub endpoint_url: String,
+    pub token: String,
+    pub exp_unix: i64,
+}
+
+/// The token cache path: `tokens.toml` alongside the resolved config file (so
+/// `--config-file` keeps config and tokens together). Falls back to the default
+/// config dir when no explicit config path is given.
+pub fn token_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("tokens.toml")),
+        None => config_dir().map(|d| d.join("qn").join("tokens.toml")),
+    }
+}
+
+/// Hex SHA-256 of the API key, used to scope a cached token to its account.
+pub fn fingerprint_key(api_key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(api_key.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Loads a cached token for `api_key` from `path`. Returns `None` if the file is
+/// absent, unparseable, empty, or scoped to a different key (account switch).
+/// A malformed cache is treated as a miss, never an error — the SDK will mint.
+pub fn load_token(path: &Path, api_key: &str) -> Option<CachedToken> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: TokenCacheFile = toml::from_str(&text).ok()?;
+    let entry = cache.token?;
+    if entry.key_hash != fingerprint_key(api_key) {
+        return None;
+    }
+    Some(CachedToken {
+        endpoint_url: entry.endpoint_url,
+        token: entry.token,
+        exp_unix: entry.exp_unix,
+    })
+}
+
+/// Saves `token` to `path` atomically with 0600 perms, scoped to `api_key`.
+/// Mirrors [`save_api_key`]'s write discipline: temp file in the same dir,
+/// 0600 set before the secret bytes, `rename` over the target. Last-write-wins
+/// under concurrency — two `qn rpc` processes may both mint, but the atomic
+/// rename guarantees no partial file and both tokens are valid.
+pub fn save_token(path: &Path, api_key: &str, token: &CachedToken) -> Result<(), CliError> {
+    let cache = TokenCacheFile {
+        token: Some(CachedTokenEntry {
+            key_hash: fingerprint_key(api_key),
+            endpoint_url: token.endpoint_url.clone(),
+            token: token.token.clone(),
+            exp_unix: token.exp_unix,
+        }),
+    };
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+
+    let parent = path.parent().ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other("token cache path has no parent directory"),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".qn-tokens-")
+        .tempfile_in(parent)
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600)).map_err(|source| {
+            CliError::ConfigWrite {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+
+    use std::io::Write;
+    tmp.as_file_mut()
+        .write_all(text.as_bytes())
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    tmp.as_file_mut()
+        .sync_all()
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    tmp.persist(path).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: e.error,
+    })?;
+    Ok(())
+}
+
+// ── Multichain network URL cache ─────────────────────────────────────────────
+//
+// The per-network URL map (network key -> http_url) is stable endpoint metadata,
+// unlike the ~10-min JWT. We cache it separately in `networks.toml` with a
+// 24-hour TTL so it isn't rewritten on every token refresh. Scoped to the
+// endpoint id; re-fetched (via get_endpoint_urls) when absent or stale.
+
+/// Seconds the cached network map is considered fresh (24h).
+pub const NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct NetworksCacheFile {
+    #[serde(default)]
+    pub entry: Option<NetworksEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworksEntry {
+    /// Endpoint id the map belongs to; a different id is a cache miss.
+    pub endpoint_id: String,
+    /// Unix seconds the map was fetched, for the TTL check.
+    pub fetched_at_unix: i64,
+    /// network key -> full http_url.
+    pub networks: std::collections::HashMap<String, String>,
+}
+
+/// The networks cache path: `networks.toml` alongside the resolved config file.
+pub fn networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("networks.toml")),
+        None => config_dir().map(|d| d.join("qn").join("networks.toml")),
+    }
+}
+
+/// Loads the cached network map for `endpoint_id` from `path`, if present, for
+/// the same endpoint, and fetched within the TTL (relative to `now_unix`).
+/// Returns `None` (a cache miss) on any mismatch or parse failure.
+pub fn load_networks(
+    path: &Path,
+    endpoint_id: &str,
+    now_unix: i64,
+) -> Option<std::collections::HashMap<String, String>> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: NetworksCacheFile = toml::from_str(&text).ok()?;
+    let entry = cache.entry?;
+    if entry.endpoint_id != endpoint_id {
+        return None;
+    }
+    if now_unix.saturating_sub(entry.fetched_at_unix) >= NETWORKS_TTL_SECS {
+        return None;
+    }
+    Some(entry.networks)
+}
+
+/// Saves the network map for `endpoint_id` to `path` atomically with 0600 perms,
+/// stamping `fetched_at_unix` for the TTL check. Same write discipline as
+/// [`save_token`].
+pub fn save_networks(
+    path: &Path,
+    endpoint_id: &str,
+    fetched_at_unix: i64,
+    networks: &std::collections::HashMap<String, String>,
+) -> Result<(), CliError> {
+    let cache = NetworksCacheFile {
+        entry: Some(NetworksEntry {
+            endpoint_id: endpoint_id.to_string(),
+            fetched_at_unix,
+            networks: networks.clone(),
+        }),
+    };
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-networks-")
+}
+
+/// Atomically writes `bytes` to `path` with 0600 perms via a temp file in the
+/// same directory (perms set before the bytes), then `rename`. Shared by the
+/// token and networks caches.
+fn write_atomic_0600(path: &Path, bytes: &[u8], tmp_prefix: &str) -> Result<(), CliError> {
+    let parent = path.parent().ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other("cache path has no parent directory"),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+    let mut tmp = tempfile::Builder::new()
+        .prefix(tmp_prefix)
+        .tempfile_in(parent)
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600)).map_err(|source| {
+            CliError::ConfigWrite {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+    use std::io::Write;
+    tmp.as_file_mut()
+        .write_all(bytes)
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    tmp.as_file_mut()
+        .sync_all()
+        .map_err(|source| CliError::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    tmp.persist(path).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: e.error,
+    })?;
+    Ok(())
+}
+
+/// Deletes the saved config file. No error if it didn't exist.
+pub fn delete_config(path: &Path) -> Result<(), CliError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Resolves an API key per the documented precedence: flag > config file.
@@ -416,6 +705,42 @@ mod tests {
         std::fs::write(&path, "[output]\nwide = true\n").unwrap();
         let cfg = load_from(&path).unwrap().unwrap();
         assert!(cfg.output.wide);
+    }
+
+    #[test]
+    fn rpc_endpoint_url_round_trips_through_config_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[api]\nkey = \"k\"\n\n[rpc]\nendpoint_url = \"https://my-endpoint.example/rpc\"\n",
+        )
+        .unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(
+            cfg.rpc.endpoint_url.as_deref(),
+            Some("https://my-endpoint.example/rpc")
+        );
+    }
+
+    #[test]
+    fn rpc_section_is_optional() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[api]\nkey = \"k\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.rpc.endpoint_url, None);
+    }
+
+    #[test]
+    fn save_api_key_preserves_rpc_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc]\nendpoint_url = \"https://x/rpc\"\n").unwrap();
+        save_api_key(&path, "new-key").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
+        assert_eq!(cfg.rpc.endpoint_url.as_deref(), Some("https://x/rpc"));
     }
 
     #[test]

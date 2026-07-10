@@ -88,15 +88,23 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
         CliError::Sdk(SdkError::Api { status, body }) => {
             render_api_error(status.as_u16(), body, verbose, argv)
         }
-        CliError::Sdk(sdk @ SdkError::Http(_)) => {
+        CliError::Sdk(sdk @ SdkError::Http(inner)) => {
+            // The failed host varies: control-plane calls hit api.quicknode.com,
+            // RPC data-plane calls hit the endpoint host (*.quiknode.pro). Name
+            // the actual host from the reqwest error's URL when available rather
+            // than hardcoding one.
+            let host = inner.url().and_then(|u| u.host_str()).map(str::to_string);
+            let target = host
+                .map(|h| format!("'{h}'"))
+                .unwrap_or_else(|| "the Quicknode API".to_string());
             let msg = match sdk.http_kind() {
                 Some(HttpKind::Timeout) => {
-                    "request timed out. Check your connection and try again."
+                    format!("request to {target} timed out. Check your connection and try again.")
                 }
                 Some(HttpKind::Connect) => {
-                    "could not connect to api.quicknode.com. Check your network."
+                    format!("could not connect to {target}. Check your network.")
                 }
-                _ => "HTTP transport failure talking to the Quicknode API.",
+                _ => format!("HTTP transport failure talking to {target}."),
             };
             if verbose {
                 format!("Error: {msg}\n{sdk}")
