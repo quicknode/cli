@@ -282,7 +282,17 @@ async fn ensure_networks(
     networks_path: Option<&std::path::Path>,
 ) -> Result<std::collections::HashMap<String, String>, CliError> {
     // Need the endpoint id to scope the cache and fetch URLs.
-    let status = retrying(ctx.global.retries, || ctx.sdk.admin.tooling_access_status()).await?;
+    let mut status = retrying(ctx.global.retries, || ctx.sdk.admin.tooling_access_status()).await?;
+
+    // Not enabled yet: this is the same "offer to enable" decision the default
+    // lane makes on a mint 400 — prompt on a TTY, auto on --yes, actionable
+    // exit-5 error otherwise. `maybe_enable` returns Cancelled if the user
+    // declines, so we only re-fetch after a successful enable.
+    if !status.enabled {
+        maybe_enable(ctx).await?;
+        status = retrying(ctx.global.retries, || ctx.sdk.admin.tooling_access_status()).await?;
+    }
+
     let Some(endpoint_id) = status.endpoint_id else {
         return Err(CliError::Arg(
             "this account's Tooling Access endpoint did not report an id, so per-network \
