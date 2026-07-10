@@ -231,24 +231,35 @@ fn write_config(path: &Path, cfg: &ConfigFile) -> Result<(), CliError> {
 // the config (`tokens.toml`) and re-seed the SDK on the next invocation,
 // avoiding a control-plane round trip while the token is still valid.
 //
-// Only the short-lived JWT is written here — never the long-lived API key. The
-// entry is scoped to the account by a fingerprint (SHA-256) of the API key, so
-// switching keys transparently invalidates a stale token rather than presenting
-// one account's JWT to another's endpoint.
+// Tooling Access endpoints are provisioned per account, not per API key, so the
+// cache is keyed by account id via a two-level lookup:
+//
+//   sha256(api_key)  ->  account_id  ->  { endpoint_url, token, exp_unix }
+//
+// The `[keys]` table maps an API-key fingerprint to its account id; the
+// `[tokens.<account_id>]` tables hold the JWTs. On a hit, both lookups are
+// offline (no control-plane call). All API keys for one account share a single
+// cached token. Only the short-lived JWT is written here — never the long-lived
+// API key. The account id is a non-secret numeric identifier, stored raw.
+
+use std::collections::HashMap;
 
 use quicknode_sdk::CachedToken;
 
 /// On-disk shape of `~/.config/qn/tokens.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TokenCacheFile {
+    /// API-key fingerprint (SHA-256 hex) -> account id.
     #[serde(default)]
-    pub token: Option<CachedTokenEntry>,
+    pub keys: HashMap<String, i64>,
+    /// Account id (as a string, since TOML table keys must be strings) -> cached
+    /// JWT for that account's Tooling Access endpoint.
+    #[serde(default)]
+    pub tokens: HashMap<String, CachedTokenEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedTokenEntry {
-    /// SHA-256 hex of the API key this token was minted for. Never the key.
-    pub key_hash: String,
     pub endpoint_url: String,
     pub token: String,
     pub exp_unix: i64,
@@ -264,23 +275,35 @@ pub fn token_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// Hex SHA-256 of the API key, used to scope a cached token to its account.
+/// Hex SHA-256 of the API key, used to map a key to its account id.
 pub fn fingerprint_key(api_key: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(api_key.as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Loads a cached token for `api_key` from `path`. Returns `None` if the file is
-/// absent, unparseable, empty, or scoped to a different key (account switch).
-/// A malformed cache is treated as a miss, never an error — the SDK will mint.
-pub fn load_token(path: &Path, api_key: &str) -> Option<CachedToken> {
-    let text = fs::read_to_string(path).ok()?;
-    let cache: TokenCacheFile = toml::from_str(&text).ok()?;
-    let entry = cache.token?;
-    if entry.key_hash != fingerprint_key(api_key) {
-        return None;
-    }
+/// Reads `tokens.toml`, treating an absent or malformed file as an empty cache.
+/// A malformed cache (e.g. an older on-disk schema) is a miss, never an error.
+fn read_cache(path: &Path) -> TokenCacheFile {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Resolves the account id a known API key maps to, offline. Returns `None` when
+/// the key hasn't been seen before (its fingerprint isn't in `[keys]` yet).
+pub fn account_for_key(path: &Path, api_key: &str) -> Option<i64> {
+    read_cache(path)
+        .keys
+        .get(&fingerprint_key(api_key))
+        .copied()
+}
+
+/// Loads the cached token for `account_id`. Returns `None` if the file is
+/// absent, unparseable, or has no entry for that account.
+pub fn load_token_for_account(path: &Path, account_id: i64) -> Option<CachedToken> {
+    let entry = read_cache(path).tokens.remove(&account_id.to_string())?;
     Some(CachedToken {
         endpoint_url: entry.endpoint_url,
         token: entry.token,
@@ -288,77 +311,48 @@ pub fn load_token(path: &Path, api_key: &str) -> Option<CachedToken> {
     })
 }
 
-/// Saves `token` to `path` atomically with 0600 perms, scoped to `api_key`.
-/// Mirrors [`save_api_key`]'s write discipline: temp file in the same dir,
-/// 0600 set before the secret bytes, `rename` over the target. Last-write-wins
-/// under concurrency — two `qn rpc` processes may both mint, but the atomic
-/// rename guarantees no partial file and both tokens are valid.
-pub fn save_token(path: &Path, api_key: &str, token: &CachedToken) -> Result<(), CliError> {
-    let cache = TokenCacheFile {
-        token: Some(CachedTokenEntry {
-            key_hash: fingerprint_key(api_key),
+/// Records the `api_key -> account_id` mapping and stores `token` under that
+/// account, preserving every other account's entry (read-modify-write). Written
+/// atomically with 0600 perms. Last-write-wins under concurrency — two `qn rpc`
+/// processes may both mint, but the atomic rename guarantees no partial file.
+pub fn save_token(
+    path: &Path,
+    api_key: &str,
+    account_id: i64,
+    token: &CachedToken,
+) -> Result<(), CliError> {
+    let mut cache = read_cache(path);
+    cache.keys.insert(fingerprint_key(api_key), account_id);
+    cache.tokens.insert(
+        account_id.to_string(),
+        CachedTokenEntry {
             endpoint_url: token.endpoint_url.clone(),
             token: token.token.clone(),
             exp_unix: token.exp_unix,
-        }),
-    };
-    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        },
+    );
+    write_cache(path, &cache)
+}
+
+/// Drops the cached JWT for `account_id` (e.g. a stale token against an endpoint
+/// that was disabled out-of-band), leaving other accounts' tokens and every
+/// `[keys]` mapping intact. No-op if there was no entry. Best-effort: a missing
+/// or malformed file is not an error.
+pub fn delete_account_token(path: &Path, account_id: i64) -> Result<(), CliError> {
+    let mut cache = read_cache(path);
+    if cache.tokens.remove(&account_id.to_string()).is_none() {
+        return Ok(());
+    }
+    write_cache(path, &cache)
+}
+
+/// Serializes the cache and writes it atomically at 0600.
+fn write_cache(path: &Path, cache: &TokenCacheFile) -> Result<(), CliError> {
+    let text = toml::to_string_pretty(cache).map_err(|e| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other(e),
     })?;
-
-    let parent = path.parent().ok_or_else(|| CliError::ConfigWrite {
-        path: path.to_path_buf(),
-        source: std::io::Error::other("token cache path has no parent directory"),
-    })?;
-    fs::create_dir_all(parent).map_err(|source| CliError::ConfigWrite {
-        path: path.to_path_buf(),
-        source,
-    })?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-    }
-
-    let mut tmp = tempfile::Builder::new()
-        .prefix(".qn-tokens-")
-        .tempfile_in(parent)
-        .map_err(|source| CliError::ConfigWrite {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600)).map_err(|source| {
-            CliError::ConfigWrite {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
-    }
-
-    use std::io::Write;
-    tmp.as_file_mut()
-        .write_all(text.as_bytes())
-        .map_err(|source| CliError::ConfigWrite {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    tmp.as_file_mut()
-        .sync_all()
-        .map_err(|source| CliError::ConfigWrite {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    tmp.persist(path).map_err(|e| CliError::ConfigWrite {
-        path: path.to_path_buf(),
-        source: e.error,
-    })?;
-    Ok(())
+    write_atomic_0600(path, text.as_bytes(), ".qn-tokens-")
 }
 
 // ── Multichain network URL cache ─────────────────────────────────────────────
@@ -490,15 +484,6 @@ fn write_atomic_0600(path: &Path, bytes: &[u8], tmp_prefix: &str) -> Result<(), 
         source: e.error,
     })?;
     Ok(())
-}
-
-/// Deletes the saved config file. No error if it didn't exist.
-pub fn delete_config(path: &Path) -> Result<(), CliError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
 }
 
 /// Resolves an API key per the documented precedence: flag > config file.
@@ -827,5 +812,106 @@ mod tests {
             leftover.is_empty(),
             "found tempfile leftovers: {leftover:?}"
         );
+    }
+
+    // ── token cache ──────────────────────────────────────────────────────────
+
+    fn sample_token(url: &str) -> CachedToken {
+        CachedToken {
+            endpoint_url: url.to_string(),
+            token: "jwt".to_string(),
+            exp_unix: 4_070_908_800,
+        }
+    }
+
+    #[test]
+    fn token_round_trips_by_account() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        save_token(&path, "key-a", 1, &sample_token("https://a.example/rpc")).unwrap();
+
+        assert_eq!(account_for_key(&path, "key-a"), Some(1));
+        let loaded = load_token_for_account(&path, 1).unwrap();
+        assert_eq!(loaded.endpoint_url, "https://a.example/rpc");
+        assert_eq!(loaded.token, "jwt");
+    }
+
+    #[test]
+    fn multiple_keys_share_one_account_token() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        let token = sample_token("https://a.example/rpc");
+        save_token(&path, "key-a", 1, &token).unwrap();
+        // A second key for the same account records its mapping and reuses the
+        // account's token entry.
+        save_token(&path, "key-b", 1, &token).unwrap();
+
+        assert_eq!(account_for_key(&path, "key-a"), Some(1));
+        assert_eq!(account_for_key(&path, "key-b"), Some(1));
+        assert!(load_token_for_account(&path, 1).is_some());
+    }
+
+    #[test]
+    fn save_preserves_other_accounts() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        save_token(&path, "key-a", 1, &sample_token("https://a.example/rpc")).unwrap();
+        save_token(&path, "key-b", 2, &sample_token("https://b.example/rpc")).unwrap();
+
+        assert!(load_token_for_account(&path, 1).is_some());
+        assert!(load_token_for_account(&path, 2).is_some());
+        assert_eq!(account_for_key(&path, "key-a"), Some(1));
+        assert_eq!(account_for_key(&path, "key-b"), Some(2));
+    }
+
+    #[test]
+    fn delete_account_token_leaves_other_entries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        save_token(&path, "key-a", 1, &sample_token("https://a.example/rpc")).unwrap();
+        save_token(&path, "key-b", 2, &sample_token("https://b.example/rpc")).unwrap();
+
+        delete_account_token(&path, 1).unwrap();
+
+        // Account 1's token is gone, but its key mapping and account 2 remain.
+        assert!(load_token_for_account(&path, 1).is_none());
+        assert_eq!(account_for_key(&path, "key-a"), Some(1));
+        assert!(load_token_for_account(&path, 2).is_some());
+    }
+
+    #[test]
+    fn delete_account_token_missing_file_is_ok() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        assert!(delete_account_token(&path, 1).is_ok());
+    }
+
+    #[test]
+    fn old_schema_is_treated_as_a_miss() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        // The previous single-entry `[token]` schema keyed by `key_hash`.
+        let old = "[token]\nkey_hash = \"deadbeef\"\nendpoint_url = \"https://x/rpc\"\n\
+                   token = \"seeded.jwt\"\nexp_unix = 4070908800\n";
+        fs::write(&path, old).unwrap();
+
+        // No account resolvable, no token loadable, and no error.
+        assert_eq!(account_for_key(&path, "anything"), None);
+        assert!(load_token_for_account(&path, 1).is_none());
+
+        // The next write rewrites the file in the new shape.
+        save_token(&path, "key-a", 1, &sample_token("https://a.example/rpc")).unwrap();
+        assert_eq!(account_for_key(&path, "key-a"), Some(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_token_writes_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tokens.toml");
+        save_token(&path, "key-a", 1, &sample_token("https://a.example/rpc")).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
     }
 }

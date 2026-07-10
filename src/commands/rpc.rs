@@ -6,7 +6,9 @@
 //! refreshes a short-lived session JWT automatically. Because each CLI
 //! invocation is a fresh process, we persist that JWT to `tokens.toml` and
 //! re-seed it next time (see `crate::config` token cache), so a valid token
-//! means no control-plane round trip.
+//! means no control-plane round trip. The cache is keyed by account id (all API
+//! keys for one account share a token); the account is resolved offline on a hit
+//! and learned via `account_info` only on a miss, where a mint already occurs.
 //!
 //! On a never-provisioned account the first call fails with "not enabled"; we
 //! offer to enable (prompt on a TTY, `--yes` for scripts/agents, otherwise an
@@ -104,10 +106,8 @@ async fn run_list_networks(global: GlobalArgs) -> Result<(), CliError> {
     let config_path = global.resolve_config_path();
     let networks_path = config::networks_cache_path(config_path.as_deref());
     let token_path = config::token_cache_path(config_path.as_deref());
-    let seed = match (&token_path, resolve_key_quietly(&global)) {
-        (Some(p), Some(key)) => config::load_token(p, &key),
-        _ => None,
-    };
+    let (seed, _account_id) =
+        load_cached_token(&token_path, resolve_key_quietly(&global).as_deref());
     let (ctx, _api_key) = Ctx::from_global_with_rpc_seed(global, seed, None)?;
     let map = ensure_networks(&ctx, networks_path.as_deref()).await?;
     emit_networks(&ctx, &map)
@@ -134,13 +134,13 @@ async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
     let token_path = config::token_cache_path(config_path.as_deref());
     let networks_path = config::networks_cache_path(config_path.as_deref());
 
-    // We don't know the API key until Ctx builds it, but the cache is keyed by
-    // the key's fingerprint. Resolve it once here for the load; Ctx re-resolves
-    // and returns it for the write-back (cheap, and keeps Ctx the source of truth).
-    let seed = match (&token_path, resolve_key_quietly(&global)) {
-        (Some(p), Some(key)) => config::load_token(p, &key),
-        _ => None,
-    };
+    // The cache is keyed by account id, resolved offline from the key's
+    // fingerprint. Resolve the key once here for the load; Ctx re-resolves and
+    // returns it for the write-back (cheap, and keeps Ctx the source of truth).
+    // A known key yields both a seed token and its account id, so a cache hit
+    // never needs a control-plane account lookup on write-back.
+    let (seed, mut account_id) =
+        load_cached_token(&token_path, resolve_key_quietly(&global).as_deref());
 
     let (ctx, api_key) = Ctx::from_global_with_rpc_seed(global, seed, config_endpoint_url)?;
 
@@ -185,10 +185,13 @@ async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
             if disabled_per_status(&ctx).await {
                 // The stale token points at the disabled endpoint. Drop it both
                 // in memory (so this retry mints fresh) and on disk (so the next
-                // process does too) before enabling and retrying.
+                // process does too) before enabling and retrying. Only this
+                // account's entry is removed; other accounts' tokens and every
+                // key mapping in the shared file are preserved. A stale token
+                // implies a cache hit, so `account_id` is known here.
                 ctx.sdk.rpc.clear_cached_token();
-                if let Some(p) = &token_path {
-                    let _ = config::delete_config(p);
+                if let (Some(p), Some(id)) = (&token_path, account_id) {
+                    let _ = config::delete_account_token(p, id);
                 }
                 maybe_enable(&ctx).await?;
                 call_after_enable(&ctx, method, &params, args.network.clone()).await?
@@ -203,13 +206,26 @@ async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
 
     // Snapshot the (possibly refreshed) token and write it back. On the custom-URL
     // lane no token is minted, so `current_token()` is `None` and nothing is
-    // written — the existing cache is left untouched. Otherwise we always persist
-    // when a token is present: the write is an idempotent atomic replace, the
-    // token is short-lived, and re-writing an unchanged token is harmless.
-    // Best-effort — a cache write failure must not fail the call, which already
-    // succeeded; the next run simply re-mints.
+    // written — the existing cache is left untouched. Otherwise we persist under
+    // the account id: an idempotent atomic replace preserving other accounts'
+    // entries. On a cache hit `account_id` is already known (no extra call); on a
+    // miss (a new key that just minted) we learn it from `account_info()` once,
+    // which is cheap relative to the mint that just happened. Best-effort — a
+    // cache write failure must not fail the call, which already succeeded.
     if let (Some(p), Some(current)) = (&token_path, ctx.sdk.rpc.current_token()) {
-        let _ = config::save_token(p, &api_key, &current);
+        if account_id.is_none() {
+            account_id = ctx
+                .sdk
+                .admin
+                .account_info()
+                .await
+                .ok()
+                .and_then(|r| r.data)
+                .map(|a| a.id);
+        }
+        if let Some(id) = account_id {
+            let _ = config::save_token(p, &api_key, id, &current);
+        }
     }
 
     emit_result(&ctx, &result)
@@ -315,6 +331,27 @@ fn emit_networks(
         println!("{k}");
     }
     Ok(())
+}
+
+/// Offline two-level cache load: resolve `key`'s account id from `[keys]`, then
+/// load that account's cached JWT. Returns `(seed, account_id)`. The account id
+/// is returned even when there's no token yet, so a subsequent write-back can
+/// reuse it without a control-plane `account_info` call. A cache miss (unknown
+/// key) yields `(None, None)`.
+fn load_cached_token(
+    token_path: &Option<PathBuf>,
+    key: Option<&str>,
+) -> (Option<quicknode_sdk::CachedToken>, Option<i64>) {
+    let (Some(p), Some(key)) = (token_path, key) else {
+        return (None, None);
+    };
+    let Some(account_id) = config::account_for_key(p, key) else {
+        return (None, None);
+    };
+    (
+        config::load_token_for_account(p, account_id),
+        Some(account_id),
+    )
 }
 
 /// Resolve the API key without prompting, swallowing errors (the real

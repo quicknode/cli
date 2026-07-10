@@ -1,8 +1,9 @@
 //! Integration tests for `qn rpc`.
 //!
 //! The in-process harness injects `--api-key test`; the token cache is keyed by
-//! the SHA-256 of that key. Tests that exercise the cache pass `--config-file`
-//! so `tokens.toml` lands in a tempdir rather than the real home.
+//! account id via a `sha256(key) -> account_id -> token` lookup. Tests that
+//! exercise the cache pass `--config-file` so `tokens.toml` lands in a tempdir
+//! rather than the real home.
 
 mod common;
 
@@ -15,18 +16,44 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 // SHA-256 of "test" (the harness-injected API key).
 const TEST_KEY_HASH: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
+// The account id used across the cache tests.
+const TEST_ACCOUNT_ID: i64 = 12345;
+
 // A far-future ISO timestamp so a freshly minted token is never near expiry.
 const FUTURE_ISO: &str = "2099-01-01T00:00:00.000Z";
 // Matching far-future unix seconds for a seeded token.
 const FUTURE_UNIX: i64 = 4_070_908_800;
 
-fn write_token_cache(dir: &tempfile::TempDir, endpoint_url: &str, key_hash: &str) {
+/// Writes a `tokens.toml` in the new two-level shape: `key_hash -> account_id`
+/// and `account_id -> token`. A hit on `key_hash` resolves the account offline.
+fn write_token_cache(dir: &tempfile::TempDir, endpoint_url: &str, key_hash: &str, account_id: i64) {
     let path = dir.path().join("tokens.toml");
     let body = format!(
-        "[token]\nkey_hash = \"{key_hash}\"\nendpoint_url = \"{endpoint_url}\"\n\
+        "[keys]\n\"{key_hash}\" = {account_id}\n\n\
+         [tokens.{account_id}]\nendpoint_url = \"{endpoint_url}\"\n\
          token = \"seeded.jwt\"\nexp_unix = {FUTURE_UNIX}\n"
     );
     std::fs::write(&path, body).unwrap();
+}
+
+/// Mounts a `GET /v0/account/info` returning `TEST_ACCOUNT_ID`, asserting it is
+/// called exactly `times`. Cache misses need it (to key the write-back by
+/// account); cache hits must never call it.
+async fn mount_account_info(server: &MockServer, times: u64) {
+    Mock::given(method("GET"))
+        .and(path("/v0/account/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "id": TEST_ACCOUNT_ID,
+                "name": "Acme Inc",
+                "created_at": "2024-01-01T00:00:00Z",
+                "billing_version": "v6",
+                "subscription": null
+            }
+        })))
+        .expect(times)
+        .mount(server)
+        .await;
 }
 
 fn cfg_path(dir: &tempfile::TempDir) -> String {
@@ -52,10 +79,17 @@ async fn seeded_token_skips_mint() {
         .expect(1)
         .mount(&server)
         .await;
+    // A cache hit must resolve the account offline: account_info is never called.
+    mount_account_info(&server, 0).await;
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/rpc", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -81,7 +115,12 @@ async fn already_enabled_yes_does_not_wait() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/rpc", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let started = std::time::Instant::now();
     let out = run_qn(
@@ -129,6 +168,8 @@ async fn no_cache_mints_then_calls() {
         .expect(1)
         .mount(&server)
         .await;
+    // A miss (unknown key) learns the account id once to key the write-back.
+    mount_account_info(&server, 1).await;
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
@@ -139,9 +180,22 @@ async fn no_cache_mints_then_calls() {
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
-    // The minted token should have been written back to the cache.
+    // The minted token should have been written back under the account id, with
+    // the key -> account mapping recorded, and never the API key itself.
     let cached = std::fs::read_to_string(dir.path().join("tokens.toml")).unwrap();
     assert!(cached.contains("minted.jwt"), "cache: {cached}");
+    assert!(
+        cached.contains(&format!("[tokens.{TEST_ACCOUNT_ID}]")),
+        "token keyed by account id: {cached}"
+    );
+    assert!(
+        cached.contains(TEST_KEY_HASH),
+        "key mapping recorded: {cached}"
+    );
+    assert!(
+        !cached.contains("\"test\""),
+        "api key must not be stored: {cached}"
+    );
 }
 
 #[tokio::test]
@@ -158,7 +212,12 @@ async fn json_rpc_error_exits_nonzero() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/rpc", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -275,9 +334,11 @@ async fn not_enabled_with_yes_auto_enables_and_retries() {
 }
 
 #[tokio::test]
-async fn account_switch_invalidates_cached_token() {
+async fn unknown_key_mints_and_preserves_other_account() {
     let server = MockServer::start().await;
-    // A cache entry scoped to a DIFFERENT key. The SDK must ignore it and mint.
+    // The cache holds a token for a DIFFERENT key/account. Our key isn't in
+    // `[keys]`, so this is a miss: mint, learn our account id, and store under it
+    // without disturbing the other account's entry.
     Mock::given(method("POST"))
         .and(path("/v0/tooling-access/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -298,11 +359,14 @@ async fn account_switch_invalidates_cached_token() {
         })))
         .mount(&server)
         .await;
+    // A miss learns our account id once.
+    mount_account_info(&server, 1).await;
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    // Cache scoped to some other account's key hash.
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), "deadbeef");
+    // Pre-seed a different account (id 999) under a different key hash.
+    let other_id = 999;
+    write_token_cache(&dir, &format!("{}/rpc", server.uri()), "deadbeef", other_id);
 
     let out = run_qn(
         &server.uri(),
@@ -310,6 +374,18 @@ async fn account_switch_invalidates_cached_token() {
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    // Both accounts now coexist in the shared file: ours (freshly minted) and
+    // the pre-existing one (untouched).
+    let cached = std::fs::read_to_string(dir.path().join("tokens.toml")).unwrap();
+    assert!(
+        cached.contains(&format!("[tokens.{TEST_ACCOUNT_ID}]")),
+        "our account cached: {cached}"
+    );
+    assert!(
+        cached.contains(&format!("[tokens.{other_id}]")),
+        "other account preserved: {cached}"
+    );
 }
 
 // A cached token pointing at an unreachable (disabled) endpoint yields a
@@ -335,7 +411,12 @@ async fn connect_failure_with_disabled_status_prompts_to_enable() {
     // Seed a still-valid token whose endpoint_url refuses connections fast
     // (loopback, almost-certainly-closed high port) so the RPC POST returns a
     // connect error promptly rather than waiting out the timeout.
-    write_token_cache(&dir, "http://127.0.0.1:9/rpc", TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        "http://127.0.0.1:9/rpc",
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -357,10 +438,16 @@ async fn connect_failure_with_disabled_status_prompts_to_enable() {
         "expected enable guidance, got: {}",
         out.stderr
     );
-    // The stale token cache should have been cleared before the enable attempt.
+    // The stale token entry for this account should have been dropped before the
+    // enable attempt, while the file (and its key -> account mapping) remains.
+    let cached = std::fs::read_to_string(dir.path().join("tokens.toml")).unwrap();
     assert!(
-        !dir.path().join("tokens.toml").exists(),
-        "stale token cache should be cleared"
+        !cached.contains(&format!("[tokens.{TEST_ACCOUNT_ID}]")),
+        "stale account token should be cleared: {cached}"
+    );
+    assert!(
+        cached.contains(TEST_KEY_HASH),
+        "key mapping preserved: {cached}"
     );
 }
 
@@ -408,7 +495,12 @@ async fn connect_failure_with_disabled_status_auto_enables_with_yes() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, "http://127.0.0.1:9/rpc", TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        "http://127.0.0.1:9/rpc",
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -468,7 +560,12 @@ async fn network_routes_to_mapped_url() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/default", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/default", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -519,7 +616,12 @@ async fn list_networks_prints_keys() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/default", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/default", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -558,7 +660,12 @@ async fn unknown_network_errors() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/default", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/default", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
 
     let out = run_qn(
         &server.uri(),
@@ -836,7 +943,12 @@ async fn params_file_reads_json_from_file() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/rpc", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
     let params_path = dir.path().join("params.json");
     std::fs::write(&params_path, r#"["0xabc", "latest"]"#).unwrap();
     let params_file = params_path.to_str().unwrap();
@@ -870,7 +982,12 @@ async fn params_file_missing_path_errors() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/rpc", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
     let missing = dir.path().join("does-not-exist.json");
 
     let out = run_qn(
@@ -908,7 +1025,12 @@ async fn params_positional_and_file_conflict() {
 
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_path(&dir);
-    write_token_cache(&dir, &format!("{}/rpc", server.uri()), TEST_KEY_HASH);
+    write_token_cache(
+        &dir,
+        &format!("{}/rpc", server.uri()),
+        TEST_KEY_HASH,
+        TEST_ACCOUNT_ID,
+    );
     let params_path = dir.path().join("params.json");
     std::fs::write(&params_path, "[]").unwrap();
 
