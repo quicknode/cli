@@ -18,6 +18,13 @@
 //! config) is a separate lane: the SDK sends the call straight to that URL with
 //! no JWT minted or attached. That lane never touches the token cache or the
 //! Tooling Access enable/probe recovery.
+//!
+//! The crypto-micropayment lane (`--x402`/`--mpp`) is a third lane, in
+//! `payment.rs`: keyless, paid per request, and structurally separate — it
+//! branches off before any of this module's token-cache or Tooling Access
+//! machinery runs.
+
+mod payment;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -49,8 +56,14 @@ pub enum RpcCmd {
         qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc\n  \
         qn rpc call eth_call --params-file params.json\n  \
         echo '[...]' | qn rpc call eth_call -\n  \
-        cat params.json | qn rpc call eth_call -f -")]
-    Call(CallArgs),
+        cat params.json | qn rpc call eth_call -f -\n\n\
+        Paid (crypto micropayment, no API key; params from [rpc.payment] in config):\n  \
+        qn rpc call eth_blockNumber --network base-sepolia --x402\n  \
+        qn rpc call eth_blockNumber --network base-sepolia --x402 \\\n      \
+        --payment-key-file ~/.keys/payer --pay-network eip155:84532 \\\n      \
+        --asset 0x036C... --max-amount 10000\n  \
+        qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt")]
+    Call(Box<CallArgs>),
 
     /// List the endpoint's available network keys (no RPC call).
     #[command(visible_alias = "ls")]
@@ -58,7 +71,10 @@ pub enum RpcCmd {
 }
 
 #[derive(Debug, ClapArgs)]
-#[command(group(ArgGroup::new("params_source").args(["params", "params_file"])))]
+#[command(
+    group(ArgGroup::new("params_source").args(["params", "params_file"])),
+    group(ArgGroup::new("payment").args(["x402", "mpp"])),
+)]
 pub struct CallArgs {
     /// The JSON-RPC method, e.g. `eth_blockNumber`.
     #[arg(value_name = "METHOD")]
@@ -90,11 +106,59 @@ pub struct CallArgs {
     /// exclusive with `--network` (a custom URL is not multichain-routed).
     #[arg(long, conflicts_with = "network", value_name = "URL")]
     pub endpoint_url: Option<String>,
+
+    /// Pay for this call per request with the x402 protocol (EVM or Solana
+    /// stablecoin) instead of the account's API key. Moves real funds; use a
+    /// dedicated, minimally funded wallet. Requires --network (the query
+    /// chain, as the payment gateway's path slug — e.g. `base-sepolia`).
+    #[arg(long, conflicts_with = "endpoint_url", help_heading = "Payment")]
+    pub x402: bool,
+
+    /// Pay for this call per request with MPP (Tempo). Mutually exclusive
+    /// with --x402; same rules otherwise.
+    #[arg(long, conflicts_with = "endpoint_url", help_heading = "Payment")]
+    pub mpp: bool,
+
+    /// File containing the raw payment private key (EVM/Tempo hex, Solana
+    /// base58); pass `-` to read it from stdin. Never accepts the key itself.
+    /// Precedence: this flag > QN_PAYMENT_KEY env var (raw key) > `key_file`
+    /// under [rpc.payment] in config.
+    #[arg(long, value_name = "PATH", requires = "payment", help_heading = "Payment")]
+    pub payment_key_file: Option<PathBuf>,
+
+    /// Spend ceiling per call, in integer base units of the asset (e.g.
+    /// 10000 = 0.01 USDC). No built-in default: flag > `max_amount` under
+    /// [rpc.payment]. Offered payments above the ceiling are never signed.
+    #[arg(long, value_name = "BASE_UNITS", requires = "payment", help_heading = "Payment")]
+    pub max_amount: Option<String>,
+
+    /// CAIP-2 id of the chain you PAY on (e.g. `eip155:84532`), independent
+    /// of --network (the chain you query). Falls back to `pay_network` under
+    /// [rpc.payment].
+    #[arg(long, value_name = "CAIP2", requires = "payment", help_heading = "Payment")]
+    pub pay_network: Option<String>,
+
+    /// Token to pay with: EVM contract address or Solana mint. Falls back to
+    /// `asset` under [rpc.payment].
+    #[arg(long, value_name = "ADDRESS", requires = "payment", help_heading = "Payment")]
+    pub asset: Option<String>,
+
+    /// Explicit Solana RPC URL for building x402/Solana payments. Falls back
+    /// to `svm_rpc_url` under [rpc.payment], then a public Solana RPC (which
+    /// rate-limits aggressively — set this at any real volume).
+    #[arg(long, value_name = "URL", requires = "payment", help_heading = "Payment")]
+    pub svm_rpc_url: Option<String>,
+
+    /// Wrap stdout as {"result": ..., "payment_receipt": ...}. The receipt is
+    /// non-null only on MPP (the settlement transaction hash); null on x402.
+    /// Payment happens either way — this only changes the output.
+    #[arg(long, requires = "payment", help_heading = "Payment")]
+    pub receipt: bool,
 }
 
 pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     match args.cmd {
-        RpcCmd::Call(call) => run_call(call, global).await,
+        RpcCmd::Call(call) => run_call(*call, global).await,
         RpcCmd::ListNetworks => run_list_networks(global).await,
     }
 }
@@ -114,6 +178,13 @@ async fn run_list_networks(global: GlobalArgs) -> Result<(), CliError> {
 }
 
 async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
+    // The crypto-micropayment lane branches off before any token-cache or
+    // Tooling Access work: it is keyless, never retried, and never touches
+    // this function's caches or recovery paths.
+    if args.x402 || args.mpp {
+        return payment::run_paid_call(args, global).await;
+    }
+
     let params = parse_params(args.params.as_deref(), args.params_file.as_deref())?;
 
     // A custom URL (per-call flag, else the `[rpc] endpoint_url` config default)
@@ -516,7 +587,7 @@ async fn maybe_enable(ctx: &Ctx) -> Result<(), CliError> {
 /// as JSON. `None`/`None` → no params (sends `[]`). Either source accepts `-` to
 /// read from stdin. The clap `ArgGroup` guarantees at most one is set. An empty
 /// value (after trimming) is treated as no params.
-fn parse_params(arg: Option<&str>, file: Option<&Path>) -> Result<Option<Value>, CliError> {
+pub(super) fn parse_params(arg: Option<&str>, file: Option<&Path>) -> Result<Option<Value>, CliError> {
     let raw = match (arg, file) {
         (None, None) => return Ok(None),
         (Some("-"), _) => read_stdin("params")?,
@@ -539,7 +610,7 @@ fn parse_params(arg: Option<&str>, file: Option<&Path>) -> Result<Option<Value>,
 }
 
 /// Read all of stdin as a UTF-8 string, labeling errors with `what`.
-fn read_stdin(what: &str) -> Result<String, CliError> {
+pub(super) fn read_stdin(what: &str) -> Result<String, CliError> {
     let mut buf = String::new();
     std::io::stdin()
         .read_to_string(&mut buf)
@@ -552,7 +623,7 @@ fn read_stdin(what: &str) -> Result<String, CliError> {
 /// raw `--format` flag, not the TTY-aware resolved default). `json`/`yaml`/`toon`
 /// render as requested. `table`/`md` have no columns here, so they fall back to
 /// JSON — and only that explicit case prints a one-line note on stderr.
-fn emit_result(ctx: &Ctx, result: &Value) -> Result<(), CliError> {
+pub(super) fn emit_result(ctx: &Ctx, result: &Value) -> Result<(), CliError> {
     match ctx.global.format {
         None | Some(Format::Json) => {
             println!(
