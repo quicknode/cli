@@ -64,6 +64,62 @@ pub struct ApiSection {
 pub struct RpcSection {
     #[serde(default)]
     pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub payment: PaymentSection,
+}
+
+/// `[rpc.payment]` section: parameter defaults for the crypto-micropayment
+/// lane of `qn rpc call` (`--x402`/`--mpp`). This section supplies values;
+/// it never activates payment — only the per-invocation scheme flag does.
+/// Per-call flags override every field here.
+///
+/// There is deliberately no `scheme` key (the flag is the scheme) and no way
+/// to store the raw private key: `key_file` points at a file holding the key,
+/// keeping the key itself out of the most commonly shared/pasted file we own.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PaymentSection {
+    /// Path to a file containing the raw payment private key (EVM/Tempo hex,
+    /// Solana base58). Never the key itself.
+    #[serde(default)]
+    pub key_file: Option<PathBuf>,
+    /// Trap field: an inline raw key is rejected at payment-resolution time
+    /// with an error pointing at `key_file`. Without this field serde would
+    /// silently ignore `key = "..."` and the user would think it took effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<toml::Value>,
+    /// Default spend ceiling per paid call, in integer base units of `asset`.
+    /// Accepts a TOML string or integer.
+    #[serde(default, deserialize_with = "de_opt_string_or_int")]
+    pub max_amount: Option<String>,
+    /// CAIP-2 id of the chain payments settle on, e.g. `eip155:84532`.
+    /// Independent of `--network` (the chain the RPC call queries).
+    #[serde(default)]
+    pub pay_network: Option<String>,
+    /// Token to pay with: EVM contract address or Solana mint.
+    #[serde(default)]
+    pub asset: Option<String>,
+    /// Explicit Solana RPC URL for x402/Solana payment builds.
+    #[serde(default)]
+    pub svm_rpc_url: Option<String>,
+}
+
+/// Deserializes an optional TOML string-or-integer into `Option<String>`, so
+/// `max_amount = 10000` and `max_amount = "10000"` both work. (Base units can
+/// exceed i64 for high-decimal assets, hence the canonical string form.)
+fn de_opt_string_or_int<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<toml::Value>::deserialize(deserializer)?;
+    match v {
+        None => Ok(None),
+        Some(toml::Value::String(s)) => Ok(Some(s)),
+        Some(toml::Value::Integer(i)) => Ok(Some(i.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "expected a string or integer, got {}",
+            other.type_str()
+        ))),
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -726,6 +782,89 @@ mod tests {
         let cfg = load_from(&path).unwrap().unwrap();
         assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
         assert_eq!(cfg.rpc.endpoint_url.as_deref(), Some("https://x/rpc"));
+    }
+
+    #[test]
+    fn rpc_payment_section_round_trips_through_config_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[rpc.payment]\n\
+             key_file = \"/keys/payer.key\"\n\
+             max_amount = \"10000\"\n\
+             pay_network = \"eip155:84532\"\n\
+             asset = \"0xabc\"\n\
+             svm_rpc_url = \"https://solana.example/rpc\"\n",
+        )
+        .unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        let p = &cfg.rpc.payment;
+        assert_eq!(p.key_file.as_deref(), Some(Path::new("/keys/payer.key")));
+        assert_eq!(p.max_amount.as_deref(), Some("10000"));
+        assert_eq!(p.pay_network.as_deref(), Some("eip155:84532"));
+        assert_eq!(p.asset.as_deref(), Some("0xabc"));
+        assert_eq!(p.svm_rpc_url.as_deref(), Some("https://solana.example/rpc"));
+        assert!(p.key.is_none());
+    }
+
+    #[test]
+    fn rpc_payment_section_is_optional() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc]\nendpoint_url = \"https://x/rpc\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert!(cfg.rpc.payment.key_file.is_none());
+        assert!(cfg.rpc.payment.max_amount.is_none());
+    }
+
+    #[test]
+    fn rpc_payment_max_amount_accepts_toml_integer() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc.payment]\nmax_amount = 10000\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.rpc.payment.max_amount.as_deref(), Some("10000"));
+    }
+
+    #[test]
+    fn rpc_payment_max_amount_rejects_other_types() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc.payment]\nmax_amount = 1.5\n").unwrap();
+        let err = load_from(&path).unwrap_err();
+        assert!(matches!(err, CliError::BadConfig { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn rpc_payment_inline_key_parses_into_trap_field() {
+        // An inline raw key must not break config parsing (unrelated commands
+        // still run); the payment lane rejects it with an actionable error at
+        // resolution time instead.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc.payment]\nkey = \"0xdeadbeef\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert!(cfg.rpc.payment.key.is_some());
+    }
+
+    #[test]
+    fn save_api_key_preserves_rpc_payment_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[rpc.payment]\nkey_file = \"/keys/payer.key\"\nmax_amount = \"10000\"\n",
+        )
+        .unwrap();
+        save_api_key(&path, "new-key").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
+        assert_eq!(
+            cfg.rpc.payment.key_file.as_deref(),
+            Some(Path::new("/keys/payer.key"))
+        );
+        assert_eq!(cfg.rpc.payment.max_amount.as_deref(), Some("10000"));
     }
 
     #[test]
