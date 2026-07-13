@@ -40,6 +40,16 @@ pub enum CliError {
     #[error(transparent)]
     Sdk(#[from] SdkError),
 
+    /// A paid RPC call failed in a way where the payment may already have
+    /// settled (e.g. the gateway's post-payment response could not be
+    /// interpreted). Kept separate from `Sdk` so it maps to exit 3 and renders
+    /// the check-your-wallet guidance; the paid lane must never auto-retry it.
+    #[error(
+        "the paid request's outcome is unknown — the payment may have been settled; \
+         check your wallet before retrying"
+    )]
+    PaymentMaybeCharged(#[source] SdkError),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -55,17 +65,23 @@ pub enum CliError {
 /// - 0: success (never produced here)
 /// - 1: generic CLI failure (arg parse, IO, decode). clap usage errors are
 ///   mapped to 1 in main.rs too, so 2 always and only means an API error.
-/// - 2: SdkError::Api (server returned a non-2xx)
-/// - 3: SdkError::Http (network failure)
+/// - 2: SdkError::Api (server returned a non-2xx); also a payment the gateway
+///   refused or never matched (PaymentRejected / PaymentUnsupported)
+/// - 3: SdkError::Http (network failure); also an unknown payment outcome
+///   (PaymentIndeterminate / PaymentMaybeCharged — request sent, response
+///   lost, the caller may have been charged)
 /// - 4: NoApiKey / BadConfig
 /// - 5: user cancelled or needs --yes
 pub fn exit_code_for(err: &CliError) -> i32 {
     match err {
         CliError::NoApiKey | CliError::BadConfig { .. } | CliError::ConfigWrite { .. } => 4,
         CliError::Cancelled | CliError::NeedsConfirmation => 5,
+        CliError::PaymentMaybeCharged(_) => 3,
         CliError::Sdk(sdk) => match sdk {
             SdkError::Api { .. } => 2,
             SdkError::Http(_) => 3,
+            SdkError::PaymentUnsupported { .. } | SdkError::PaymentRejected { .. } => 2,
+            SdkError::PaymentIndeterminate => 3,
             _ => 1,
         },
         _ => 1,
@@ -85,6 +101,40 @@ pub fn render(err: &CliError, verbose: bool) -> String {
 /// Like [`render`] but uses the supplied argv values for did-you-mean lookup.
 pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> String {
     match err {
+        CliError::Sdk(SdkError::PaymentUnsupported { offered }) => {
+            format!(
+                "Error: no offered payment option matched your configuration \
+                 (check --pay-network, --asset, and --max-amount). Nothing was charged.\n\
+                 Gateway offered: {offered}"
+            )
+        }
+        CliError::Sdk(SdkError::PaymentRejected { status, body }) => {
+            let msg = format!(
+                "Error: the gateway rejected the submitted payment (HTTP {status}). \
+                 A signed payment was sent — check your wallet before retrying."
+            );
+            if verbose && !body.is_empty() {
+                format!("{msg}\n{body}")
+            } else {
+                msg
+            }
+        }
+        CliError::Sdk(SdkError::PaymentIndeterminate) => {
+            "Error: the paid request was sent but its response was lost — the request \
+             may have been settled; check your wallet before retrying. Do not blindly \
+             re-run this command."
+                .to_string()
+        }
+        CliError::PaymentMaybeCharged(source) => {
+            let msg = "Error: the paid request returned an unexpected response — the \
+                       request may have been settled; check your wallet before retrying. \
+                       Do not blindly re-run this command.";
+            if verbose {
+                format!("{msg}\n{source}")
+            } else {
+                format!("{msg} Re-run with --verbose for the response detail.")
+            }
+        }
         CliError::Sdk(SdkError::Api { status, body }) => {
             render_api_error(status.as_u16(), body, verbose, argv)
         }
@@ -462,6 +512,82 @@ mod tests {
     #[test]
     fn exit_code_cancelled_is_5() {
         assert_eq!(exit_code_for(&CliError::Cancelled), 5);
+    }
+
+    // ---- payment errors ----
+
+    fn decode_err() -> SdkError {
+        SdkError::Decode {
+            source: serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+            body: "<html>gateway oops</html>".to_string(),
+        }
+    }
+
+    #[test]
+    fn exit_code_payment_refusals_are_2() {
+        // The gateway said no and nothing settled (unsupported) or the refusal
+        // is terminal (rejected): the API-error bucket.
+        let unsupported = CliError::Sdk(SdkError::PaymentUnsupported {
+            offered: "eip155:84532/0xabc amount 999999".to_string(),
+        });
+        let rejected = CliError::Sdk(SdkError::PaymentRejected {
+            status: 402,
+            body: "invalid signature".to_string(),
+        });
+        assert_eq!(exit_code_for(&unsupported), 2);
+        assert_eq!(exit_code_for(&rejected), 2);
+    }
+
+    #[test]
+    fn exit_code_unknown_payment_outcome_is_3() {
+        // Request sent, outcome unknown: the transport-ambiguity bucket, so
+        // scripts can distinguish "safe to retry" (2) from "check wallet" (3).
+        let indeterminate = CliError::Sdk(SdkError::PaymentIndeterminate);
+        let maybe_charged = CliError::PaymentMaybeCharged(decode_err());
+        assert_eq!(exit_code_for(&indeterminate), 3);
+        assert_eq!(exit_code_for(&maybe_charged), 3);
+    }
+
+    #[test]
+    fn renders_payment_unsupported_as_not_charged() {
+        let err = CliError::Sdk(SdkError::PaymentUnsupported {
+            offered: "eip155:84532/0xabc amount 999999".to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("Nothing was charged"), "got: {msg}");
+        assert!(msg.contains("999999"), "got: {msg}");
+        assert!(msg.contains("--max-amount"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_payment_rejected_with_wallet_warning() {
+        let err = CliError::Sdk(SdkError::PaymentRejected {
+            status: 402,
+            body: "invalid signature".to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("402"), "got: {msg}");
+        assert!(msg.contains("check your wallet"), "got: {msg}");
+        assert!(!msg.contains("invalid signature"), "got: {msg}");
+        let verbose = render(&err, true);
+        assert!(verbose.contains("invalid signature"), "got: {verbose}");
+    }
+
+    #[test]
+    fn renders_payment_indeterminate_as_possibly_settled() {
+        let msg = render(&CliError::Sdk(SdkError::PaymentIndeterminate), false);
+        assert!(msg.contains("may have been settled"), "got: {msg}");
+        assert!(msg.contains("check your wallet"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_payment_maybe_charged_with_source_when_verbose() {
+        let err = CliError::PaymentMaybeCharged(decode_err());
+        let msg = render(&err, false);
+        assert!(msg.contains("may have been settled"), "got: {msg}");
+        assert!(!msg.contains("gateway oops"), "got: {msg}");
+        let verbose = render(&err, true);
+        assert!(verbose.contains("gateway oops"), "got: {verbose}");
     }
 
     #[test]
