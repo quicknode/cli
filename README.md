@@ -327,6 +327,58 @@ API key, so subsequent calls skip the mint round trip while it's valid. Results 
 schemaless JSON; `-o json|yaml|toon` controls the format (`table`/`md` fall back to
 JSON).
 
+#### Pay per call with a crypto micropayment
+
+`--x402` (EVM or Solana stablecoin) or `--mpp` (Tempo) pays for the call per
+request instead of using an account API key — no login and no Tooling Access
+needed. **This moves real funds** (testnet tokens are still real transfers):
+use a dedicated, minimally funded wallet.
+
+```sh
+qn rpc call eth_blockNumber --network base-sepolia --x402 \
+    --payment-key-file ~/.keys/payer \
+    --pay-network eip155:84532 \
+    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+    --max-amount 10000
+
+# MPP settles on Tempo and returns a settlement receipt with --receipt:
+qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt ...
+```
+
+- `--network` is required and names the chain you *query*, as the payment
+  gateway's path slug (independent of `--pay-network`, the CAIP-2 chain the
+  payment *settles* on).
+- The private key resolves from `--payment-key-file <PATH>` (`-` for stdin),
+  then the `QN_PAYMENT_KEY` env var, then `key_file` in config. It is never
+  accepted as a flag value, never stored in config, and never printed.
+- `--max-amount` is the per-call spend ceiling in integer base units of the
+  asset (e.g. `10000` = 0.01 USDC). There is no built-in default; offers above
+  the ceiling are refused before anything is signed.
+- `--receipt` wraps stdout as `{"result": ..., "payment_receipt": ...}` — the
+  settlement transaction hash on MPP, `null` on x402. Without it, paid output
+  is shaped exactly like unpaid output.
+- Paid calls **never auto-retry** (`--retries` does not apply). Exit code 2
+  means the gateway refused; exit 3 means the outcome is unknown and the
+  payment may have settled — check the wallet before re-running.
+- x402/Solana at volume: pass `--svm-rpc-url <URL>`; the default public Solana
+  RPC rate-limits aggressively.
+
+Store the parameters once in `~/.config/qn/config.toml` and the invocation
+shrinks to the scheme flag — config supplies values but never activates
+payment by itself:
+
+```toml
+[rpc.payment]
+key_file    = "/home/me/.config/qn/payment.key"   # a path; never the raw key
+max_amount  = "10000"
+pay_network = "eip155:84532"
+asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+```
+
+```sh
+qn rpc call eth_blockNumber --network base-sepolia --x402
+```
+
 ### Other
 
 ```sh

@@ -61,6 +61,12 @@ Branch on these — especially **4** and **5**.
 | 5 | Cancelled, or confirmation required and not granted (see §4). |
 | 130 | Interrupted (SIGINT). |
 
+On a **paid** `rpc call` (`--x402`/`--mpp`, §6) the 2/3 split carries payment
+semantics: **2** means the gateway refused (an unmatched offer settles nothing;
+a rejected payment is terminal), while **3** means the outcome is unknown — the
+request was sent and **may have been charged**. On exit 3, check the wallet
+before re-running; never blind-retry a paid call.
+
 ## 4. Non-interactive & confirmation behavior
 
 Destructive commands are gated. On a TTY they prompt `y/N`. To proceed without a
@@ -96,6 +102,9 @@ if you need it.
   nothing — it is read-only and safe to retry.
 - `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
   so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
+- A **paid** `rpc call` (`--x402`/`--mpp`) never auto-retries — `--retries` does
+  not apply. Each attempt can move funds, and after a lost response the previous
+  attempt may already have settled (§3, exit 3).
 
 ## 6. Command catalog
 
@@ -128,6 +137,20 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   available keys. Custom endpoint: `--endpoint-url <URL>` (or `[rpc] endpoint_url`
   in config) sends the call to a fully-formed HTTP URL that authenticates itself
   (no token minted); it's mutually exclusive with `--network`.
+  **Paid lane**: `--x402` (EVM/Solana stablecoin) or `--mpp` (Tempo) pays for
+  the call per request with a crypto micropayment instead of an API key — no
+  login, no Tooling Access. Requires `--network` as the payment gateway's path
+  slug (e.g. `base-sepolia`; NOT validated by `list-networks`). Parameters:
+  `--pay-network <CAIP2>` (the chain the payment settles on — independent of
+  `--network`), `--asset <ADDRESS>`, `--max-amount <BASE_UNITS>` (spend ceiling
+  per call, integer base units, no default), and the private key via
+  `--payment-key-file <PATH|->` > `QN_PAYMENT_KEY` env > `key_file` under
+  `[rpc.payment]` in config (a path — never the raw key). All of these fall
+  back to `[rpc.payment]`, but config never activates payment by itself: the
+  scheme flag is always required. `--receipt` wraps stdout as
+  `{"result": ..., "payment_receipt": ...}` (settlement tx hash on MPP; `null`
+  on x402); without it the paid output shape is identical to an unpaid call.
+  Mutually exclusive with `--endpoint-url`.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -197,9 +220,33 @@ qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc
 is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 `--endpoint-url` (or `[rpc] endpoint_url` in config) bypasses that entirely.
 
+**Pay per call with a crypto micropayment (no API key, no login):**
+
+```sh
+# One-time: store the wallet parameters (never the raw key) in config
+cat >> ~/.config/qn/config.toml <<'EOF'
+[rpc.payment]
+key_file    = "/home/me/.config/qn/payment.key"   # file holding the raw key; chmod 600
+max_amount  = "10000"                             # spend ceiling per call, base units
+pay_network = "eip155:84532"                      # chain the payment settles on (CAIP-2)
+asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+EOF
+
+qn rpc call eth_blockNumber --network base-sepolia --x402            # pays, prints the result
+qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt  # + settlement tx hash
+```
+
+This moves real funds (even testnet tokens are real transfers) — use a
+dedicated, minimally funded wallet. The spend ceiling bounds each call; there
+is no built-in default.
+
 ## 8. Gotchas & safety rails
 
 - Mutations are never retried; re-running a failed create can double-provision (§5).
+- Paid `rpc call` moves real funds and never auto-retries; exit 3 means the
+  payment may have settled — check the wallet before re-running (§3, §5). The
+  CLI never prints the payment key; keep it in a file or `QN_PAYMENT_KEY`, not
+  in config or argv.
 - No account-wide wipe command exists by design (§4).
 - Piped output defaults to `json`; pass `-o toon` for the compact LLM form (§2).
 - `--base-url` overrides the API host; it exists for testing.
