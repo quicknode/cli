@@ -123,30 +123,55 @@ pub struct CallArgs {
     /// base58); pass `-` to read it from stdin. Never accepts the key itself.
     /// Precedence: this flag > QN_PAYMENT_KEY env var (raw key) > `key_file`
     /// under [rpc.payment] in config.
-    #[arg(long, value_name = "PATH", requires = "payment", help_heading = "Payment")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "payment",
+        help_heading = "Payment"
+    )]
     pub payment_key_file: Option<PathBuf>,
 
     /// Spend ceiling per call, in integer base units of the asset (e.g.
     /// 10000 = 0.01 USDC). No built-in default: flag > `max_amount` under
     /// [rpc.payment]. Offered payments above the ceiling are never signed.
-    #[arg(long, value_name = "BASE_UNITS", requires = "payment", help_heading = "Payment")]
+    #[arg(
+        long,
+        value_name = "BASE_UNITS",
+        requires = "payment",
+        help_heading = "Payment"
+    )]
     pub max_amount: Option<String>,
 
     /// CAIP-2 id of the chain you PAY on (e.g. `eip155:84532`), independent
     /// of --network (the chain you query). Falls back to `pay_network` under
     /// [rpc.payment].
-    #[arg(long, value_name = "CAIP2", requires = "payment", help_heading = "Payment")]
+    #[arg(
+        long,
+        value_name = "CAIP2",
+        requires = "payment",
+        help_heading = "Payment"
+    )]
     pub pay_network: Option<String>,
 
     /// Token to pay with: EVM contract address or Solana mint. Falls back to
     /// `asset` under [rpc.payment].
-    #[arg(long, value_name = "ADDRESS", requires = "payment", help_heading = "Payment")]
+    #[arg(
+        long,
+        value_name = "ADDRESS",
+        requires = "payment",
+        help_heading = "Payment"
+    )]
     pub asset: Option<String>,
 
     /// Explicit Solana RPC URL for building x402/Solana payments. Falls back
     /// to `svm_rpc_url` under [rpc.payment], then a public Solana RPC (which
     /// rate-limits aggressively — set this at any real volume).
-    #[arg(long, value_name = "URL", requires = "payment", help_heading = "Payment")]
+    #[arg(
+        long,
+        value_name = "URL",
+        requires = "payment",
+        help_heading = "Payment"
+    )]
     pub svm_rpc_url: Option<String>,
 
     /// Wrap stdout as {"result": ..., "payment_receipt": ...}. The receipt is
@@ -587,7 +612,10 @@ async fn maybe_enable(ctx: &Ctx) -> Result<(), CliError> {
 /// as JSON. `None`/`None` → no params (sends `[]`). Either source accepts `-` to
 /// read from stdin. The clap `ArgGroup` guarantees at most one is set. An empty
 /// value (after trimming) is treated as no params.
-pub(super) fn parse_params(arg: Option<&str>, file: Option<&Path>) -> Result<Option<Value>, CliError> {
+pub(super) fn parse_params(
+    arg: Option<&str>,
+    file: Option<&Path>,
+) -> Result<Option<Value>, CliError> {
     let raw = match (arg, file) {
         (None, None) => return Ok(None),
         (Some("-"), _) => read_stdin("params")?,

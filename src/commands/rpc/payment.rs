@@ -141,8 +141,11 @@ fn resolve_payment_config(
         ));
     }
 
-    let (key, key_file_warning) =
-        resolve_key(args.payment_key_file.as_deref(), env_key, section.key_file.as_deref())?;
+    let (key, key_file_warning) = resolve_key(
+        args.payment_key_file.as_deref(),
+        env_key,
+        section.key_file.as_deref(),
+    )?;
 
     let max_amount = args
         .max_amount
@@ -189,7 +192,11 @@ fn resolve_payment_config(
             )
         })?;
 
-    let svm_rpc_url = match args.svm_rpc_url.clone().or_else(|| section.svm_rpc_url.clone()) {
+    let svm_rpc_url = match args
+        .svm_rpc_url
+        .clone()
+        .or_else(|| section.svm_rpc_url.clone())
+    {
         Some(u) => Some(crate::context::validate_endpoint_url(&u)?),
         None => None,
     };
@@ -426,8 +433,7 @@ mod tests {
         let mut section = empty_section();
         section.key = Some(toml::Value::String("0xraw".to_string()));
         let args = paid_args(true);
-        let err =
-            resolve_payment_config(&args, &section, Some("k".to_string()), None).unwrap_err();
+        let err = resolve_payment_config(&args, &section, Some("k".to_string()), None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("key_file"), "got: {msg}");
         assert!(!msg.contains("0xraw"), "must not echo the key: {msg}");
@@ -449,10 +455,7 @@ mod tests {
             args.max_amount = Some(bad.to_string());
             let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
                 .unwrap_err();
-            assert!(
-                err.to_string().contains("base units"),
-                "for {bad}: {err}"
-            );
+            assert!(err.to_string().contains("base units"), "for {bad}: {err}");
         }
     }
 
