@@ -114,13 +114,20 @@ pub fn user_agent() -> String {
 /// SDK's supported way to replace its auto-generated `User-Agent`.
 pub fn sdk_config(api_key: String) -> SdkFullConfig {
     let mut full = SdkFullConfig::from_api_key(api_key);
+    apply_user_agent(&mut full);
+    full
+}
+
+/// Installs the CLI `User-Agent` header on `full`. Shared by the keyed
+/// ([`sdk_config`]) and keyless ([`Ctx::from_global_keyless_payment`])
+/// construction paths.
+fn apply_user_agent(full: &mut SdkFullConfig) {
     let mut headers = std::collections::HashMap::new();
     headers.insert("User-Agent".to_string(), user_agent());
     full.http = Some(HttpConfig {
         headers: Some(headers),
         ..Default::default()
     });
-    full
 }
 
 /// Points every sub-client at a custom host, suffixing each with its own base
@@ -185,6 +192,46 @@ impl Ctx {
         config_endpoint_url: Option<String>,
     ) -> Result<(Self, String), CliError> {
         Self::build(global, seed, config_endpoint_url)
+    }
+
+    /// Keyless construction for the crypto-micropayment lane of `qn rpc call`
+    /// (`--x402`/`--mpp`): no API key is resolved or required, so it works on
+    /// a machine that has never run `qn auth login`. Only the RPC payment lane
+    /// is usable — every keyed sub-client would 401.
+    ///
+    /// Deliberately NOT applied here:
+    /// - the token cache seed and `[rpc] endpoint_url` (either would conflict
+    ///   with the payment lane — the SDK rejects a custom URL + payment);
+    /// - `--base-url` sub-client overrides (the paid lane's test hook rides in
+    ///   `PaymentConfig.base_url_override`, set by the caller; no control-plane
+    ///   sub-client is used).
+    pub fn from_global_keyless_payment(
+        global: GlobalArgs,
+        payment: quicknode_sdk::PaymentConfig,
+    ) -> Result<Self, CliError> {
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let (format, wide) = global.resolve_output(stdout_is_tty);
+
+        let mut full = SdkFullConfig::keyless();
+        apply_user_agent(&mut full);
+        full.rpc = Some(RpcConfig {
+            payment: Some(payment),
+            ..Default::default()
+        });
+
+        let sdk = QuicknodeSdk::new(&full)?;
+        let out = OutputCtx::detect_with(
+            format,
+            global.no_color,
+            global.quiet,
+            global.verbose,
+            wide,
+            stdout_is_tty,
+            std::env::var_os("NO_COLOR"),
+            std::env::var("TERM").ok(),
+        );
+
+        Ok(Self { sdk, out, global })
     }
 
     fn build(
