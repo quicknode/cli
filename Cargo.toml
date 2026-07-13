@@ -21,7 +21,14 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-quicknode-sdk = "0.7"
+# DEV ONLY: path dep on the SDK's unreleased crypto-micropayment branch.
+# Swap back to a published crates.io version (with the same features) before
+# any release tag — the release is gated on the SDK publishing this feature.
+quicknode-sdk = { path = "../sdk/crates/core", features = [
+  "payments",       # x402/EVM
+  "payments-svm",   # + x402/Solana
+  "payments-tempo", # + MPP/Tempo
+] }
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
