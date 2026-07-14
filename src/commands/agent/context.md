@@ -62,10 +62,12 @@ Branch on these — especially **4** and **5**.
 | 130 | Interrupted (SIGINT). |
 
 On a **paid** `rpc call` (`--x402`/`--mpp`, §6) the 2/3 split carries payment
-semantics: **2** means the gateway refused (an unmatched offer settles nothing;
-a rejected payment is terminal), while **3** means the outcome is unknown — the
-request was sent and **may have been charged**. On exit 3, check the wallet
-before re-running; never blind-retry a paid call.
+semantics: **2** means the gateway refused and nothing settled (an unmatched
+or unreadable offer, or a 4xx-refused payment), while **3** means the outcome
+is unknown — the payment was submitted and **may have been charged** (a
+gateway 5xx after the paid resend, a lost response, or an uninterpretable
+post-payment response). On exit 3, check the wallet before re-running; never
+blind-retry a paid call.
 
 ## 4. Non-interactive & confirmation behavior
 
@@ -141,15 +143,18 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   the call per request with a crypto micropayment instead of an API key — no
   login, no Tooling Access. Requires `--network` as the payment gateway's path
   slug (e.g. `base-sepolia`; NOT validated by `list-networks`). Parameters:
-  `--pay-network <CAIP2>` (the chain the payment settles on — independent of
-  `--network`), `--asset <ADDRESS>`, `--max-amount <BASE_UNITS>` (spend ceiling
+  `--pay-network <NETWORK>` (the chain the payment settles on — independent of
+  `--network`; a network name like `base-sepolia`/`solana-devnet`/`tempo-testnet`,
+  or a raw CAIP-2 id like `eip155:84532`, which always passes through
+  verbatim), `--asset <ADDRESS>`, `--max-amount <BASE_UNITS>` (spend ceiling
   per call, integer base units, no default), and the private key via
   `--payment-key-file <PATH|->` > `QN_PAYMENT_KEY` env > `key_file` under
   `[rpc.payment]` in config (a path — never the raw key). All of these fall
   back to `[rpc.payment]`, but config never activates payment by itself: the
   scheme flag is always required. `--receipt` wraps stdout as
-  `{"result": ..., "payment_receipt": ...}` (settlement tx hash on MPP; `null`
-  on x402); without it the paid output shape is identical to an unpaid call.
+  `{"result": ..., "payment_receipt": ...}` (on MPP an object whose
+  `reference` is the settlement tx hash; `null` on x402); without it the paid
+  output shape is identical to an unpaid call.
   Mutually exclusive with `--endpoint-url`.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
@@ -228,12 +233,12 @@ cat >> ~/.config/qn/config.toml <<'EOF'
 [rpc.payment]
 key_file    = "/home/me/.config/qn/payment.key"   # file holding the raw key; chmod 600
 max_amount  = "10000"                             # spend ceiling per call, base units
-pay_network = "eip155:84532"                      # chain the payment settles on (CAIP-2)
+pay_network = "base-sepolia"                      # settlement chain: network name or CAIP-2 id
 asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 EOF
 
 qn rpc call eth_blockNumber --network base-sepolia --x402            # pays, prints the result
-qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt  # + settlement tx hash
+qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt  # + settlement receipt
 ```
 
 This moves real funds (even testnet tokens are real transfers) — use a

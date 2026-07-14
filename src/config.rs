@@ -7,7 +7,10 @@
 //! There is deliberately no environment-variable source: a key left exported
 //! in a shell is invisible state that outlives the session it was set for,
 //! and is the easiest way to run a destructive command against the wrong
-//! account.
+//! account. (`QN_PAYMENT_KEY`, read by the paid RPC lane, is the one
+//! deliberate exception: it never selects an account, so a stale value
+//! cannot aim a mutating command at the wrong one — see
+//! `commands::rpc::payment`.)
 //!
 //! When both sources fail we return [`CliError::NoApiKey`] which exits 4 with
 //! a message directing the user to `qn auth login`. The `qn auth login`
@@ -91,8 +94,9 @@ pub struct PaymentSection {
     /// Accepts a TOML string or integer.
     #[serde(default, deserialize_with = "de_opt_string_or_int")]
     pub max_amount: Option<String>,
-    /// CAIP-2 id of the chain payments settle on, e.g. `eip155:84532`.
-    /// Independent of `--network` (the chain the RPC call queries).
+    /// Chain payments settle on: a Quicknode network name (e.g.
+    /// `base-sepolia`) or a CAIP-2 id (e.g. `eip155:84532`). Independent of
+    /// `--network` (the chain the RPC call queries).
     #[serde(default)]
     pub pay_network: Option<String>,
     /// Token to pay with: EVM contract address or Solana mint.

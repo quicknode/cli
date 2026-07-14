@@ -24,6 +24,7 @@
 //! branches off before any of this module's token-cache or Tooling Access
 //! machinery runs.
 
+mod pay_network;
 mod payment;
 
 use std::io::Read;
@@ -60,7 +61,7 @@ pub enum RpcCmd {
         Paid (crypto micropayment, no API key; params from [rpc.payment] in config):\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402 \\\n      \
-        --payment-key-file ~/.keys/payer --pay-network eip155:84532 \\\n      \
+        --payment-key-file ~/.keys/payer --pay-network base-sepolia \\\n      \
         --asset 0x036C... --max-amount 10000\n  \
         qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt")]
     Call(Box<CallArgs>),
@@ -142,12 +143,12 @@ pub struct CallArgs {
     )]
     pub max_amount: Option<String>,
 
-    /// CAIP-2 id of the chain you PAY on (e.g. `eip155:84532`), independent
-    /// of --network (the chain you query). Falls back to `pay_network` under
-    /// [rpc.payment].
+    /// Chain you PAY on — a network name (e.g. `base-sepolia`) or CAIP-2 id
+    /// (e.g. `eip155:84532`) — independent of --network (the chain you
+    /// query). Falls back to `pay_network` under [rpc.payment].
     #[arg(
         long,
-        value_name = "CAIP2",
+        value_name = "NETWORK",
         requires = "payment",
         help_heading = "Payment"
     )]

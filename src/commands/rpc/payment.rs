@@ -173,11 +173,13 @@ fn resolve_payment_config(
         .or_else(|| section.pay_network.clone())
         .ok_or_else(|| {
             CliError::Arg(
-                "no pay network set. Pass --pay-network <CAIP2> (e.g. \
-                 eip155:84532) or set `pay_network` under [rpc.payment]"
+                "no pay network set. Pass --pay-network <NETWORK> (a network \
+                 name like base-sepolia, or a CAIP-2 id like eip155:84532) \
+                 or set `pay_network` under [rpc.payment]"
                     .to_string(),
             )
         })?;
+    let pay_network = super::pay_network::resolve(&pay_network)?;
 
     let asset = args
         .asset
@@ -290,15 +292,25 @@ fn checked_key(raw: String, source: &str) -> Result<String, CliError> {
     Ok(trimmed.to_string())
 }
 
-/// Maps a paid-call failure. A `Decode` error on the paid lane means the
-/// gateway's post-payment response could not be interpreted — the payment may
-/// already have settled, so it gets the same never-blindly-retry treatment as
-/// `PaymentIndeterminate` (exit 3) instead of rendering as a generic decode
-/// failure. Everything else passes through to the normal SDK mapping.
+/// Maps a paid-call failure onto the paid exit-code contract: 2 = the gateway
+/// refused and nothing settled, 3 = outcome unknown, check the wallet.
+///
+/// - `Decode` on the paid lane always means the gateway's post-payment 2xx
+///   response could not be interpreted (the SDK classifies pre-payment parse
+///   failures as `PaymentUnsupported`/`Config`) — the payment may already
+///   have settled, so it gets the same never-blindly-retry treatment as
+///   `PaymentIndeterminate` (exit 3).
+/// - `PaymentRejected` with a 5xx status is a gateway/settlement failure
+///   after the signed payment was submitted — also unknown, exit 3. A 4xx
+///   rejection means the gateway refused the credential without settling it
+///   and passes through to exit 2.
 fn map_paid_error(e: SdkError) -> CliError {
-    match e {
+    match &e {
         SdkError::Decode { .. } => CliError::PaymentMaybeCharged(e),
-        other => other.into(),
+        SdkError::PaymentRejected { status, .. } if *status >= 500 => {
+            CliError::PaymentMaybeCharged(e)
+        }
+        _ => e.into(),
     }
 }
 
@@ -348,6 +360,36 @@ mod tests {
         assert_eq!(cfg.asset, "0xabc");
         assert_eq!(cfg.max_amount, "10000");
         assert_eq!(network, "base-sepolia");
+    }
+
+    #[test]
+    fn pay_network_name_resolves_to_caip2() {
+        let mut args = paid_args(true);
+        args.pay_network = Some("base-sepolia".to_string());
+        let (cfg, _, _) =
+            resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None).unwrap();
+        assert_eq!(cfg.pay_network, "eip155:84532");
+    }
+
+    #[test]
+    fn config_pay_network_name_resolves_too() {
+        let mut section = empty_section();
+        section.pay_network = Some("solana-devnet".to_string());
+        let mut args = paid_args(true);
+        args.pay_network = None;
+        let (cfg, _, _) =
+            resolve_payment_config(&args, &section, Some("k".to_string()), None).unwrap();
+        assert_eq!(cfg.pay_network, "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1");
+    }
+
+    #[test]
+    fn unknown_pay_network_name_is_an_arg_error() {
+        let mut args = paid_args(true);
+        args.pay_network = Some("btc".to_string());
+        let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown pay network 'btc'"), "got: {msg}");
     }
 
     #[test]
@@ -558,5 +600,23 @@ mod tests {
         };
         let mapped = map_paid_error(rejected);
         assert_eq!(crate::errors::exit_code_for(&mapped), 2);
+    }
+
+    #[test]
+    fn rejected_5xx_maps_to_payment_maybe_charged() {
+        // A settlement failure after the signed payment was submitted: the
+        // outcome is unknown, so it must NOT land in the "refused" bucket.
+        for status in [500, 502, 503] {
+            let rejected = SdkError::PaymentRejected {
+                status,
+                body: "settlement error".to_string(),
+            };
+            let mapped = map_paid_error(rejected);
+            assert!(
+                matches!(mapped, CliError::PaymentMaybeCharged(_)),
+                "status {status} mapped to {mapped:?}"
+            );
+            assert_eq!(crate::errors::exit_code_for(&mapped), 3);
+        }
     }
 }

@@ -66,10 +66,11 @@ pub enum CliError {
 /// - 1: generic CLI failure (arg parse, IO, decode). clap usage errors are
 ///   mapped to 1 in main.rs too, so 2 always and only means an API error.
 /// - 2: SdkError::Api (server returned a non-2xx); also a payment the gateway
-///   refused or never matched (PaymentRejected / PaymentUnsupported)
+///   refused without settling (PaymentRejected 4xx / PaymentUnsupported —
+///   the paid lane wraps 5xx rejections into PaymentMaybeCharged first)
 /// - 3: SdkError::Http (network failure); also an unknown payment outcome
-///   (PaymentIndeterminate / PaymentMaybeCharged — request sent, response
-///   lost, the caller may have been charged)
+///   (PaymentIndeterminate / PaymentMaybeCharged — the payment was
+///   submitted, the caller may have been charged)
 /// - 4: NoApiKey / BadConfig
 /// - 5: user cancelled or needs --yes
 pub fn exit_code_for(err: &CliError) -> i32 {
@@ -109,9 +110,13 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
             )
         }
         CliError::Sdk(SdkError::PaymentRejected { status, body }) => {
+            // Only 4xx rejections reach this arm from the paid lane (5xx are
+            // wrapped into PaymentMaybeCharged): the gateway refused the
+            // credential without settling it.
             let msg = format!(
-                "Error: the gateway rejected the submitted payment (HTTP {status}). \
-                 A signed payment was sent — check your wallet before retrying."
+                "Error: the gateway refused the payment (HTTP {status}). The signed \
+                 payment was not accepted, so nothing should have settled; check the \
+                 wallet balance and --pay-network/--asset/--max-amount, then retry."
             );
             if verbose && !body.is_empty() {
                 format!("{msg}\n{body}")
@@ -126,9 +131,9 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
                 .to_string()
         }
         CliError::PaymentMaybeCharged(source) => {
-            let msg = "Error: the paid request returned an unexpected response — the \
-                       request may have been settled; check your wallet before retrying. \
-                       Do not blindly re-run this command.";
+            let msg = "Error: the paid request failed after the payment was submitted — \
+                       the payment may have been settled; check your wallet before \
+                       retrying. Do not blindly re-run this command.";
             if verbose {
                 format!("{msg}\n{source}")
             } else {
@@ -525,8 +530,10 @@ mod tests {
 
     #[test]
     fn exit_code_payment_refusals_are_2() {
-        // The gateway said no and nothing settled (unsupported) or the refusal
-        // is terminal (rejected): the API-error bucket.
+        // The gateway said no and nothing settled: an unmatched/unreadable
+        // offer (unsupported) or a 4xx-refused credential (rejected). The
+        // paid lane wraps 5xx rejections into PaymentMaybeCharged before
+        // this mapping ever sees them.
         let unsupported = CliError::Sdk(SdkError::PaymentUnsupported {
             offered: "eip155:84532/0xabc amount 999999".to_string(),
         });
@@ -560,14 +567,15 @@ mod tests {
     }
 
     #[test]
-    fn renders_payment_rejected_with_wallet_warning() {
+    fn renders_payment_rejected_as_refused_without_settling() {
         let err = CliError::Sdk(SdkError::PaymentRejected {
             status: 402,
             body: "invalid signature".to_string(),
         });
         let msg = render(&err, false);
         assert!(msg.contains("402"), "got: {msg}");
-        assert!(msg.contains("check your wallet"), "got: {msg}");
+        assert!(msg.contains("refused"), "got: {msg}");
+        assert!(msg.contains("nothing should have settled"), "got: {msg}");
         assert!(!msg.contains("invalid signature"), "got: {msg}");
         let verbose = render(&err, true);
         assert!(verbose.contains("invalid signature"), "got: {verbose}");

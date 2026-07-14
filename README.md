@@ -337,7 +337,7 @@ use a dedicated, minimally funded wallet.
 ```sh
 qn rpc call eth_blockNumber --network base-sepolia --x402 \
     --payment-key-file ~/.keys/payer \
-    --pay-network eip155:84532 \
+    --pay-network base-sepolia \
     --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
     --max-amount 10000
 
@@ -346,20 +346,26 @@ qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt ...
 ```
 
 - `--network` is required and names the chain you *query*, as the payment
-  gateway's path slug (independent of `--pay-network`, the CAIP-2 chain the
-  payment *settles* on).
+  gateway's path slug (independent of `--pay-network`, the chain the payment
+  *settles* on).
+- `--pay-network` takes a Quicknode network name (`base-sepolia`,
+  `solana-devnet`, `tempo-testnet`, ...) or a raw CAIP-2 id (`eip155:84532`,
+  `solana:EtWTRA...`). Anything containing a `:` is passed through verbatim,
+  so any `eip155:<chain-id>` works even without a named entry.
 - The private key resolves from `--payment-key-file <PATH>` (`-` for stdin),
   then the `QN_PAYMENT_KEY` env var, then `key_file` in config. It is never
   accepted as a flag value, never stored in config, and never printed.
 - `--max-amount` is the per-call spend ceiling in integer base units of the
   asset (e.g. `10000` = 0.01 USDC). There is no built-in default; offers above
   the ceiling are refused before anything is signed.
-- `--receipt` wraps stdout as `{"result": ..., "payment_receipt": ...}` — the
-  settlement transaction hash on MPP, `null` on x402. Without it, paid output
-  is shaped exactly like unpaid output.
+- `--receipt` wraps stdout as `{"result": ..., "payment_receipt": ...}`. On
+  MPP the receipt is an object (`method`, `status`, `timestamp`, and
+  `reference` — the settlement transaction hash); on x402 it is `null`.
+  Without it, paid output is shaped exactly like unpaid output.
 - Paid calls **never auto-retry** (`--retries` does not apply). Exit code 2
-  means the gateway refused; exit 3 means the outcome is unknown and the
-  payment may have settled — check the wallet before re-running.
+  means the gateway refused and nothing settled; exit 3 means the outcome is
+  unknown — the payment was submitted and may have settled; check the wallet
+  before re-running.
 - x402/Solana at volume: pass `--svm-rpc-url <URL>`; the default public Solana
   RPC rate-limits aggressively.
 
@@ -371,7 +377,7 @@ payment by itself:
 [rpc.payment]
 key_file    = "/home/me/.config/qn/payment.key"   # a path; never the raw key
 max_amount  = "10000"
-pay_network = "eip155:84532"
+pay_network = "base-sepolia"                      # network name or CAIP-2 id
 asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ```
 

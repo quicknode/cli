@@ -49,16 +49,27 @@ fn x402_accepts_entry(amount: &str) -> serde_json::Value {
 
 /// Sequenced gateway responder: the first (unpaid) POST gets a 402 with a
 /// one-entry menu at `amount`; any request carrying a payment signature gets
-/// the JSON-RPC result.
+/// the `paid` response (the JSON-RPC result by default).
 struct X402Seq {
     amount: &'static str,
+    paid: ResponseTemplate,
     calls: AtomicUsize,
 }
 
 impl X402Seq {
     fn new(amount: &'static str) -> Self {
+        Self::with_paid_response(
+            amount,
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1, "result": "0x1335f9a"
+            })),
+        )
+    }
+
+    fn with_paid_response(amount: &'static str, paid: ResponseTemplate) -> Self {
         Self {
             amount,
+            paid,
             calls: AtomicUsize::new(0),
         }
     }
@@ -74,9 +85,7 @@ impl Respond for X402Seq {
                 "accepts": [ x402_accepts_entry(self.amount) ]
             }))
         } else {
-            ResponseTemplate::new(200).set_body_json(json!({
-                "jsonrpc": "2.0", "id": 1, "result": "0x1335f9a"
-            }))
+            self.paid.clone()
         }
     }
 }
@@ -139,6 +148,44 @@ async fn x402_happy_path_pays_and_bypasses_control_plane() {
         !dir.path().join("tokens.toml").exists(),
         "paid lane must not write the token cache"
     );
+}
+
+#[tokio::test]
+async fn pay_network_name_matches_caip2_offer() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(X402Seq::new("1000"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let (_guard, key_path) = key_file();
+
+    // `base-sepolia` resolves to eip155:84532 before reaching the SDK, so it
+    // matches the mock gateway's CAIP-2 offer exactly.
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-key-file",
+            &key_path,
+            "--pay-network",
+            "base-sepolia",
+            "--asset",
+            USDC,
+            "--max-amount",
+            "10000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
 #[tokio::test]
@@ -361,10 +408,11 @@ async fn paid_lane_is_never_retried() {
 }
 
 #[tokio::test]
-async fn payment_rejected_on_paid_resend_exits_2_with_wallet_warning() {
+async fn payment_rejected_on_paid_resend_exits_2_as_refused() {
     let server = MockServer::start().await;
-    // 402 menu, then the paid resend is refused with another 402: a signed
-    // payment went out, so the message must say "check your wallet".
+    // 402 menu, then the paid resend is refused with another 402: the gateway
+    // refused the credential without settling it — exit 2, "refused", and no
+    // unknown-outcome language.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(402).set_body_json(json!({
@@ -397,8 +445,145 @@ async fn payment_rejected_on_paid_resend_exits_2_with_wallet_warning() {
     )
     .await;
     assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("refused"), "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("nothing should have settled"),
+        "stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("may have been settled"),
+        "a 4xx refusal must not carry unknown-outcome language: {}",
+        out.stderr
+    );
+}
+
+#[tokio::test]
+async fn settlement_5xx_on_paid_resend_exits_3_check_wallet() {
+    let server = MockServer::start().await;
+    // 402 menu, then the paid resend dies with a 500: the signed payment was
+    // submitted and the outcome is unknown — exit 3, check-your-wallet.
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(X402Seq::with_paid_response(
+            "1000",
+            ResponseTemplate::new(500).set_body_string("settlement error"),
+        ))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let (_guard, key_path) = key_file();
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-key-file",
+            &key_path,
+            "--pay-network",
+            "eip155:84532",
+            "--asset",
+            USDC,
+            "--max-amount",
+            "10000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 3, "stderr={}", out.stderr);
     assert!(
         out.stderr.contains("check your wallet"),
+        "stderr={}",
+        out.stderr
+    );
+}
+
+#[tokio::test]
+async fn unparseable_paid_response_exits_3_check_wallet() {
+    let server = MockServer::start().await;
+    // The paid resend returns 200 with a body that isn't JSON: the payment
+    // was submitted (and likely settled) but the result is uninterpretable —
+    // exit 3, never a generic decode error.
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(X402Seq::with_paid_response(
+            "1000",
+            ResponseTemplate::new(200).set_body_string("<html>ok?</html>"),
+        ))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let (_guard, key_path) = key_file();
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-key-file",
+            &key_path,
+            "--pay-network",
+            "eip155:84532",
+            "--asset",
+            USDC,
+            "--max-amount",
+            "10000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 3, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("may have been settled"),
+        "stderr={}",
+        out.stderr
+    );
+}
+
+#[tokio::test]
+async fn malformed_challenge_menu_exits_2_nothing_charged() {
+    let server = MockServer::start().await;
+    // The 402 challenge body is not JSON. Nothing has been signed or paid, so
+    // this must exit 2 with "Nothing was charged" — never the exit-3
+    // check-your-wallet path — after exactly one request.
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(ResponseTemplate::new(402).set_body_string("<html>menu?</html>"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_guard, key_path) = key_file();
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-key-file",
+            &key_path,
+            "--pay-network",
+            "eip155:84532",
+            "--asset",
+            USDC,
+            "--max-amount",
+            "10000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("Nothing was charged"),
         "stderr={}",
         out.stderr
     );
@@ -444,6 +629,31 @@ async fn missing_network_fails_before_any_request() {
             "10000",
         ],
         "--network",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn unknown_pay_network_name_fails_before_any_request() {
+    let (_guard, key_path) = key_file();
+    expect_preflight_error(
+        &[
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-key-file",
+            &key_path,
+            "--pay-network",
+            "not-a-chain",
+            "--asset",
+            USDC,
+            "--max-amount",
+            "10000",
+        ],
+        "unknown pay network 'not-a-chain'",
     )
     .await;
 }
@@ -665,17 +875,17 @@ async fn receipt_flag_wraps_stdout_on_mpp() {
     let request = b64url(json!({
         "amount": "1000",
         "currency": "0x20c0000000000000000000000000000000000000",
-        "recipient": "0xfd24114c3981aba78ae2441991b1bdb89329c556",
+        "recipient": "0x000000000000000000000000000000000000bEEF",
         "methodDetails": { "chainId": 42431, "feePayer": true }
     }));
     let www = format!(
-        "Payment id=\"c1\", realm=\"mpp.quicknode.com\", method=\"tempo\", \
+        "Payment id=\"c1\", realm=\"mpp.example.com\", method=\"tempo\", \
          intent=\"charge\", description=\"d\", expires=\"2099-01-01T00:00:00Z\", \
          request=\"{request}\""
     );
     let receipt = b64url(json!({
         "method": "tempo", "status": "success",
-        "timestamp": "2026-07-13T02:05:10.119Z",
+        "timestamp": "2026-01-01T00:00:00Z",
         "reference": "0xdeadbeef"
     }));
 
