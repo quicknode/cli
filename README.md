@@ -334,9 +334,15 @@ request instead of using an account API key — no login and no Tooling Access
 needed. **This moves real funds** (testnet tokens are still real transfers):
 use a dedicated, minimally funded wallet.
 
+The quickest path: see what's payable, generate a wallet, fund it, then pay by
+name.
+
 ```sh
+qn rpc pay-networks                                   # payable networks + the x402 asset per network
+qn rpc wallet generate --chain evm --name payer       # new wallet; prints its address + a QR to fund it
+# → send funds to that address, then:
 qn rpc call eth_blockNumber --network base-sepolia --x402 \
-    --payment-key-file ~/.keys/payer \
+    --payment-wallet payer \
     --pay-network base-sepolia \
     --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
     --max-amount 10000
@@ -344,6 +350,9 @@ qn rpc call eth_blockNumber --network base-sepolia --x402 \
 # MPP settles on Tempo and returns a settlement receipt with --receipt:
 qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt ...
 ```
+
+You can also point `--payment-key-file <PATH>` at a key file you manage
+yourself instead of a stored wallet.
 
 - `--network` is required and names the chain you *query*, as the payment
   gateway's path slug (independent of `--pay-network`, the chain the payment
@@ -353,8 +362,10 @@ qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt ...
   `solana:EtWTRA...`). Anything containing a `:` is passed through verbatim,
   so any `eip155:<chain-id>` works even without a named entry.
 - The private key resolves from `--payment-key-file <PATH>` (`-` for stdin),
-  then the `QN_PAYMENT_KEY` env var, then `key_file` in config. It is never
-  accepted as a flag value, never stored in config, and never printed.
+  then `--payment-wallet <NAME>` (a stored wallet), then `key_file`, then
+  `wallet` in config. It always comes from a file or a stored wallet — never
+  an environment variable, never a flag value, never inline in config, and
+  never printed.
 - `--max-amount` is the per-call spend ceiling in integer base units of the
   asset (e.g. `10000` = 0.01 USDC). There is no built-in default; offers above
   the ceiling are refused before anything is signed.
@@ -375,7 +386,7 @@ payment by itself:
 
 ```toml
 [rpc.payment]
-key_file    = "/home/me/.config/qn/payment.key"   # a path; never the raw key
+wallet      = "payer"                             # a stored wallet name (or key_file = "<path>")
 max_amount  = "10000"
 pay_network = "base-sepolia"                      # network name or CAIP-2 id
 asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
@@ -384,6 +395,30 @@ asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ```sh
 qn rpc call eth_blockNumber --network base-sepolia --x402
 ```
+
+##### Managing payment wallets
+
+`qn rpc wallet` keeps dedicated payment wallets under
+`~/.config/qn/wallets/` (raw key at `0600`; the key is stored unencrypted, so
+treat each as a dedicated, minimally funded hot wallet):
+
+```sh
+qn rpc wallet generate --chain evm --name payer   # evm also covers MPP/Tempo; svm for x402/Solana
+qn rpc wallet list                                # names, chain, address (never the key)
+qn rpc wallet show payer                          # address to stdout, plus a QR to fund it on a terminal
+qn rpc wallet rm payer                            # gated: --yes to confirm; the key is unrecoverable
+```
+
+`qn rpc wallet show payer` prints only the bare address to stdout (the QR and
+hint go to stderr), so `qn rpc wallet show payer` in a pipe yields just the
+address.
+
+##### Discovering payable networks
+
+`qn rpc pay-networks` (alias `pay-nets`) lists the networks the paid lane can
+use, read from the gateways' public discovery endpoints (no API key). A listed
+network is a valid `--network`; the x402 asset column is a ready `--asset`
+value. The list is cached in `~/.config/qn/pay-networks.toml` (24h TTL).
 
 ### Other
 

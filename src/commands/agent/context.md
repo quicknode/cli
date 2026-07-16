@@ -148,14 +148,26 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   or a raw CAIP-2 id like `eip155:84532`, which always passes through
   verbatim), `--asset <ADDRESS>`, `--max-amount <BASE_UNITS>` (spend ceiling
   per call, integer base units, no default), and the private key via
-  `--payment-key-file <PATH|->` > `QN_PAYMENT_KEY` env > `key_file` under
-  `[rpc.payment]` in config (a path — never the raw key). All of these fall
-  back to `[rpc.payment]`, but config never activates payment by itself: the
-  scheme flag is always required. `--receipt` wraps stdout as
-  `{"result": ..., "payment_receipt": ...}` (on MPP an object whose
-  `reference` is the settlement tx hash; `null` on x402); without it the paid
-  output shape is identical to an unpaid call.
+  `--payment-key-file <PATH|->` > `--payment-wallet <NAME>` > `key_file` >
+  `wallet` under `[rpc.payment]` in config. The key always comes from a file
+  or a stored wallet — never an env var and never a raw key on the command
+  line. All parameters fall back to `[rpc.payment]`, but config never
+  activates payment by itself: the scheme flag is always required. `--receipt`
+  wraps stdout as `{"result": ..., "payment_receipt": ...}` (on MPP an object
+  whose `reference` is the settlement tx hash; `null` on x402); without it the
+  paid output shape is identical to an unpaid call.
   Mutually exclusive with `--endpoint-url`.
+  **Wallets**: `qn rpc wallet generate --chain <evm|svm> --name <NAME>` creates
+  and stores a dedicated payment wallet (raw key at 0600 under
+  `<config-dir>/qn/wallets/`, `evm` also covers MPP/Tempo), printing its
+  address (and a QR to fund it on a terminal); `qn rpc wallet list`/`show
+  <NAME>` display stored wallets (address only, never the key); `qn rpc wallet
+  rm <NAME>` deletes one (gated: `--yes`, or exit 5 in scripts). Reference a
+  wallet on a paid call with `--payment-wallet <NAME>`.
+  **Discovery**: `qn rpc pay-networks` (alias `pay-nets`) lists the networks
+  payable via the paid lane, from the gateways' public discovery endpoints
+  (no API key). A listed slug is a valid `--network`; the x402 asset column is
+  a ready `--asset` value.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -228,10 +240,17 @@ is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 **Pay per call with a crypto micropayment (no API key, no login):**
 
 ```sh
-# One-time: store the wallet parameters (never the raw key) in config
+qn rpc pay-networks                                  # which networks are payable, and the x402 asset
+qn rpc wallet generate --chain evm --name payer      # create a dedicated wallet; prints its address + a QR to fund
+# → fund that address, then:
+qn rpc call eth_blockNumber --network base-sepolia --x402 \
+    --payment-wallet payer --pay-network base-sepolia \
+    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e --max-amount 10000
+
+# Or store the parameters (never the raw key) in config to keep calls short:
 cat >> ~/.config/qn/config.toml <<'EOF'
 [rpc.payment]
-key_file    = "/home/me/.config/qn/payment.key"   # file holding the raw key; chmod 600
+wallet      = "payer"                             # a stored wallet, or use key_file = "<path>" (chmod 600)
 max_amount  = "10000"                             # spend ceiling per call, base units
 pay_network = "base-sepolia"                      # settlement chain: network name or CAIP-2 id
 asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
@@ -250,8 +269,8 @@ is no built-in default.
 - Mutations are never retried; re-running a failed create can double-provision (§5).
 - Paid `rpc call` moves real funds and never auto-retries; exit 3 means the
   payment may have settled — check the wallet before re-running (§3, §5). The
-  CLI never prints the payment key; keep it in a file or `QN_PAYMENT_KEY`, not
-  in config or argv.
+  CLI never prints the payment key; it comes only from a key file or a stored
+  wallet (never an env var, never argv, never inline in config).
 - No account-wide wipe command exists by design (§4).
 - Piped output defaults to `json`; pass `-o toon` for the compact LLM form (§2).
 - `--base-url` overrides the API host; it exists for testing.

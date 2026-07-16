@@ -463,3 +463,54 @@ async fn sql_schema_table_renders_nested_table_blocks() {
     .await;
     insta::assert_snapshot!(out);
 }
+
+#[tokio::test]
+async fn pay_networks_table_merges_schemes_and_asset() {
+    // Both gateways share the mock host (--base-url points both at it). The
+    // /discovery/resources asset lands on the base-sepolia row.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/networks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "networks": ["base-sepolia", "ethereum-mainnet", "solana-devnet"]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/discovery/resources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "x402Version": 2,
+            "items": [{
+                "accepts": [{
+                    "scheme": "exact",
+                    "network": "eip155:84532",
+                    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+                }]
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("qn")
+        .unwrap()
+        .env_remove("HOME")
+        .env("HOME", std::env::temp_dir())
+        .args([
+            "--base-url",
+            &server.uri(),
+            "--no-input",
+            "--no-color",
+            "--format",
+            "table",
+            "rpc",
+            "pay-networks",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap());
+}

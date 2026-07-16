@@ -1,0 +1,8 @@
+---
+source: tests/table_snapshots.rs
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+NETWORK           SCHEMES    X402 ASSET                                  
+base-sepolia      x402, mpp  0x036CbD53842c5426634e7929541eC2318f3dCF7e  
+ethereum-mainnet  x402, mpp  —                                           
+solana-devnet     x402, mpp  —

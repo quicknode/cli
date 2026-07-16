@@ -63,9 +63,12 @@ pub enum RpcCmd {
         Paid (crypto micropayment, no API key; params from [rpc.payment] in config):\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402 \\\n      \
-        --payment-key-file ~/.keys/payer --pay-network base-sepolia \\\n      \
+        --payment-wallet payer --pay-network base-sepolia \\\n      \
         --asset 0x036C... --max-amount 10000\n  \
-        qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt")]
+        qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt\n\n\
+        See payable networks and manage wallets:\n  \
+        qn rpc pay-networks\n  \
+        qn rpc wallet generate --chain evm --name payer")]
     Call(Box<CallArgs>),
 
     /// List the endpoint's available network keys (no RPC call).
