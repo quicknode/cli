@@ -506,6 +506,82 @@ pub fn save_networks(
     write_atomic_0600(path, text.as_bytes(), ".qn-networks-")
 }
 
+// ── Payable-networks discovery cache ─────────────────────────────────────────
+//
+// The set of networks payable via the x402/MPP gateways (with the x402 asset,
+// when discoverable) is stable public metadata fetched from the gateways'
+// discovery endpoints. Cached in `pay-networks.toml` next to the config file
+// with a 24-hour TTL, mirroring the multichain URL cache. Not account-scoped
+// (the data is public and the same for everyone).
+
+/// Seconds the cached payable-networks list is considered fresh (24h).
+pub const PAY_NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// One payable network: its Quicknode slug, the payment schemes that accept it,
+/// and the x402 asset/amount when the discovery catalog lists them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayNetworkEntry {
+    pub network: String,
+    /// Schemes offering this network, e.g. `["x402", "mpp"]`.
+    pub schemes: Vec<String>,
+    /// x402 asset (token contract/mint), when the discovery catalog lists one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PayNetworksCacheFile {
+    #[serde(default)]
+    pub entry: Option<PayNetworksCacheEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayNetworksCacheEntry {
+    /// Unix seconds the list was fetched, for the TTL check.
+    pub fetched_at_unix: i64,
+    pub networks: Vec<PayNetworkEntry>,
+}
+
+/// The payable-networks cache path: `pay-networks.toml` alongside the config.
+pub fn pay_networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("pay-networks.toml")),
+        None => config_dir().map(|d| d.join("qn").join("pay-networks.toml")),
+    }
+}
+
+/// Loads the cached payable-networks list from `path`, if present and fetched
+/// within the TTL (relative to `now_unix`). Returns `None` on any miss.
+pub fn load_pay_networks(path: &Path, now_unix: i64) -> Option<Vec<PayNetworkEntry>> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: PayNetworksCacheFile = toml::from_str(&text).ok()?;
+    let entry = cache.entry?;
+    if now_unix.saturating_sub(entry.fetched_at_unix) >= PAY_NETWORKS_TTL_SECS {
+        return None;
+    }
+    Some(entry.networks)
+}
+
+/// Saves the payable-networks list to `path` atomically, stamping
+/// `fetched_at_unix` for the TTL check.
+pub fn save_pay_networks(
+    path: &Path,
+    fetched_at_unix: i64,
+    networks: &[PayNetworkEntry],
+) -> Result<(), CliError> {
+    let cache = PayNetworksCacheFile {
+        entry: Some(PayNetworksCacheEntry {
+            fetched_at_unix,
+            networks: networks.to_vec(),
+        }),
+    };
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-pay-networks-")
+}
+
 /// Atomically writes `bytes` to `path` with 0600 perms via a temp file in the
 /// same directory (perms set before the bytes), then `rename`. Also tightens
 /// the parent directory to 0700. Shared by the token/networks caches and the

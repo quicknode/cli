@@ -25,6 +25,7 @@
 //! machinery runs.
 
 mod pay_network;
+mod pay_networks;
 mod payment;
 mod wallet;
 
@@ -73,6 +74,11 @@ pub enum RpcCmd {
 
     /// Manage local payment wallets for the paid lane (`--x402`/`--mpp`).
     Wallet(wallet::Args),
+
+    /// List the networks payable via the paid lane (`--x402`/`--mpp`), from the
+    /// gateways' public discovery endpoints. No API key required.
+    #[command(visible_alias = "pay-nets")]
+    PayNetworks,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -206,6 +212,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
             let ctx = Ctx::from_global_keyless(global)?;
             wallet::run(wallet_args, ctx).await
         }
+        RpcCmd::PayNetworks => pay_networks::run(global).await,
     }
 }
 
