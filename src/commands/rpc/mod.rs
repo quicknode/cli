@@ -26,6 +26,7 @@
 
 mod pay_network;
 mod payment;
+mod wallet;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -69,6 +70,9 @@ pub enum RpcCmd {
     /// List the endpoint's available network keys (no RPC call).
     #[command(visible_alias = "ls")]
     ListNetworks,
+
+    /// Manage local payment wallets for the paid lane (`--x402`/`--mpp`).
+    Wallet(wallet::Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -186,6 +190,10 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     match args.cmd {
         RpcCmd::Call(call) => run_call(*call, global).await,
         RpcCmd::ListNetworks => run_list_networks(global).await,
+        RpcCmd::Wallet(wallet_args) => {
+            let ctx = Ctx::from_global_keyless(global)?;
+            wallet::run(wallet_args, ctx).await
+        }
     }
 }
 

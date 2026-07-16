@@ -449,6 +449,16 @@ pub fn networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
+/// The wallet store directory: `wallets/` alongside the resolved config file.
+/// Holds one raw-key file per wallet (0600) plus a `<name>.toml` metadata
+/// sidecar. The directory is tightened to 0700 on first write.
+pub fn wallets_dir(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("wallets")),
+        None => config_dir().map(|d| d.join("qn").join("wallets")),
+    }
+}
+
 /// Loads the cached network map for `endpoint_id` from `path`, if present, for
 /// the same endpoint, and fetched within the TTL (relative to `now_unix`).
 /// Returns `None` (a cache miss) on any mismatch or parse failure.
@@ -493,9 +503,14 @@ pub fn save_networks(
 }
 
 /// Atomically writes `bytes` to `path` with 0600 perms via a temp file in the
-/// same directory (perms set before the bytes), then `rename`. Shared by the
-/// token and networks caches.
-fn write_atomic_0600(path: &Path, bytes: &[u8], tmp_prefix: &str) -> Result<(), CliError> {
+/// same directory (perms set before the bytes), then `rename`. Also tightens
+/// the parent directory to 0700. Shared by the token/networks caches and the
+/// wallet store.
+pub(crate) fn write_atomic_0600(
+    path: &Path,
+    bytes: &[u8],
+    tmp_prefix: &str,
+) -> Result<(), CliError> {
     let parent = path.parent().ok_or_else(|| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other("cache path has no parent directory"),

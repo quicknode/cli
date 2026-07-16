@@ -49,6 +49,7 @@ url = "2"
 # Stable fingerprint of the API key for scoping the JWT token cache to an
 # account. The key itself is never written to the cache — only this hash.
 sha2 = "0.10"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false }

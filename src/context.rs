@@ -234,6 +234,33 @@ impl Ctx {
         Ok(Self { sdk, out, global })
     }
 
+    /// Keyless construction for local-only commands that make no network calls
+    /// (e.g. `qn rpc wallet` key management). Resolves no API key and builds no
+    /// payment lane, so it works on a machine that has never run `qn auth
+    /// login`. The SDK is present only to satisfy the [`Ctx`] shape; every
+    /// sub-client would 401 if called.
+    pub fn from_global_keyless(global: GlobalArgs) -> Result<Self, CliError> {
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let (format, wide) = global.resolve_output(stdout_is_tty);
+
+        let mut full = SdkFullConfig::keyless();
+        apply_user_agent(&mut full);
+
+        let sdk = QuicknodeSdk::new(&full)?;
+        let out = OutputCtx::detect_with(
+            format,
+            global.no_color,
+            global.quiet,
+            global.verbose,
+            wide,
+            stdout_is_tty,
+            std::env::var_os("NO_COLOR"),
+            std::env::var("TERM").ok(),
+        );
+
+        Ok(Self { sdk, out, global })
+    }
+
     fn build(
         global: GlobalArgs,
         rpc_seed: Option<CachedToken>,
