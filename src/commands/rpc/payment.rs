@@ -10,10 +10,11 @@
 //! post-payment body) means the caller may already have been charged.
 //!
 //! Everything the lane needs is resolved before any network I/O: the private
-//! key (flag file/stdin > `QN_PAYMENT_KEY` env > `key_file` in config — never
-//! a raw key on the command line or inline in config), the spend ceiling, the
-//! pay network, and the asset. The key lives only inside the SDK's
-//! `PaymentConfig` (which redacts it in Debug) and is never logged or echoed.
+//! key (flag file/stdin > `--payment-wallet` > `key_file` > `wallet` in config
+//! — always from a file, never an env var or a raw key on the command line or
+//! inline in config), the spend ceiling, the pay network, and the asset. The
+//! key lives only inside the SDK's `PaymentConfig` (which redacts it in Debug)
+//! and is never logged or echoed.
 
 use std::path::Path;
 
@@ -45,12 +46,15 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
     // relies on [rpc.payment] values we could not read.
     let section = load_payment_section(&global)?;
 
-    // The single documented env read, injected into the resolver so it stays
-    // deterministic under test (no process-env mutation).
-    let env_key = std::env::var("QN_PAYMENT_KEY").ok();
+    // The wallet store directory backs `--payment-wallet` / config `wallet`.
+    let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
 
-    let (payment, network, key_file_warning) =
-        resolve_payment_config(&args, &section, env_key, global.base_url.clone())?;
+    let (payment, network, key_file_warning) = resolve_payment_config(
+        &args,
+        &section,
+        wallets_dir.as_deref(),
+        global.base_url.clone(),
+    )?;
 
     let params = super::parse_params(args.params.as_deref(), args.params_file.as_deref())?;
 
@@ -114,7 +118,7 @@ fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError>
 fn resolve_payment_config(
     args: &CallArgs,
     section: &PaymentSection,
-    env_key: Option<String>,
+    wallets_dir: Option<&Path>,
     base_url_override: Option<String>,
 ) -> Result<(PaymentConfig, String, Option<String>), CliError> {
     // Scheme comes from which flag is set; clap's ArgGroup guarantees at most
@@ -143,8 +147,10 @@ fn resolve_payment_config(
 
     let (key, key_file_warning) = resolve_key(
         args.payment_key_file.as_deref(),
-        env_key,
+        args.payment_wallet.as_deref(),
         section.key_file.as_deref(),
+        section.wallet.as_deref(),
+        wallets_dir,
     )?;
 
     let max_amount = args
@@ -218,15 +224,18 @@ fn resolve_payment_config(
     ))
 }
 
-/// Resolves the raw private key: `--payment-key-file` (a path, or `-` for
-/// stdin) > env `QN_PAYMENT_KEY` > config `key_file` path. The raw key is
-/// never a flag value. Returns the key and an optional permissions warning
-/// (group/world-readable key file). Error messages name the path, never the
-/// file contents.
+/// Resolves the raw private key from a file only — never an env var and never
+/// a raw key on the command line. Precedence: `--payment-key-file` (a path, or
+/// `-` for stdin) > `--payment-wallet` (a stored wallet name) > config
+/// `key_file` > config `wallet`. Returns the key and an optional permissions
+/// warning (group/world-readable key file). Error messages name the path or
+/// wallet, never the file contents.
 fn resolve_key(
     flag_file: Option<&Path>,
-    env_key: Option<String>,
+    flag_wallet: Option<&str>,
     config_file: Option<&Path>,
+    config_wallet: Option<&str>,
+    wallets_dir: Option<&Path>,
 ) -> Result<(String, Option<String>), CliError> {
     if let Some(path) = flag_file {
         if path.as_os_str() == "-" {
@@ -235,17 +244,46 @@ fn resolve_key(
         }
         return read_key_file(path);
     }
-    if let Some(key) = env_key {
-        return checked_key(key, "QN_PAYMENT_KEY").map(|k| (k, None));
+    if let Some(name) = flag_wallet {
+        return read_key_file(&wallet_key_path(name, wallets_dir)?);
     }
     if let Some(path) = config_file {
         return read_key_file(path);
     }
+    if let Some(name) = config_wallet {
+        return read_key_file(&wallet_key_path(name, wallets_dir)?);
+    }
     Err(CliError::Arg(
         "no payment key found. Pass --payment-key-file <PATH> (or '-' for \
-         stdin), set QN_PAYMENT_KEY, or set `key_file` under [rpc.payment]"
+         stdin), --payment-wallet <NAME> (from 'qn rpc wallet generate'), or \
+         set `key_file`/`wallet` under [rpc.payment]"
             .to_string(),
     ))
+}
+
+/// Resolves a stored wallet name to its key file path, validating the name and
+/// checking the file exists. Mirrors the `wallet` module's name rules so the
+/// name can never escape the store directory.
+fn wallet_key_path(name: &str, wallets_dir: Option<&Path>) -> Result<std::path::PathBuf, CliError> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
+        return Err(CliError::Arg(format!(
+            "invalid wallet name '{name}'. Use lowercase letters, digits, '-' and '_' only"
+        )));
+    }
+    let dir = wallets_dir
+        .ok_or_else(|| CliError::Arg("could not resolve the wallet store directory".to_string()))?;
+    let path = dir.join(name);
+    if !path.exists() {
+        return Err(CliError::Arg(format!(
+            "no wallet named '{name}'. Run 'qn rpc wallet list' to see stored wallets, \
+             or create one with 'qn rpc wallet generate'"
+        )));
+    }
+    Ok(path)
 }
 
 /// Reads and validates a key file, plus an ssh-style permissions warning when
@@ -328,6 +366,7 @@ mod tests {
             x402,
             mpp: !x402,
             payment_key_file: None,
+            payment_wallet: None,
             max_amount: Some("10000".to_string()),
             pay_network: Some("eip155:84532".to_string()),
             asset: Some("0xabc".to_string()),
@@ -348,14 +387,23 @@ mod tests {
         f
     }
 
+    /// `paid_args` with a valid key file attached, so a test can reach the
+    /// parameter-validation assertions without caring about the key source.
+    /// Returns the (args, key-file guard) pair — keep the guard alive.
+    fn paid_args_with_key(x402: bool) -> (CallArgs, tempfile::NamedTempFile) {
+        let f = key_file_with("0xkey\n");
+        let mut args = paid_args(x402);
+        args.payment_key_file = Some(f.path().to_path_buf());
+        (args, f)
+    }
+
     #[test]
-    fn resolves_full_config_from_flags_and_env_key() {
-        let args = paid_args(true);
+    fn resolves_full_config_from_flags_and_key_file() {
+        let (args, _f) = paid_args_with_key(true);
         let (cfg, network, _) =
-            resolve_payment_config(&args, &empty_section(), Some("0xkey".to_string()), None)
-                .unwrap();
+            resolve_payment_config(&args, &empty_section(), None, None).unwrap();
         assert_eq!(cfg.scheme, "x402");
-        assert_eq!(cfg.key, "0xkey");
+        assert_eq!(cfg.key, "0xkey"); // trimmed
         assert_eq!(cfg.pay_network, "eip155:84532");
         assert_eq!(cfg.asset, "0xabc");
         assert_eq!(cfg.max_amount, "10000");
@@ -364,10 +412,9 @@ mod tests {
 
     #[test]
     fn pay_network_name_resolves_to_caip2() {
-        let mut args = paid_args(true);
+        let (mut args, _f) = paid_args_with_key(true);
         args.pay_network = Some("base-sepolia".to_string());
-        let (cfg, _, _) =
-            resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None).unwrap();
+        let (cfg, _, _) = resolve_payment_config(&args, &empty_section(), None, None).unwrap();
         assert_eq!(cfg.pay_network, "eip155:84532");
     }
 
@@ -375,62 +422,48 @@ mod tests {
     fn config_pay_network_name_resolves_too() {
         let mut section = empty_section();
         section.pay_network = Some("solana-devnet".to_string());
-        let mut args = paid_args(true);
+        let (mut args, _f) = paid_args_with_key(true);
         args.pay_network = None;
-        let (cfg, _, _) =
-            resolve_payment_config(&args, &section, Some("k".to_string()), None).unwrap();
+        let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
         assert_eq!(cfg.pay_network, "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1");
     }
 
     #[test]
     fn unknown_pay_network_name_is_an_arg_error() {
-        let mut args = paid_args(true);
+        let (mut args, _f) = paid_args_with_key(true);
         args.pay_network = Some("btc".to_string());
-        let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
-            .unwrap_err();
+        let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unknown pay network 'btc'"), "got: {msg}");
     }
 
     #[test]
     fn mpp_flag_selects_mpp_scheme() {
-        let args = paid_args(false);
-        let (cfg, _, _) =
-            resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None).unwrap();
+        let (args, _f) = paid_args_with_key(false);
+        let (cfg, _, _) = resolve_payment_config(&args, &empty_section(), None, None).unwrap();
         assert_eq!(cfg.scheme, "mpp");
     }
 
     #[test]
     fn missing_network_names_both_flags() {
-        let mut args = paid_args(true);
+        let (mut args, _f) = paid_args_with_key(true);
         args.network = None;
-        let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
-            .unwrap_err();
+        let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("--network"), "got: {msg}");
         assert!(msg.contains("--pay-network"), "got: {msg}");
     }
 
     #[test]
-    fn flag_key_file_beats_env_key() {
-        let f = key_file_with("0xfromfile\n");
-        let mut args = paid_args(true);
-        args.payment_key_file = Some(f.path().to_path_buf());
-        let (cfg, _, _) =
-            resolve_payment_config(&args, &empty_section(), Some("0xfromenv".to_string()), None)
-                .unwrap();
-        assert_eq!(cfg.key, "0xfromfile"); // and trimmed
-    }
-
-    #[test]
-    fn env_key_beats_config_key_file() {
-        let f = key_file_with("0xfromconfig");
+    fn flag_key_file_beats_config_key_file() {
+        let flag = key_file_with("0xfromflag\n");
+        let cfg_f = key_file_with("0xfromconfig");
         let mut section = empty_section();
-        section.key_file = Some(f.path().to_path_buf());
-        let args = paid_args(true);
-        let (cfg, _, _) =
-            resolve_payment_config(&args, &section, Some("0xfromenv".to_string()), None).unwrap();
-        assert_eq!(cfg.key, "0xfromenv");
+        section.key_file = Some(cfg_f.path().to_path_buf());
+        let mut args = paid_args(true);
+        args.payment_key_file = Some(flag.path().to_path_buf());
+        let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
+        assert_eq!(cfg.key, "0xfromflag"); // and trimmed
     }
 
     #[test]
@@ -444,13 +477,74 @@ mod tests {
     }
 
     #[test]
+    fn payment_wallet_flag_resolves_to_store_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("payer"), "0xfromwallet\n").unwrap();
+        let mut args = paid_args(true);
+        args.payment_wallet = Some("payer".to_string());
+        let (cfg, _, _) =
+            resolve_payment_config(&args, &empty_section(), Some(dir.path()), None).unwrap();
+        assert_eq!(cfg.key, "0xfromwallet");
+    }
+
+    #[test]
+    fn flag_key_file_beats_payment_wallet() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("payer"), "0xfromwallet").unwrap();
+        let flag = key_file_with("0xfromflag");
+        let mut args = paid_args(true);
+        args.payment_key_file = Some(flag.path().to_path_buf());
+        args.payment_wallet = Some("payer".to_string());
+        let (cfg, _, _) =
+            resolve_payment_config(&args, &empty_section(), Some(dir.path()), None).unwrap();
+        assert_eq!(cfg.key, "0xfromflag");
+    }
+
+    #[test]
+    fn config_wallet_used_as_last_resort() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("saved"), "0xfromcfgwallet").unwrap();
+        let mut section = empty_section();
+        section.wallet = Some("saved".to_string());
+        let args = paid_args(true);
+        let (cfg, _, _) = resolve_payment_config(&args, &section, Some(dir.path()), None).unwrap();
+        assert_eq!(cfg.key, "0xfromcfgwallet");
+    }
+
+    #[test]
+    fn unknown_payment_wallet_is_actionable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut args = paid_args(true);
+        args.payment_wallet = Some("ghost".to_string());
+        let err =
+            resolve_payment_config(&args, &empty_section(), Some(dir.path()), None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no wallet named 'ghost'"), "got: {msg}");
+    }
+
+    #[test]
+    fn payment_wallet_rejects_unsafe_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut args = paid_args(true);
+        args.payment_wallet = Some("../escape".to_string());
+        let err =
+            resolve_payment_config(&args, &empty_section(), Some(dir.path()), None).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid wallet name"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn no_key_anywhere_is_actionable() {
         let args = paid_args(true);
         let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("--payment-key-file"), "got: {msg}");
-        assert!(msg.contains("QN_PAYMENT_KEY"), "got: {msg}");
+        assert!(msg.contains("--payment-wallet"), "got: {msg}");
         assert!(msg.contains("key_file"), "got: {msg}");
+        // The env var is gone; the message must not resurrect it.
+        assert!(!msg.contains("QN_PAYMENT_KEY"), "got: {msg}");
     }
 
     #[test]
@@ -474,8 +568,8 @@ mod tests {
     fn inline_config_key_is_rejected_with_key_file_pointer() {
         let mut section = empty_section();
         section.key = Some(toml::Value::String("0xraw".to_string()));
-        let args = paid_args(true);
-        let err = resolve_payment_config(&args, &section, Some("k".to_string()), None).unwrap_err();
+        let (args, _f) = paid_args_with_key(true);
+        let err = resolve_payment_config(&args, &section, None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("key_file"), "got: {msg}");
         assert!(!msg.contains("0xraw"), "must not echo the key: {msg}");
@@ -483,20 +577,18 @@ mod tests {
 
     #[test]
     fn missing_max_amount_is_actionable() {
-        let mut args = paid_args(true);
+        let (mut args, _f) = paid_args_with_key(true);
         args.max_amount = None;
-        let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
-            .unwrap_err();
+        let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         assert!(err.to_string().contains("--max-amount"), "got: {err}");
     }
 
     #[test]
     fn non_integer_max_amount_is_rejected() {
         for bad in ["1.5", "abc", "-1", "1_000"] {
-            let mut args = paid_args(true);
+            let (mut args, _f) = paid_args_with_key(true);
             args.max_amount = Some(bad.to_string());
-            let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
-                .unwrap_err();
+            let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
             assert!(err.to_string().contains("base units"), "for {bad}: {err}");
         }
     }
@@ -505,9 +597,8 @@ mod tests {
     fn flag_max_amount_beats_config() {
         let mut section = empty_section();
         section.max_amount = Some("999999".to_string());
-        let args = paid_args(true); // flag says 10000
-        let (cfg, _, _) =
-            resolve_payment_config(&args, &section, Some("k".to_string()), None).unwrap();
+        let (args, _f) = paid_args_with_key(true); // flag says 10000
+        let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
         assert_eq!(cfg.max_amount, "10000");
     }
 
@@ -516,6 +607,7 @@ mod tests {
         let f = key_file_with("0xk");
         let section = PaymentSection {
             key_file: Some(f.path().to_path_buf()),
+            wallet: None,
             key: None,
             max_amount: Some("5000".to_string()),
             pay_network: Some("eip155:42431".to_string()),
@@ -535,11 +627,11 @@ mod tests {
 
     #[test]
     fn base_url_override_is_threaded_through() {
-        let args = paid_args(true);
+        let (args, _f) = paid_args_with_key(true);
         let (cfg, _, _) = resolve_payment_config(
             &args,
             &empty_section(),
-            Some("k".to_string()),
+            None,
             Some("http://127.0.0.1:9999".to_string()),
         )
         .unwrap();
@@ -551,10 +643,9 @@ mod tests {
 
     #[test]
     fn invalid_svm_rpc_url_is_rejected() {
-        let mut args = paid_args(true);
+        let (mut args, _f) = paid_args_with_key(true);
         args.svm_rpc_url = Some("ftp://nope".to_string());
-        let err = resolve_payment_config(&args, &empty_section(), Some("k".to_string()), None)
-            .unwrap_err();
+        let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         assert!(err.to_string().contains("scheme"), "got: {err}");
     }
 

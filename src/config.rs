@@ -7,10 +7,9 @@
 //! There is deliberately no environment-variable source: a key left exported
 //! in a shell is invisible state that outlives the session it was set for,
 //! and is the easiest way to run a destructive command against the wrong
-//! account. (`QN_PAYMENT_KEY`, read by the paid RPC lane, is the one
-//! deliberate exception: it never selects an account, so a stale value
-//! cannot aim a mutating command at the wrong one — see
-//! `commands::rpc::payment`.)
+//! account. The paid RPC lane's payment key follows the same principle — it
+//! comes only from a file or a stored wallet, never an env var (see
+//! `commands::rpc::payment`).
 //!
 //! When both sources fail we return [`CliError::NoApiKey`] which exits 4 with
 //! a message directing the user to `qn auth login`. The `qn auth login`
@@ -85,6 +84,11 @@ pub struct PaymentSection {
     /// Solana base58). Never the key itself.
     #[serde(default)]
     pub key_file: Option<PathBuf>,
+    /// Name of a stored wallet (from `qn rpc wallet generate`) to pay with, as
+    /// an alternative to `key_file`. Resolved to its key file under the wallet
+    /// store. Never the key itself.
+    #[serde(default)]
+    pub wallet: Option<String>,
     /// Trap field: an inline raw key is rejected at payment-resolution time
     /// with an error pointing at `key_file`. Without this field serde would
     /// silently ignore `key = "..."` and the user would think it took effect.

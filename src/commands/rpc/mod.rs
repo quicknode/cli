@@ -126,15 +126,27 @@ pub struct CallArgs {
 
     /// File containing the raw payment private key (EVM/Tempo hex, Solana
     /// base58); pass `-` to read it from stdin. Never accepts the key itself.
-    /// Precedence: this flag > QN_PAYMENT_KEY env var (raw key) > `key_file`
-    /// under [rpc.payment] in config.
+    /// Precedence: this flag > --payment-wallet > `key_file` > `wallet` under
+    /// [rpc.payment] in config.
     #[arg(
         long,
         value_name = "PATH",
         requires = "payment",
+        conflicts_with = "payment_wallet",
         help_heading = "Payment"
     )]
     pub payment_key_file: Option<PathBuf>,
+
+    /// Name of a stored wallet (from `qn rpc wallet generate`) to pay with. Its
+    /// key file under `<config-dir>/qn/wallets/` is used. Mutually exclusive
+    /// with --payment-key-file.
+    #[arg(
+        long,
+        value_name = "NAME",
+        requires = "payment",
+        help_heading = "Payment"
+    )]
+    pub payment_wallet: Option<String>,
 
     /// Spend ceiling per call, in integer base units of the asset (e.g.
     /// 10000 = 0.01 USDC). No built-in default: flag > `max_amount` under

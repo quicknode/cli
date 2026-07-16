@@ -151,6 +151,65 @@ async fn x402_happy_path_pays_and_bypasses_control_plane() {
 }
 
 #[tokio::test]
+async fn payment_wallet_resolves_stored_key_for_paid_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(X402Seq::new("1000"))
+        .expect(2) // one unpaid probe + one paid resend
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+
+    // Generate a wallet, then pay for a call by referencing it by name. The
+    // wallet's key is random but a valid secp256k1 key, so the x402 EIP-712
+    // signing succeeds and the resend carries a payment signature.
+    let gen = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "wallet",
+            "generate",
+            "--chain",
+            "evm",
+            "--name",
+            "payer",
+        ],
+    )
+    .await;
+    assert_eq!(gen.exit_code, 0, "stderr={}", gen.stderr);
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-wallet",
+            "payer",
+            "--pay-network",
+            "eip155:84532",
+            "--asset",
+            USDC,
+            "--max-amount",
+            "10000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn pay_network_name_matches_caip2_offer() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -660,7 +719,8 @@ async fn unknown_pay_network_name_fails_before_any_request() {
 
 #[tokio::test]
 async fn missing_key_fails_before_any_request() {
-    // No flag, no env in-process, and a config dir with no key_file.
+    // No flag and a config dir with no key_file/wallet: the key must come from
+    // a file or a stored wallet, so this fails fast with actionable guidance.
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     expect_preflight_error(
@@ -680,7 +740,7 @@ async fn missing_key_fails_before_any_request() {
             "--max-amount",
             "10000",
         ],
-        "QN_PAYMENT_KEY",
+        "--payment-key-file",
     )
     .await;
 }
@@ -844,20 +904,22 @@ fn payment_conflicts_with_endpoint_url() {
 // ── output shapes (subprocess: the in-process harness can't capture stdout) ──
 
 /// Runs the real binary against `server`, with HOME pointed at a tempdir so no
-/// real config leaks in. The key is passed via QN_PAYMENT_KEY to also cover
-/// env resolution (a subprocess env can't race parallel tests).
+/// real config leaks in. The payment key is written to a file under `home` and
+/// passed via `--payment-key-file` (the key never comes from the environment).
 fn run_qn_subprocess(
     server_uri: &str,
     home: &std::path::Path,
     args: &[&str],
 ) -> std::process::Output {
+    let key_path = home.join("payer.key");
+    std::fs::write(&key_path, EVM_KEY).unwrap();
     assert_cmd::Command::cargo_bin("qn")
         .unwrap()
         .env_remove("HOME")
         .env("HOME", home)
-        .env("QN_PAYMENT_KEY", EVM_KEY)
         .args(["--base-url", server_uri, "--no-input"])
         .args(args)
+        .args(["--payment-key-file", key_path.to_str().unwrap()])
         .output()
         .unwrap()
 }
