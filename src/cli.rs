@@ -155,7 +155,7 @@ pub enum Command {
     /// Run SQL queries and inspect cluster schemas.
     Sql(commands::sql::Args),
 
-    /// Make JSON-RPC calls against your Tooling Access endpoint.
+    /// Make RPC calls.
     Rpc(commands::rpc::Args),
 
     /// Manage Tooling Access (the endpoint `qn rpc` uses).
