@@ -19,17 +19,13 @@
 //! blind-retries.
 
 use clap::{Args as ClapArgs, Subcommand};
-use quicknode_sdk::{CreditBalance, GatewaySession, PaymentConfig};
+use quicknode_sdk::{CreditBalance, PaymentConfig};
 
 use crate::config::{self, PaymentSection};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
 
-use super::payment::{resolve_payment_params, PaymentParams};
-
-// Re-auth margin: treat a session expiring within this window as stale and mint
-// a fresh one, absorbing clock skew. Mirrors the tooling token's 60s margin.
-const SESSION_MARGIN_SECS: i64 = 60;
+use super::payment::{ensure_gateway_session, resolve_payment_params, PaymentParams};
 
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
@@ -144,30 +140,6 @@ fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError>
         .unwrap_or_default())
 }
 
-// Return a valid gateway session for the configured wallet, authenticating
-// (and caching) when there's no fresh cached JWT. Free — no funds move — so no
-// confirmation. The cache is keyed by the wallet's on-chain address, derived
-// offline, so the lookup is a single local read; a hit skips the SIWX round
-// trip, a miss (or an expired session) authenticates once and re-caches.
-async fn ensure_session(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession, CliError> {
-    let sessions_path = config::sessions_cache_path(global.resolve_config_path().as_deref());
-    let address = ctx.sdk.rpc.payment_address()?;
-
-    if let Some(path) = &sessions_path {
-        if let Some(existing) = config::load_gateway_session_by_address(path, &address) {
-            if existing.is_fresh(SESSION_MARGIN_SECS) {
-                return Ok(existing);
-            }
-        }
-    }
-
-    let session = ctx.sdk.rpc.gateway_authenticate().await?;
-    if let Some(path) = &sessions_path {
-        let _ = config::save_gateway_session(path, &address, &session);
-    }
-    Ok(session)
-}
-
 async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
     let (ctx, payment) = setup(&args, global.clone())?;
 
@@ -180,7 +152,7 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
     );
     crate::confirm::confirm_mild(&ctx, &msg)?;
 
-    let session = ensure_session(&ctx, &global).await?;
+    let session = ensure_gateway_session(&ctx, &global).await?;
     let balance = ctx
         .sdk
         .rpc
@@ -199,14 +171,14 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
 
 async fn run_balance(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
     let (ctx, _payment) = setup(&args, global.clone())?;
-    let session = ensure_session(&ctx, &global).await?;
+    let session = ensure_gateway_session(&ctx, &global).await?;
     let balance = ctx.sdk.rpc.gateway_credits(&session).await?;
     emit_balance(&ctx, &balance)
 }
 
 async fn run_drip(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
     let (ctx, _payment) = setup(&args, global.clone())?;
-    let session = ensure_session(&ctx, &global).await?;
+    let session = ensure_gateway_session(&ctx, &global).await?;
     let balance = ctx.sdk.rpc.gateway_drip(&session).await?;
 
     ctx.out.note(&format!(

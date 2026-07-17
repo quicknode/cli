@@ -19,13 +19,17 @@
 use std::path::Path;
 
 use quicknode_sdk::errors::SdkError;
-use quicknode_sdk::PaymentConfig;
+use quicknode_sdk::{GatewaySession, PaymentConfig};
 
 use crate::config::{self, PaymentSection};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
 
 use super::CallArgs;
+
+// Re-auth margin for the cached gateway session: refresh a session expiring
+// within this window, absorbing clock skew (mirrors the tooling token margin).
+const SESSION_MARGIN_SECS: i64 = 60;
 
 /// Entry point from `run_call` once `--x402`/`--mpp` is present.
 pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
@@ -96,6 +100,135 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
         // Identical output shape to an unpaid call.
         super::emit_result(&ctx, &resp.result)
     }
+}
+
+/// Entry point from `run_call` once `--x402-drawdown` is present. Pays for the
+/// call from prepaid x402 credits: no per-call signing, 1 credit per success.
+///
+/// A missing/expired session JWT is re-authenticated transparently (free), and
+/// a `token_expired` 401 on the call triggers exactly ONE re-auth + retry —
+/// that path signs nothing and draws no credit, so it is not a paid retry. The
+/// credit-drawing call itself is single-attempt.
+pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
+    // The query chain, required here so the error can explain the distinction.
+    let Some(network) = args.network.clone() else {
+        return Err(CliError::Arg(
+            "--x402-drawdown requires --network: the chain the call queries, as \
+             the payment gateway's path slug (e.g. --network base-sepolia)."
+                .to_string(),
+        ));
+    };
+
+    let section = load_payment_section(&global)?;
+    let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
+    let (payment, key_file_warning) = resolve_payment_params(
+        "x402",
+        &args.payment_params(),
+        &section,
+        wallets_dir.as_deref(),
+        global.base_url.clone(),
+    )?;
+
+    let params = super::parse_params(args.params.as_deref(), args.params_file.as_deref())?;
+
+    let ctx = Ctx::from_global_keyless_payment(global.clone(), payment)?;
+    if let Some(w) = key_file_warning {
+        ctx.out.warn(&w);
+    }
+
+    let session = ensure_gateway_session(&ctx, &global).await?;
+
+    // ONE credit-drawing attempt. A token_expired 401 is the sole exception:
+    // it drew no credit, so we re-auth once and retry (mirrors the tooling
+    // lane's reactive 401 refresh).
+    let result = match ctx
+        .sdk
+        .rpc
+        .gateway_drawdown_call(&args.method, params.clone(), &network, &session)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) if is_token_expired(&e) => {
+            let fresh = reauthenticate(&ctx, &global).await?;
+            ctx.sdk
+                .rpc
+                .gateway_drawdown_call(&args.method, params, &network, &fresh)
+                .await
+                .map_err(map_drawdown_error)?
+        }
+        Err(e) => return Err(map_drawdown_error(e)),
+    };
+
+    super::emit_result(&ctx, &result)
+}
+
+/// Returns a valid gateway session for the configured wallet, authenticating
+/// (and caching) when there's no fresh cached JWT. Free — no funds move — so no
+/// confirmation. Keyed by the wallet's on-chain address (derived offline), so
+/// the cache lookup is a single local read. Shared by `qn rpc x402 …` and the
+/// `--x402-drawdown` call lane.
+pub(super) async fn ensure_gateway_session(
+    ctx: &Ctx,
+    global: &GlobalArgs,
+) -> Result<GatewaySession, CliError> {
+    let sessions_path = config::sessions_cache_path(global.resolve_config_path().as_deref());
+    let address = ctx.sdk.rpc.payment_address()?;
+
+    if let Some(path) = &sessions_path {
+        if let Some(existing) = config::load_gateway_session_by_address(path, &address) {
+            if existing.is_fresh(SESSION_MARGIN_SECS) {
+                return Ok(existing);
+            }
+        }
+    }
+    reauthenticate(ctx, global).await
+}
+
+/// Authenticates a fresh session and caches it, unconditionally (bypassing the
+/// cache). Used on first use and on a `token_expired` retry.
+async fn reauthenticate(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession, CliError> {
+    let sessions_path = config::sessions_cache_path(global.resolve_config_path().as_deref());
+    let address = ctx.sdk.rpc.payment_address()?;
+    let session = ctx.sdk.rpc.gateway_authenticate().await?;
+    if let Some(path) = &sessions_path {
+        let _ = config::save_gateway_session(path, &address, &session);
+    }
+    Ok(session)
+}
+
+/// True when a gateway error is a `token_expired`/`invalid_token` 401 — the one
+/// case worth a transparent re-auth (it drew no credit).
+fn is_token_expired(e: &SdkError) -> bool {
+    matches!(
+        e,
+        SdkError::Api { status, body }
+            if status.as_u16() == 401
+                && (body.contains("token_expired") || body.contains("invalid_token"))
+    )
+}
+
+/// Maps a drawdown-call failure onto an actionable CLI error. An empty-credits
+/// or monthly-limit gateway refusal points forward at the fixing verb; every
+/// other SDK error keeps its normal exit-code mapping.
+fn map_drawdown_error(e: SdkError) -> CliError {
+    if let SdkError::Api { status, body } = &e {
+        let s = status.as_u16();
+        if s == 402 || body.contains("insufficient_credits") || body.contains("no_credits") {
+            return CliError::Arg(
+                "out of x402 credits. Buy more with 'qn rpc x402 buy-credits', \
+                 then retry this call."
+                    .to_string(),
+            );
+        }
+        if body.contains("monthly_limit_reached") {
+            return CliError::Arg(
+                "the account's monthly x402 limit was reached; no credits were \
+                 drawn. Try again after the limit resets."
+                    .to_string(),
+            );
+        }
+    }
+    e.into()
 }
 
 /// Loads `[rpc.payment]` from the resolved config file. A missing file is an
@@ -414,6 +547,7 @@ mod tests {
             endpoint_url: None,
             x402,
             mpp: !x402,
+            x402_drawdown: false,
             payment_key_file: None,
             payment_wallet: None,
             max_amount: Some("10000".to_string()),

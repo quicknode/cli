@@ -61,13 +61,15 @@ Branch on these — especially **4** and **5**.
 | 5 | Cancelled, or confirmation required and not granted (see §4). |
 | 130 | Interrupted (SIGINT). |
 
-On a **paid** `rpc call` (`--x402`/`--mpp`, §6) the 2/3 split carries payment
-semantics: **2** means the gateway refused and nothing settled (an unmatched
-or unreadable offer, or a 4xx-refused payment), while **3** means the outcome
-is unknown — the payment was submitted and **may have been charged** (a
+On a **per-request paid** `rpc call` (`--x402`/`--mpp`, §6) the 2/3 split carries
+payment semantics: **2** means the gateway refused and nothing settled (an
+unmatched or unreadable offer, or a 4xx-refused payment), while **3** means the
+outcome is unknown — the payment was submitted and **may have been charged** (a
 gateway 5xx after the paid resend, a lost response, or an uninterpretable
 post-payment response). On exit 3, check the wallet before re-running; never
-blind-retry a paid call.
+blind-retry a paid call. A **drawdown** call (`--x402-drawdown`) spends prepaid
+credits, not per-call funds: running out surfaces an actionable exit-1 error
+pointing at `qn rpc x402 buy-credits`, and a credit is drawn only on success.
 
 ## 4. Non-interactive & confirmation behavior
 
@@ -104,9 +106,12 @@ if you need it.
   nothing — it is read-only and safe to retry.
 - `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
   so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
-- A **paid** `rpc call` (`--x402`/`--mpp`) never auto-retries — `--retries` does
-  not apply. Each attempt can move funds, and after a lost response the previous
-  attempt may already have settled (§3, exit 3).
+- A **paid** `rpc call` (`--x402`/`--mpp`/`--x402-drawdown`) never auto-retries —
+  `--retries` does not apply. A per-request attempt can move funds, and after a
+  lost response the previous attempt may already have settled (§3, exit 3). A
+  drawdown call draws 1 credit per success and is single-attempt (the one
+  exception is a transparent re-auth when the session token expired, which draws
+  nothing).
 
 ## 6. Command catalog
 
@@ -172,17 +177,23 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   (no API key). A listed slug is a valid `--network`; the x402 asset column is
   a ready `--payment-asset` value.
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
-  gateway credits instead of paying per request. All three take the same
-  payment parameter stack as the paid lane (`--payment-wallet`/`-key-file`,
-  `--payment-network`, `--payment-asset`, `--max-amount`, `--svm-rpc-url`) with
-  the same `[rpc.payment]` fallback. `buy-credits` SIWX-authenticates then pays
-  the gateway's credit offer (gated Mild — `--yes`, or exit 5 in scripts — and
-  names the spend ceiling); `balance` (alias `credits`) prints the current
-  credit count (bare number, or the full envelope with `--format json`); `drip`
-  requests testnet credits (Base Sepolia faucet, once per account). The session
-  JWT is authenticated once and cached under `<config-dir>/qn/sessions.toml`
-  (0600, keyed by wallet address); a missing/expired session re-authenticates
-  transparently (free, no confirmation). Paid verbs never auto-retry.
+  gateway credits instead of paying per request, and `qn rpc call
+  --x402-drawdown` spends them (no per-call signing, 1 credit per successful
+  response). All take the same payment parameter stack as the paid lane
+  (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
+  `--max-amount`, `--svm-rpc-url`) with the same `[rpc.payment]` fallback.
+  `--x402-drawdown` requires `--network` (the query chain) and is mutually
+  exclusive with `--x402`/`--mpp`/`--endpoint-url`. `buy-credits`
+  SIWX-authenticates then pays the gateway's credit offer (gated Mild — `--yes`,
+  or exit 5 in scripts — and names the spend ceiling); `balance` (alias
+  `credits`) prints the current credit count (bare number, or the full envelope
+  with `--format json`); `drip` requests testnet credits (Base Sepolia faucet,
+  once per account). The session JWT is authenticated once and cached under
+  `<config-dir>/qn/sessions.toml` (0600, keyed by wallet address); a
+  missing/expired session re-authenticates transparently (free, no
+  confirmation), including one automatic re-auth if a drawdown call's token
+  expired mid-use. Out of credits surfaces an actionable error pointing at
+  `qn rpc x402 buy-credits`; nothing auto-retries a credit-drawing call.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.

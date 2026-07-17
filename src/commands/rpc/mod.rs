@@ -68,6 +68,11 @@ pub enum RpcCmd {
         --payment-wallet payer --payment-network base-sepolia \\\n      \
         --payment-asset USDC --max-amount 10000\n  \
         qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt\n\n\
+        Prepaid x402 credits (drawdown — buy once, then spend, no per-call signing):\n  \
+        qn rpc x402 buy-credits --payment-wallet payer \\\n      \
+        --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
+        qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown \\\n      \
+        --payment-wallet payer --payment-network base-sepolia --payment-asset USDC\n\n\
         See payable networks and manage wallets:\n  \
         qn rpc pay-networks\n  \
         qn rpc wallet generate --chain evm --name payer")]
@@ -93,7 +98,7 @@ pub enum RpcCmd {
 #[derive(Debug, ClapArgs)]
 #[command(
     group(ArgGroup::new("params_source").args(["params", "params_file"])),
-    group(ArgGroup::new("payment").args(["x402", "mpp"])),
+    group(ArgGroup::new("payment").args(["x402", "mpp", "x402_drawdown"])),
 )]
 pub struct CallArgs {
     /// The JSON-RPC method, e.g. `eth_blockNumber`.
@@ -138,6 +143,13 @@ pub struct CallArgs {
     /// with --x402; same rules otherwise.
     #[arg(long, conflicts_with = "endpoint_url", help_heading = "Payment")]
     pub mpp: bool,
+
+    /// Pay for this call from prepaid x402 credits (drawdown): no per-call
+    /// signing, 1 credit per successful response. Buy credits first with
+    /// `qn rpc x402 buy-credits`. Requires --network (the query chain). The
+    /// session JWT is authenticated and refreshed automatically.
+    #[arg(long, conflicts_with = "endpoint_url", help_heading = "Payment")]
+    pub x402_drawdown: bool,
 
     /// File containing the raw payment private key (EVM/Tempo hex, Solana
     /// base58); pass `-` to read it from stdin. Never accepts the key itself.
@@ -242,11 +254,14 @@ async fn run_list_networks(global: GlobalArgs) -> Result<(), CliError> {
 }
 
 async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
-    // The crypto-micropayment lane branches off before any token-cache or
-    // Tooling Access work: it is keyless, never retried, and never touches
-    // this function's caches or recovery paths.
+    // The crypto-micropayment lanes branch off before any token-cache or
+    // Tooling Access work: they are keyless, never blind-retried, and never
+    // touch this function's caches or recovery paths.
     if args.x402 || args.mpp {
         return payment::run_paid_call(args, global).await;
+    }
+    if args.x402_drawdown {
+        return payment::run_drawdown_call(args, global).await;
     }
 
     let params = parse_params(args.params.as_deref(), args.params_file.as_deref())?;

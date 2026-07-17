@@ -1285,3 +1285,138 @@ async fn x402_drip_reports_balance() {
     let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "drip")).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
+
+// ── qn rpc call --x402-drawdown ──────────────────────────────────────────────
+//
+// The drawdown lane pays from prepaid credits: no per-call signing, Bearer JWT,
+// 1 credit per success. The session is authenticated once (POST /auth), and a
+// token_expired 401 triggers exactly one transparent re-auth + retry.
+
+fn drawdown_call_args<'a>(cfg: &'a str, key_path: &'a str) -> Vec<&'a str> {
+    vec![
+        "--config-file",
+        cfg,
+        "rpc",
+        "call",
+        "eth_blockNumber",
+        "--network",
+        "base-sepolia",
+        "--x402-drawdown",
+        "--payment-key-file",
+        key_path,
+        "--payment-network",
+        "eip155:84532",
+        "--payment-asset",
+        USDC,
+        "--max-amount",
+        "10000000",
+    ]
+}
+
+#[tokio::test]
+async fn x402_drawdown_happy_path_uses_bearer_no_signing() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    // The drawdown POST carries a Bearer JWT and NO payment-signature.
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x1335f9a"
+        })))
+        .expect(1) // single attempt, no per-call 402 handshake
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    // No token cache written (keyless lane), but the gateway session is cached.
+    assert!(!dir.path().join("tokens.toml").exists());
+    assert!(dir.path().join("sessions.toml").exists());
+}
+
+/// Sequenced /base-sepolia responder: the FIRST drawdown call 401s with
+/// token_expired; the SECOND (after a transparent re-auth) returns the result.
+struct ExpiredThenOk {
+    calls: AtomicUsize,
+}
+
+impl Respond for ExpiredThenOk {
+    fn respond(&self, _req: &Request) -> ResponseTemplate {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            ResponseTemplate::new(401).set_body_json(json!({
+                "error": "token_expired", "message": "session token expired"
+            }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1, "result": "0xafterreauth"
+            }))
+        }
+    }
+}
+
+#[tokio::test]
+async fn x402_drawdown_reauths_once_on_token_expired() {
+    let server = MockServer::start().await;
+    // Two /auth calls: the initial auth + the re-auth after the 401.
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "token": "jwt-test",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "accountId": "eip155:84532:0xabc"
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(ExpiredThenOk {
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2) // one expired attempt + one retry after re-auth
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    // 402 on the drawdown call = no credits; must NOT sign or resend (single
+    // attempt), and must surface an actionable "buy-credits" error at exit 1.
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": "insufficient_credits", "message": "no credits remaining"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
+    // Actionable arg error (exit 1) pointing forward at the fixing verb.
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("buy-credits"),
+        "stderr should point at buy-credits, got: {}",
+        out.stderr
+    );
+}

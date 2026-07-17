@@ -461,6 +461,35 @@ network is a valid `--network`; the x402 asset column is a ready
 `--payment-asset` value. The list is cached in
 `~/.config/qn/pay-networks.toml` (24h TTL).
 
+#### Prepaid x402 credits (drawdown)
+
+Instead of signing a payment on every call, buy a block of credits once and
+draw them down: no per-call signing, one credit per successful response. Buy
+credits, then call with `--x402-drawdown`:
+
+```sh
+qn rpc wallet generate --chain evm --name payer       # dedicated wallet; fund its address
+
+# Testnet: get free credits from the faucet (Base Sepolia, once per account).
+qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
+
+# Or buy credits (moves real funds; gated — pass --yes to skip the prompt).
+qn rpc x402 buy-credits --payment-wallet payer \
+    --payment-network base-sepolia --payment-asset USDC --max-amount 10000000
+
+# Check the balance any time (prints the bare number).
+qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
+
+# Spend credits on calls.
+qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown \
+    --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
+```
+
+The gateway session is authenticated once and cached (0600) under the config
+dir, refreshed automatically. When you run out, the call points you back at
+`qn rpc x402 buy-credits`. Like every paid call, a drawdown call never
+auto-retries.
+
 ### Other
 
 ```sh
