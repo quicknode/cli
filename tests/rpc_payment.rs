@@ -1125,11 +1125,11 @@ async fn mount_auth(server: &MockServer) {
         .await;
 }
 
-/// Sequenced /credits responder: the first (unpaid) POST gets a 402 credit
-/// offer; a POST carrying a payment signature gets the post-purchase balance.
+/// Sequenced network-scoped credit-purchase responder: the first (unpaid) POST
+/// gets a 402 credit offer; the paid resend (with a payment signature) gets a
+/// 200 RPC result. The funded balance is read separately via GET /credits.
 struct CreditsSeq {
     amount: &'static str,
-    credits: u64,
     calls: AtomicUsize,
 }
 
@@ -1144,7 +1144,7 @@ impl Respond for CreditsSeq {
             }))
         } else {
             ResponseTemplate::new(200).set_body_json(json!({
-                "accountId": "eip155:84532:0xabc", "credits": self.credits
+                "jsonrpc": "2.0", "id": 1, "result": "0x1"
             }))
         }
     }
@@ -1172,14 +1172,22 @@ fn x402_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str>
 async fn x402_buy_credits_happy_path() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
+    // Credits are bought by settling the offer on the network-scoped RPC path.
     Mock::given(method("POST"))
-        .and(path("/credits"))
+        .and(path("/base-sepolia"))
         .respond_with(CreditsSeq {
             amount: "1000000",
-            credits: 1_000_095,
             calls: AtomicUsize::new(0),
         })
         .expect(2) // one unpaid offer probe + one paid resend
+        .mount(&server)
+        .await;
+    // The funded balance is then read from GET /credits.
+    Mock::given(method("GET"))
+        .and(path("/credits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": "eip155:84532:0xabc", "credits": 1_000_095u64
+        })))
         .mount(&server)
         .await;
     mount_control_plane_expect_zero(&server).await;
@@ -1189,7 +1197,7 @@ async fn x402_buy_credits_happy_path() {
     let (_guard, key_path) = key_file();
 
     let mut args = x402_args(&cfg, &key_path, "buy-credits");
-    args.push("--yes"); // Mild gate: consent to spend
+    args.extend_from_slice(&["--network", "base-sepolia", "--yes"]); // query chain + consent
     let out = run_qn(&server.uri(), &args).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
     // The session JWT is cached for reuse.
@@ -1266,13 +1274,16 @@ async fn x402_balance_error_maps_to_exit_2() {
 }
 
 #[tokio::test]
-async fn x402_drip_reports_balance() {
+async fn x402_drip_reports_funding_tx() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
+    // The faucet returns the on-chain funding transaction, not a credit balance.
     Mock::given(method("POST"))
         .and(path("/drip"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "accountId": "eip155:84532:0xabc", "credits": 100u64
+            "accountId": "eip155:84532:0xabc",
+            "walletAddress": "0xabc",
+            "transactionHash": "0xfeed"
         })))
         .mount(&server)
         .await;

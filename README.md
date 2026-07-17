@@ -419,13 +419,15 @@ Buy a block of prepaid credits once, then spend them with no per-call signing
 (one credit per successful response):
 
 ```sh
-qn rpc wallet generate --chain evm --name payer       # fund the printed address
+qn rpc wallet generate --chain evm --name payer       # dedicated wallet
 
-# Testnet: free credits from the faucet (Base Sepolia, once per account).
+# Testnet only: fund the wallet from the faucet (Base Sepolia, once per
+# account). Prints the funding tx; mainnet wallets are funded normally.
 qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
 
-# Or buy credits (moves real funds; gated — pass --yes to skip the prompt).
-qn rpc x402 buy-credits --payment-wallet payer \
+# Buy prepaid credits with the funded wallet (moves real funds; gated — pass
+# --yes to skip the prompt).
+qn rpc x402 buy-credits --network base-sepolia --payment-wallet payer \
     --payment-network base-sepolia --payment-asset USDC --max-amount 10000000
 
 # Check the balance (prints the bare number).

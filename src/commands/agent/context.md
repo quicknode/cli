@@ -188,8 +188,9 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   SIWX-authenticates then pays the gateway's credit offer (gated Mild — `--yes`,
   or exit 5 in scripts — and names the spend ceiling); `balance` (alias
   `credits`) prints the current credit count (bare number, or the full envelope
-  with `--format json`); `drip` requests testnet credits (Base Sepolia faucet,
-  once per account). The session JWT is authenticated once and cached under
+  with `--format json`); `drip` funds the wallet from the testnet faucet
+  (Base Sepolia, returns the funding tx, not credits; once per account). The
+  session JWT is authenticated once and cached under
   `<config-dir>/qn/sessions.toml` (0600, keyed by wallet address); a
   missing/expired session re-authenticates transparently (free, no
   confirmation), including one automatic re-auth if a drawdown call's token

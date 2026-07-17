@@ -39,7 +39,7 @@ pub enum X402Cmd {
     /// Buy a block of prepaid credits, paying the gateway's offer with the
     /// configured wallet. Gated: names the spend ceiling before signing.
     #[command(after_help = "Examples:\n  \
-        qn rpc x402 buy-credits --payment-wallet payer \\\n      \
+        qn rpc x402 buy-credits --network base-sepolia --payment-wallet payer \\\n      \
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000")]
     BuyCredits(PaymentArgs),
 
@@ -56,6 +56,12 @@ pub enum X402Cmd {
 /// flags-then-`[rpc.payment]` resolution as `qn rpc call --x402`.
 #[derive(Debug, ClapArgs)]
 pub struct PaymentArgs {
+    /// The gateway query chain to buy credits against, as its path slug (e.g.
+    /// `base-sepolia`). Defaults to the `--payment-network` name when it is a
+    /// slug. Credits are not network-scoped once bought.
+    #[arg(long, value_name = "NETWORK")]
+    pub network: Option<String>,
+
     /// File containing the raw payment private key (EVM hex); `-` reads stdin.
     /// Precedence: this > --payment-wallet > `key_file` > `wallet` in config.
     #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
@@ -131,6 +137,29 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PaymentConfig),
 
 /// Loads `[rpc.payment]`. A missing file is an empty section; an unreadable or
 /// invalid file is a hard error (the user likely relies on values set there).
+// The gateway query chain (path slug) for a credit purchase: the explicit
+// --network, else the --payment-network flag when it's a name (not a CAIP-2
+// id). A resolved CAIP-2 payment network alone isn't a valid gateway slug, so
+// require --network in that case.
+fn resolve_query_network(
+    args: &PaymentArgs,
+    _payment: &PaymentConfig,
+) -> Result<String, CliError> {
+    if let Some(n) = &args.network {
+        return Ok(n.clone());
+    }
+    if let Some(pn) = &args.payment_network {
+        if !pn.contains(':') {
+            return Ok(pn.clone());
+        }
+    }
+    Err(CliError::Arg(
+        "buy-credits needs the gateway query chain. Pass --network <SLUG> \
+         (e.g. --network base-sepolia)."
+            .to_string(),
+    ))
+}
+
 fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError> {
     let Some(path) = global.resolve_config_path() else {
         return Ok(PaymentSection::default());
@@ -152,11 +181,12 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
     );
     crate::confirm::confirm_mild(&ctx, &msg)?;
 
+    let network = resolve_query_network(&args, &payment)?;
     let session = ensure_gateway_session(&ctx, &global).await?;
     let balance = ctx
         .sdk
         .rpc
-        .gateway_buy_credits(&session)
+        .gateway_buy_credits(&session, &network)
         .await
         .map_err(super::payment::map_paid_error)?;
 
@@ -179,15 +209,27 @@ async fn run_balance(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliErr
 async fn run_drip(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
     let (ctx, _payment) = setup(&args, global.clone())?;
     let session = ensure_gateway_session(&ctx, &global).await?;
-    let balance = ctx.sdk.rpc.gateway_drip(&session).await?;
+    let receipt = ctx.sdk.rpc.gateway_drip(&session).await?;
 
+    // The faucet funds the wallet with testnet tokens (returns the funding tx),
+    // which you then spend on buy-credits — it does not grant credits directly.
     ctx.out.note(&format!(
-        "✓ Dripped testnet credits (balance: {})",
-        fmt_credits(balance.credits)
+        "✓ Faucet funded {} (tx: {})",
+        receipt.account_id, receipt.transaction_hash
     ));
-    ctx.out
-        .note("  Next: qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown");
-    emit_balance(&ctx, &balance)
+    ctx.out.note(
+        "  Next: qn rpc x402 buy-credits  (spend the funded balance on prepaid credits)",
+    );
+    if matches!(ctx.global.format, Some(f) if f.is_structured()) {
+        let v = serde_json::json!({
+            "account_id": receipt.account_id,
+            "transaction_hash": receipt.transaction_hash,
+        });
+        return super::emit_result(&ctx, &v);
+    }
+    // Bare tx hash to stdout for pipelines.
+    println!("{}", receipt.transaction_hash);
+    Ok(())
 }
 
 // Emit a credit balance: the bare number by default (friendly for scripts and
