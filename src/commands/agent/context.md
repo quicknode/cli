@@ -161,9 +161,11 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   and stores a dedicated payment wallet (raw key at 0600 under
   `<config-dir>/qn/wallets/`, `evm` also covers MPP/Tempo), printing its
   address (and a QR to fund it on a terminal); `qn rpc wallet list`/`show
-  <NAME>` display stored wallets (address only, never the key); `qn rpc wallet
-  rm <NAME>` deletes one (gated: `--yes`, or exit 5 in scripts). Reference a
-  wallet on a paid call with `--payment-wallet <NAME>`.
+  <NAME>` display stored wallets (address only, never the key) and the key
+  file path; `qn rpc wallet rm <NAME>` deletes one (gated: `--yes`, or exit 5
+  in scripts). Reference a wallet on a paid call with `--payment-wallet
+  <NAME>`. These wallets live only on this machine — Quicknode does not hold,
+  back up, or recover them; backing up the key file is the user's job.
   **Discovery**: `qn rpc pay-networks` (alias `pay-nets`) lists the networks
   payable via the paid lane, from the gateways' public discovery endpoints
   (no API key). A listed slug is a valid `--network`; the x402 asset column is

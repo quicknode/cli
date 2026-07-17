@@ -287,3 +287,53 @@ async fn show_unknown_wallet_errors() {
         out.stderr
     );
 }
+
+// Subprocess: the in-process harness can't capture stdout/stderr, so assert the
+// generate output split (address on stdout; key path + custody note on stderr)
+// via the real binary.
+#[tokio::test]
+async fn generate_prints_key_path_and_custody_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_in(dir.path());
+    let output = assert_cmd::Command::cargo_bin("qn")
+        .unwrap()
+        .args([
+            "--config-file",
+            &cfg,
+            "--no-input",
+            "--no-color",
+            "rpc",
+            "wallet",
+            "generate",
+            "--chain",
+            "evm",
+            "--name",
+            "payer",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    // Address is the only thing on stdout (the pipeable value).
+    assert!(stdout.trim().starts_with("0x"), "stdout={stdout}");
+
+    // Key path and custody note go to stderr.
+    let key_path = wallets_dir(dir.path()).join("payer");
+    assert!(
+        stderr.contains(&key_path.display().to_string()),
+        "stderr missing key path: {stderr}"
+    );
+    assert!(
+        stderr.contains("stored only on this machine") && stderr.contains("Quicknode does not"),
+        "stderr missing custody note: {stderr}"
+    );
+    // The raw key must never appear on either stream.
+    let raw = std::fs::read_to_string(&key_path).unwrap();
+    assert!(!stdout.contains(raw.trim()) && !stderr.contains(raw.trim()));
+}

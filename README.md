@@ -409,9 +409,14 @@ qn rpc wallet show payer                          # address to stdout, plus a QR
 qn rpc wallet rm payer                            # gated: --yes to confirm; the key is unrecoverable
 ```
 
-`qn rpc wallet show payer` prints only the bare address to stdout (the QR and
-hint go to stderr), so `qn rpc wallet show payer` in a pipe yields just the
-address.
+`qn rpc wallet show payer` prints only the bare address to stdout (the key
+file path, QR, and hint go to stderr), so `qn rpc wallet show payer` in a pipe
+yields just the address.
+
+These wallets live only on your machine. **Quicknode does not hold, back up,
+or recover them** — managing and backing up the key file (shown on
+`generate`/`show`) is your responsibility; if you lose it, any funds in the
+wallet are gone.
 
 ##### Discovering payable networks
 

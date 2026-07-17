@@ -149,7 +149,7 @@ fn generate(a: GenerateArgs, ctx: Ctx) -> Result<(), CliError> {
 
     ctx.out
         .note(&format!("✓ Generated {} wallet '{name}'", a.chain.label()));
-    emit_address(&ctx, &meta, /* with_qr */ true);
+    emit_address(&ctx, &meta, &key_path, /* with_qr */ true);
     Ok(())
 }
 
@@ -168,7 +168,7 @@ fn show(a: ShowArgs, ctx: Ctx) -> Result<(), CliError> {
     if ctx.out.format.is_structured() {
         return crate::output::emit(&ctx.out, &meta);
     }
-    emit_address(&ctx, &meta, /* with_qr */ true);
+    emit_address(&ctx, &meta, &dir.join(&name), /* with_qr */ true);
     Ok(())
 }
 
@@ -211,12 +211,20 @@ fn rm(a: RmArgs, ctx: Ctx) -> Result<(), CliError> {
 
 // ── rendering ──────────────────────────────────────────────────────────────
 
-/// Prints the address to stdout (the pipeable value) and, on a TTY, a QR code
-/// plus a funding hint to stderr (suppressed by `--quiet`/non-TTY, so a piped
-/// `qn rpc wallet show` yields just the bare address). A QR must never go to
-/// stdout — it would corrupt the pipe.
-fn emit_address(ctx: &Ctx, meta: &WalletMeta, with_qr: bool) {
+/// The custody disclaimer shown on generate/show. This wallet lives only on
+/// this machine; backing it up is the user's responsibility.
+const CUSTODY_NOTE: &str = "This wallet is stored only on this machine. \
+    Quicknode does not hold, back up, or recover it — keep your own backup of \
+    the key file; if you lose it, any funds in the wallet are gone.";
+
+/// Prints the address to stdout (the pipeable value), and to stderr: the key
+/// file path and the custody note always (both plain text, `--quiet`-gated),
+/// plus a QR code and funding hint only on a TTY. Everything but the address
+/// goes to stderr, so a piped `qn rpc wallet show` yields just the bare
+/// address. A QR must never go to stdout — it would corrupt the pipe.
+fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     println!("{}", meta.address);
+    ctx.out.note(&format!("Key file: {}", key_path.display()));
     if with_qr && ctx.out.stdout_is_tty && !ctx.out.quiet {
         if let Some(qr) = render_qr(&meta.address) {
             ctx.out.note(&qr);
@@ -226,6 +234,7 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, with_qr: bool) {
             meta.chain, meta.name
         ));
     }
+    ctx.out.note(CUSTODY_NOTE);
 }
 
 /// Unicode (half-block) QR of `data`, or `None` if it can't be encoded.
