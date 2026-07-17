@@ -217,14 +217,17 @@ const CUSTODY_NOTE: &str = "This wallet is stored only on this machine. \
     Quicknode does not hold, back up, or recover it — keep your own backup of \
     the key file; if you lose it, any funds in the wallet are gone.";
 
-/// Prints the address to stdout (the pipeable value), and to stderr: the key
-/// file path and the custody note always (both plain text, `--quiet`-gated),
-/// plus a QR code and funding hint only on a TTY. Everything but the address
-/// goes to stderr, so a piped `qn rpc wallet show` yields just the bare
-/// address. A QR must never go to stdout — it would corrupt the pipe.
+/// Prints the address to stdout (the pipeable value), and to stderr: the
+/// labeled public key + private key file path and the custody note always
+/// (plain text, `--quiet`-gated), plus a QR code and funding hint only on a
+/// TTY. Everything but the bare address goes to stderr, so a piped `qn rpc
+/// wallet show` yields just the address. A QR must never go to stdout — it
+/// would corrupt the pipe.
 fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     println!("{}", meta.address);
-    ctx.out.note(&format!("Key file: {}", key_path.display()));
+    ctx.out.note(&format!("Public Key: {}", meta.address));
+    ctx.out
+        .note(&format!("Private Key File: {}", key_path.display()));
     if with_qr && ctx.out.stdout_is_tty && !ctx.out.quiet {
         if let Some(qr) = render_qr(&meta.address) {
             ctx.out.note(&qr);
