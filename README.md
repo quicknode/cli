@@ -433,9 +433,9 @@ qn rpc x402 buy-credits --network base-sepolia --payment-wallet payer \
 # Check the balance (prints the bare number).
 qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
 
-# Spend credits on calls.
-qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown \
-    --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
+# Spend credits on calls. A drawdown call signs nothing per request, so it
+# needs only the wallet — no asset or spend ceiling.
+qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown --payment-wallet payer
 ```
 
 The gateway session (a JWT) is authenticated once and cached (0600) under the

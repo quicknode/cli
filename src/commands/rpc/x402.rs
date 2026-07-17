@@ -135,16 +135,11 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PaymentConfig),
     Ok((ctx, payment))
 }
 
-/// Loads `[rpc.payment]`. A missing file is an empty section; an unreadable or
-/// invalid file is a hard error (the user likely relies on values set there).
 // The gateway query chain (path slug) for a credit purchase: the explicit
 // --network, else the --payment-network flag when it's a name (not a CAIP-2
 // id). A resolved CAIP-2 payment network alone isn't a valid gateway slug, so
 // require --network in that case.
-fn resolve_query_network(
-    args: &PaymentArgs,
-    _payment: &PaymentConfig,
-) -> Result<String, CliError> {
+fn resolve_query_network(args: &PaymentArgs, _payment: &PaymentConfig) -> Result<String, CliError> {
     if let Some(n) = &args.network {
         return Ok(n.clone());
     }
@@ -160,6 +155,8 @@ fn resolve_query_network(
     ))
 }
 
+/// Loads `[rpc.payment]`. A missing file is an empty section; an unreadable or
+/// invalid file is a hard error (the user likely relies on values set there).
 fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError> {
     let Some(path) = global.resolve_config_path() else {
         return Ok(PaymentSection::default());
@@ -195,8 +192,25 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
         fmt_credits(balance.credits)
     ));
     ctx.out
-        .note("  Next: qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown");
+        .note(&format!("  Next: {}", drawdown_call_hint(&args, &network)));
     emit_balance(&ctx, &balance)
+}
+
+// A copy-pasteable `--x402-drawdown` call reflecting the flags the user just
+// used, so the chained next step runs as-is.
+fn drawdown_call_hint(args: &PaymentArgs, network: &str) -> String {
+    let mut cmd = format!(
+        "qn rpc call eth_blockNumber --network {network} --x402-drawdown --payment-wallet {}",
+        args.payment_wallet.as_deref().unwrap_or("<NAME>")
+    );
+    // The drawdown call defaults its pay network to --network, so only append
+    // --payment-network when the user set an explicit one that differs.
+    if let Some(pn) = &args.payment_network {
+        if pn != network {
+            cmd.push_str(&format!(" --payment-network {pn}"));
+        }
+    }
+    cmd
 }
 
 async fn run_balance(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
@@ -217,9 +231,16 @@ async fn run_drip(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError>
         "✓ Faucet funded {} (tx: {})",
         receipt.account_id, receipt.transaction_hash
     ));
-    ctx.out.note(
-        "  Next: qn rpc x402 buy-credits  (spend the funded balance on prepaid credits)",
-    );
+    // Point at buy-credits with the flags the user already supplied.
+    let net = args.network.as_deref().or(args.payment_network.as_deref());
+    ctx.out.note(&format!(
+        "  Next: qn rpc x402 buy-credits --network {} --payment-wallet {} \
+         --payment-network {} --payment-asset {} --max-amount 1000000",
+        net.unwrap_or("<SLUG>"),
+        args.payment_wallet.as_deref().unwrap_or("<NAME>"),
+        args.payment_network.as_deref().unwrap_or("<NET>"),
+        args.payment_asset.as_deref().unwrap_or("<ASSET>"),
+    ));
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
         let v = serde_json::json!({
             "account_id": receipt.account_id,

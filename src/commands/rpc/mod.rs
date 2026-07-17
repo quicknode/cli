@@ -72,8 +72,7 @@ pub enum RpcCmd {
         Prepaid x402 credits (drawdown — buy once, then spend, no per-call signing):\n  \
         qn rpc x402 buy-credits --network base-sepolia --payment-wallet payer \\\n      \
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
-        qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown \\\n      \
-        --payment-wallet payer --payment-network base-sepolia --payment-asset USDC\n\n\
+        qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown --payment-wallet payer\n\n\
         MPP payment channel (open once, then pay per call with a voucher):\n  \
         qn rpc mpp open --network tempo-testnet --deposit 1000000 --payment-wallet payer\n  \
         qn rpc call eth_blockNumber --network tempo-testnet --mpp-session --payment-wallet payer\n\n\

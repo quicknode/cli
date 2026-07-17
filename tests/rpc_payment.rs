@@ -1350,6 +1350,46 @@ async fn x402_drawdown_happy_path_uses_bearer_no_signing() {
     assert!(dir.path().join("sessions.toml").exists());
 }
 
+#[tokio::test]
+async fn x402_drawdown_needs_only_wallet_and_network() {
+    // A drawdown call signs nothing per request, so it must NOT require
+    // --payment-asset or --max-amount; the pay network defaults to --network.
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x1335f9a"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    // Only --network + the key: no asset, no max-amount, no payment-network.
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402-drawdown",
+            "--payment-key-file",
+            &key_path,
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
 /// Sequenced /base-sepolia responder: the FIRST drawdown call 401s with
 /// token_expired; the SECOND (after a transparent re-auth) returns the result.
 /// `status` is the HTTP code of the expired-token response (the gateway uses

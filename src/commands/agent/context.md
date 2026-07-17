@@ -183,10 +183,13 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   response). All take the same payment parameter stack as the paid lane
   (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
   `--max-amount`, `--svm-rpc-url`) with the same `[rpc.payment]` fallback.
-  `--x402-drawdown` requires `--network` (the query chain) and is mutually
-  exclusive with `--x402`/`--mpp`/`--endpoint-url`. `buy-credits`
-  SIWX-authenticates then pays the gateway's credit offer (gated Mild — `--yes`,
-  or exit 5 in scripts — and names the spend ceiling); `balance` (alias
+  `--x402-drawdown` requires `--network` (the query chain) and a wallet only —
+  it signs nothing per call, so `--payment-asset`/`--max-amount` aren't needed
+  and the pay network defaults to `--network`; mutually exclusive with
+  `--x402`/`--mpp`/`--endpoint-url`. `buy-credits` takes `--network` (the
+  gateway path chain the purchase settles on), SIWX-authenticates, then pays the
+  gateway's credit offer (gated Mild — `--yes`, or exit 5 in scripts — and names
+  the spend ceiling); `balance` (alias
   `credits`) prints the current credit count (bare number, or the full envelope
   with `--format json`); `drip` funds the wallet from the testnet faucet
   (Base Sepolia, returns the funding tx, not credits; once per account). The

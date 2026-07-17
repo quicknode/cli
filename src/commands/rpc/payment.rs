@@ -139,9 +139,9 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
 
     let section = load_payment_section(&global)?;
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
-    let (payment, key_file_warning) = resolve_payment_params(
-        "x402",
-        &args.payment_params(),
+    let (payment, key_file_warning) = resolve_drawdown_config(
+        &args,
+        &network,
         &section,
         wallets_dir.as_deref(),
         global.base_url.clone(),
@@ -177,6 +177,10 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
         Err(e) => return Err(map_drawdown_error(e)),
     };
 
+    // A drew-a-credit confirmation with the balance-check next step (stderr, so
+    // stdout stays exactly the RPC result).
+    ctx.out
+        .note("  Next: qn rpc x402 balance --payment-wallet <NAME> --payment-network <NET> --payment-asset <ASSET>");
     super::emit_result(&ctx, &result)
 }
 
@@ -415,6 +419,67 @@ fn resolve_payment_config(
     )?;
     let key_file_warning = payment.1;
     Ok((payment.0, network, key_file_warning))
+}
+
+/// Resolves the minimal config a drawdown call needs. Unlike the per-request
+/// lane, a drawdown call signs nothing per request (it presents a Bearer JWT),
+/// so only the wallet key and the SIWX pay network matter — `--payment-asset`
+/// and `--max-amount` are irrelevant and not required. The pay network defaults
+/// to the query `--network` (the common case where you pay on the chain you
+/// query), so a drawdown call needs only `--payment-wallet`.
+fn resolve_drawdown_config(
+    args: &CallArgs,
+    query_network: &str,
+    section: &PaymentSection,
+    wallets_dir: Option<&Path>,
+    base_url_override: Option<String>,
+) -> Result<(PaymentConfig, Option<String>), CliError> {
+    if section.key.is_some() {
+        return Err(CliError::Arg(
+            "[rpc.payment] does not accept an inline `key`; store the key in a \
+             file and set `key_file = \"<path>\"` instead"
+                .to_string(),
+        ));
+    }
+    let (key, key_file_warning) = resolve_key(
+        args.payment_key_file.as_deref(),
+        args.payment_wallet.as_deref(),
+        section.key_file.as_deref(),
+        section.wallet.as_deref(),
+        wallets_dir,
+    )?;
+
+    // Pay network: explicit flag/config, else default to the query network.
+    let payment_network = args
+        .payment_network
+        .clone()
+        .or_else(|| section.payment_network.clone())
+        .unwrap_or_else(|| query_network.to_string());
+    let payment_network = super::pay_network::resolve(&payment_network)?;
+
+    let svm_rpc_url = match args
+        .svm_rpc_url
+        .clone()
+        .or_else(|| section.svm_rpc_url.clone())
+    {
+        Some(u) => Some(crate::context::validate_endpoint_url(&u)?),
+        None => None,
+    };
+
+    Ok((
+        PaymentConfig {
+            scheme: "x402".to_string(),
+            key,
+            pay_network: payment_network,
+            // asset + max_amount are unused by the Bearer drawdown call (nothing
+            // is signed per request); placeholders keep the SDK config total.
+            asset: String::new(),
+            max_amount: "0".to_string(),
+            svm_rpc_url,
+            base_url_override,
+        },
+        key_file_warning,
+    ))
 }
 
 /// Resolves the shared payment parameter stack (key, spend ceiling, pay
