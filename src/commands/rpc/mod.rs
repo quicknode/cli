@@ -29,6 +29,7 @@ mod pay_network;
 mod pay_networks;
 mod payment;
 mod wallet;
+mod x402;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -83,6 +84,10 @@ pub enum RpcCmd {
     /// gateways' public discovery endpoints. No API key required.
     #[command(visible_alias = "pay-nets")]
     PayNetworks,
+
+    /// Manage x402 credit drawdown: buy prepaid credits, check the balance, or
+    /// drip testnet credits. Pair with `qn rpc call --x402-drawdown`.
+    X402(x402::Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -218,6 +223,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
             wallet::run(wallet_args, ctx).await
         }
         RpcCmd::PayNetworks => pay_networks::run(global).await,
+        RpcCmd::X402(x402_args) => x402::run(x402_args, global).await,
     }
 }
 

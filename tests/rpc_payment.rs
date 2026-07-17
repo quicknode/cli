@@ -1104,3 +1104,184 @@ async fn receipt_is_null_on_x402_and_bare_without_flag() {
     let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(v.as_str(), Some("0x1335f9a"));
 }
+
+// ── qn rpc x402 (credit drawdown lifecycle) ──────────────────────────────────
+//
+// These exercise the x402 noun end-to-end against the mock gateway: SIWX auth
+// (POST /auth) mints a session JWT, buy-credits settles the 402 credit offer
+// (POST /credits), balance reads GET /credits, and drip hits POST /drip. The
+// session is cached under the config dir so a second verb skips re-auth.
+
+/// Mounts a SIWX /auth responder that returns a fixed session JWT.
+async fn mount_auth(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "token": "jwt-test",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "accountId": "eip155:84532:0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Sequenced /credits responder: the first (unpaid) POST gets a 402 credit
+/// offer; a POST carrying a payment signature gets the post-purchase balance.
+struct CreditsSeq {
+    amount: &'static str,
+    credits: u64,
+    calls: AtomicUsize,
+}
+
+impl Respond for CreditsSeq {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let has_sig = req.headers.contains_key("payment-signature");
+        if n == 0 && !has_sig {
+            ResponseTemplate::new(402).set_body_json(json!({
+                "x402Version": 2,
+                "accepts": [ x402_accepts_entry(self.amount) ]
+            }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "accountId": "eip155:84532:0xabc", "credits": self.credits
+            }))
+        }
+    }
+}
+
+fn x402_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
+    vec![
+        "--config-file",
+        cfg,
+        "rpc",
+        "x402",
+        verb,
+        "--payment-key-file",
+        key_path,
+        "--payment-network",
+        "eip155:84532",
+        "--payment-asset",
+        USDC,
+        "--max-amount",
+        "10000000",
+    ]
+}
+
+#[tokio::test]
+async fn x402_buy_credits_happy_path() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/credits"))
+        .respond_with(CreditsSeq {
+            amount: "1000000",
+            credits: 1_000_095,
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2) // one unpaid offer probe + one paid resend
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let mut args = x402_args(&cfg, &key_path, "buy-credits");
+    args.push("--yes"); // Mild gate: consent to spend
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    // The session JWT is cached for reuse.
+    assert!(dir.path().join("sessions.toml").exists());
+}
+
+#[tokio::test]
+async fn x402_buy_credits_without_yes_is_needs_confirmation_and_settles_nothing() {
+    let server = MockServer::start().await;
+    // The gate is checked before any network I/O: nothing must reach the gateway.
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/credits"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    // No --yes, non-TTY (the harness sets --no-input): exit 5, zero requests.
+    let args = x402_args(&cfg, &key_path, "buy-credits");
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_balance_prints_credits() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/credits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": "eip155:84532:0xabc", "credits": 42u64
+        })))
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "balance")).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_balance_error_maps_to_exit_2() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/credits"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": "invalid_token", "message": "session token invalid"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "balance")).await;
+    // A gateway 4xx that settled nothing maps to exit 2 (SDK Api error).
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_drip_reports_balance() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/drip"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": "eip155:84532:0xabc", "credits": 100u64
+        })))
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "drip")).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}

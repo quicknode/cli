@@ -115,6 +115,32 @@ fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError>
 /// or malformed input fails fast with an actionable message and zero requests
 /// sent. Returns the SDK config, the query network, and an optional key-file
 /// permissions warning for the caller to print once output exists.
+/// The payment parameter stack shared by `qn rpc call --x402/--mpp` and the
+/// gateway lifecycle verbs (`qn rpc x402 …`, `qn rpc mpp …`). Plain data,
+/// resolved from flags (or the verb's own args) with `[rpc.payment]` fallback
+/// by [`resolve_payment_params`].
+pub(super) struct PaymentParams<'a> {
+    pub key_file: Option<&'a Path>,
+    pub wallet: Option<&'a str>,
+    pub max_amount: Option<&'a str>,
+    pub payment_network: Option<&'a str>,
+    pub payment_asset: Option<&'a str>,
+    pub svm_rpc_url: Option<&'a str>,
+}
+
+impl CallArgs {
+    fn payment_params(&self) -> PaymentParams<'_> {
+        PaymentParams {
+            key_file: self.payment_key_file.as_deref(),
+            wallet: self.payment_wallet.as_deref(),
+            max_amount: self.max_amount.as_deref(),
+            payment_network: self.payment_network.as_deref(),
+            payment_asset: self.payment_asset.as_deref(),
+            svm_rpc_url: self.svm_rpc_url.as_deref(),
+        }
+    }
+}
+
 fn resolve_payment_config(
     args: &CallArgs,
     section: &PaymentSection,
@@ -131,10 +157,33 @@ fn resolve_payment_config(
         return Err(CliError::Arg(format!(
             "--{scheme} requires --network: the chain the call queries, as the \
              payment gateway's path slug (e.g. --network base-sepolia). This is \
-             separate from --pay-network, the chain the payment settles on."
+             separate from --payment-network, the chain the payment settles on."
         )));
     };
 
+    let payment = resolve_payment_params(
+        scheme,
+        &args.payment_params(),
+        section,
+        wallets_dir,
+        base_url_override,
+    )?;
+    let key_file_warning = payment.1;
+    Ok((payment.0, network, key_file_warning))
+}
+
+/// Resolves the shared payment parameter stack (key, spend ceiling, pay
+/// network, asset, SVM RPC URL) into an SDK [`PaymentConfig`] for `scheme`,
+/// applying the flags-then-`[rpc.payment]` precedence. Returns the config plus
+/// an optional key-file permissions warning. Does not touch the query network
+/// (that is call-specific).
+pub(super) fn resolve_payment_params(
+    scheme: &str,
+    params: &PaymentParams<'_>,
+    section: &PaymentSection,
+    wallets_dir: Option<&Path>,
+    base_url_override: Option<String>,
+) -> Result<(PaymentConfig, Option<String>), CliError> {
     // An inline raw key in config is never accepted — it belongs in a file.
     if section.key.is_some() {
         return Err(CliError::Arg(
@@ -146,16 +195,16 @@ fn resolve_payment_config(
     }
 
     let (key, key_file_warning) = resolve_key(
-        args.payment_key_file.as_deref(),
-        args.payment_wallet.as_deref(),
+        params.key_file,
+        params.wallet,
         section.key_file.as_deref(),
         section.wallet.as_deref(),
         wallets_dir,
     )?;
 
-    let max_amount = args
+    let max_amount = params
         .max_amount
-        .clone()
+        .map(str::to_string)
         .or_else(|| section.max_amount.clone())
         .ok_or_else(|| {
             CliError::Arg(
@@ -173,9 +222,9 @@ fn resolve_payment_config(
         )));
     }
 
-    let payment_network = args
+    let payment_network = params
         .payment_network
-        .clone()
+        .map(str::to_string)
         .or_else(|| section.payment_network.clone())
         .ok_or_else(|| {
             CliError::Arg(
@@ -187,9 +236,9 @@ fn resolve_payment_config(
         })?;
     let payment_network = super::pay_network::resolve(&payment_network)?;
 
-    let payment_asset = args
+    let payment_asset = params
         .payment_asset
-        .clone()
+        .map(str::to_string)
         .or_else(|| section.payment_asset.clone())
         .ok_or_else(|| {
             CliError::Arg(
@@ -201,9 +250,9 @@ fn resolve_payment_config(
         })?;
     let payment_asset = super::pay_asset::resolve(&payment_asset, &payment_network)?;
 
-    let svm_rpc_url = match args
+    let svm_rpc_url = match params
         .svm_rpc_url
-        .clone()
+        .map(str::to_string)
         .or_else(|| section.svm_rpc_url.clone())
     {
         Some(u) => Some(crate::context::validate_endpoint_url(&u)?),
@@ -220,7 +269,6 @@ fn resolve_payment_config(
             svm_rpc_url,
             base_url_override,
         },
-        network,
         key_file_warning,
     ))
 }
@@ -343,7 +391,7 @@ fn checked_key(raw: String, source: &str) -> Result<String, CliError> {
 ///   after the signed payment was submitted — also unknown, exit 3. A 4xx
 ///   rejection means the gateway refused the credential without settling it
 ///   and passes through to exit 2.
-fn map_paid_error(e: SdkError) -> CliError {
+pub(super) fn map_paid_error(e: SdkError) -> CliError {
     match &e {
         SdkError::Decode { .. } => CliError::PaymentMaybeCharged(e),
         SdkError::PaymentRejected { status, .. } if *status >= 500 => {
@@ -452,7 +500,7 @@ mod tests {
         let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("--network"), "got: {msg}");
-        assert!(msg.contains("--pay-network"), "got: {msg}");
+        assert!(msg.contains("--payment-network"), "got: {msg}");
     }
 
     #[test]

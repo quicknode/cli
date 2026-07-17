@@ -309,6 +309,7 @@ fn write_config(path: &Path, cfg: &ConfigFile) -> Result<(), CliError> {
 use std::collections::HashMap;
 
 use quicknode_sdk::CachedToken;
+use quicknode_sdk::GatewaySession;
 
 /// On-disk shape of `~/.config/qn/tokens.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -461,6 +462,86 @@ pub fn wallets_dir(config_path: Option<&Path>) -> Option<PathBuf> {
         Some(p) => p.parent().map(|d| d.join("wallets")),
         None => config_dir().map(|d| d.join("qn").join("wallets")),
     }
+}
+
+// ── x402 gateway session (JWT) cache ─────────────────────────────────────────
+//
+// The drawdown lane authenticates once (SIWX → JWT, ~1h) and reuses the JWT
+// across `qn rpc` processes. We persist it in `sessions.toml` alongside the
+// config, keyed by the payer wallet's on-chain address (derived offline from
+// the key), so distinct wallets don't collide and a cache lookup needs no
+// network round trip. Only the short-lived JWT is written — never the wallet
+// key. A missing/expired session simply re-authenticates (which is free).
+
+/// On-disk shape of `~/.config/qn/sessions.toml`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SessionCacheFile {
+    /// Payer wallet address (lowercase) -> cached gateway session.
+    #[serde(default)]
+    pub sessions: HashMap<String, GatewaySessionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewaySessionEntry {
+    pub token: String,
+    pub exp_unix: i64,
+    pub account_id: String,
+}
+
+/// The gateway-session cache path: `sessions.toml` alongside the resolved
+/// config file (falling back to the default config dir).
+pub fn sessions_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("sessions.toml")),
+        None => config_dir().map(|d| d.join("qn").join("sessions.toml")),
+    }
+}
+
+// Normalize an address for use as a cache key (addresses are case-insensitive
+// on EVM; Solana base58 is case-sensitive but never collides after lowercasing
+// within a single wallet's own entries).
+fn session_key(address: &str) -> String {
+    address.to_lowercase()
+}
+
+/// Loads the cached gateway session for the payer `address`. Returns `None` if
+/// the file is absent, unparseable, or has no entry for that wallet.
+pub fn load_gateway_session_by_address(path: &Path, address: &str) -> Option<GatewaySession> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: SessionCacheFile = toml::from_str(&text).ok()?;
+    let entry = cache.sessions.get(&session_key(address))?;
+    Some(GatewaySession {
+        token: entry.token.clone(),
+        exp_unix: entry.exp_unix,
+        account_id: entry.account_id.clone(),
+    })
+}
+
+/// Stores `session` under the payer `address`, preserving every other wallet's
+/// entry (read-modify-write). Written atomically at 0600. Best-effort under
+/// concurrency: the atomic rename guarantees no partial file.
+pub fn save_gateway_session(
+    path: &Path,
+    address: &str,
+    session: &GatewaySession,
+) -> Result<(), CliError> {
+    let mut cache: SessionCacheFile = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    cache.sessions.insert(
+        session_key(address),
+        GatewaySessionEntry {
+            token: session.token.clone(),
+            exp_unix: session.exp_unix,
+            account_id: session.account_id.clone(),
+        },
+    );
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-sessions-")
 }
 
 /// Loads the cached network map for `endpoint_id` from `path`, if present, for

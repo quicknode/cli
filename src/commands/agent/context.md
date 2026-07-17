@@ -171,6 +171,18 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   payable via the paid lane, from the gateways' public discovery endpoints
   (no API key). A listed slug is a valid `--network`; the x402 asset column is
   a ready `--payment-asset` value.
+  **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
+  gateway credits instead of paying per request. All three take the same
+  payment parameter stack as the paid lane (`--payment-wallet`/`-key-file`,
+  `--payment-network`, `--payment-asset`, `--max-amount`, `--svm-rpc-url`) with
+  the same `[rpc.payment]` fallback. `buy-credits` SIWX-authenticates then pays
+  the gateway's credit offer (gated Mild — `--yes`, or exit 5 in scripts — and
+  names the spend ceiling); `balance` (alias `credits`) prints the current
+  credit count (bare number, or the full envelope with `--format json`); `drip`
+  requests testnet credits (Base Sepolia faucet, once per account). The session
+  JWT is authenticated once and cached under `<config-dir>/qn/sessions.toml`
+  (0600, keyed by wallet address); a missing/expired session re-authenticates
+  transparently (free, no confirmation). Paid verbs never auto-retry.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
