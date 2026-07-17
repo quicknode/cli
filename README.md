@@ -490,6 +490,36 @@ dir, refreshed automatically. When you run out, the call points you back at
 `qn rpc x402 buy-credits`. Like every paid call, a drawdown call never
 auto-retries.
 
+#### MPP payment channel (session)
+
+For high-frequency access, open an on-chain escrow payment channel once, then
+pay per call with a cumulative EIP-712 voucher (no on-chain transaction per
+call). Open, call, then top-up or close:
+
+```sh
+qn rpc wallet generate --chain evm --name payer      # evm covers Tempo; fund its address
+
+# Open a channel by depositing into the escrow (moves real funds; gated).
+qn rpc mpp open --network tempo-testnet --deposit 1000000 \
+    --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC
+
+# Pay for calls from the channel — one cumulative voucher per call.
+qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \
+    --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC
+
+# Inspect the channel (also recovers local state from the gateway).
+qn rpc mpp status --network tempo-testnet --payment-wallet payer \
+    --payment-network tempo-testnet --payment-asset USDC
+
+# Add more deposit, or close to settle on-chain and refund the unused balance.
+qn rpc mpp top-up --network tempo-testnet --deposit 1000000 --payment-wallet payer ...
+qn rpc mpp close  --network tempo-testnet --payment-wallet payer ...
+```
+
+Channel state is cached (0600) under the config dir, keyed by wallet and
+network. When the deposit is exhausted the call points you at `qn rpc mpp
+top-up`; after `close`, open a new channel to keep paying by session.
+
 ### Other
 
 ```sh

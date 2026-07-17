@@ -106,12 +106,13 @@ if you need it.
   nothing — it is read-only and safe to retry.
 - `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
   so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
-- A **paid** `rpc call` (`--x402`/`--mpp`/`--x402-drawdown`) never auto-retries —
-  `--retries` does not apply. A per-request attempt can move funds, and after a
-  lost response the previous attempt may already have settled (§3, exit 3). A
-  drawdown call draws 1 credit per success and is single-attempt (the one
-  exception is a transparent re-auth when the session token expired, which draws
-  nothing).
+- A **paid** `rpc call` (`--x402`/`--mpp`/`--x402-drawdown`/`--mpp-session`)
+  never auto-retries — `--retries` does not apply. A per-request attempt can
+  move funds, and after a lost response the previous attempt may already have
+  settled (§3, exit 3). A drawdown call draws 1 credit per success and is
+  single-attempt (the one exception is a transparent re-auth when the session
+  token expired, which draws nothing). A session call signs one cumulative
+  voucher and is single-attempt.
 
 ## 6. Command catalog
 
@@ -194,6 +195,19 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   confirmation), including one automatic re-auth if a drawdown call's token
   expired mid-use. Out of credits surfaces an actionable error pointing at
   `qn rpc x402 buy-credits`; nothing auto-retries a credit-drawing call.
+  **MPP session**: `qn rpc mpp {open, top-up, close, status}` manages an
+  on-chain escrow payment channel (Tempo), and `qn rpc call --mpp-session` pays
+  from it with a cumulative EIP-712 voucher (no on-chain tx per call). All take
+  the same payment param stack (a Tempo wallet) plus `--network` (the query
+  chain the channel lives on). `open --deposit <BASE_UNITS>` and
+  `top-up --deposit <BASE_UNITS>` move real funds on-chain (gated Mild); `close`
+  cooperatively settles + refunds (gated Mild; its prompt warns further
+  `--mpp-session` calls fail until re-open); `status` shows the gateway's view
+  and is the recovery path for lost local channel state. Channel state is cached
+  under `<config-dir>/qn/channels.toml` (0600, keyed by wallet address +
+  network). `--mpp-session` requires an open channel, is mutually exclusive with
+  `--x402`/`--mpp`/`--x402-drawdown`/`--endpoint-url`, and points at
+  `qn rpc mpp top-up` when the channel deposit is exhausted.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.

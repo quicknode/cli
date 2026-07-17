@@ -1420,3 +1420,160 @@ async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
         out.stderr
     );
 }
+
+// ── qn rpc mpp (payment channel session) ─────────────────────────────────────
+//
+// The MPP session lane opens an escrow channel (an on-chain Tempo tx, signed
+// offline against the mock), then pays with cumulative vouchers. The mock
+// gateway serves a tempo/session 402 challenge on probes and 2xx on credential
+// POSTs; channel status is a GET under /session/:network/channels/:id.
+
+use base64::Engine as _;
+
+// A base64url tempo/session request body (currency, recipient, amount, chainId).
+fn session_request_b64() -> String {
+    let json = json!({
+        "amount": "500",
+        "currency": "0x20c0000000000000000000000000000000000000",
+        "recipient": "0xfd24114c3981aba78ae2441991b1bdb89329c556",
+        "methodDetails": { "chainId": 42431 }
+    });
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json).unwrap())
+}
+
+fn session_www_authenticate() -> String {
+    format!(
+        "Payment id=\"c1\", realm=\"mpp.quicknode.com\", method=\"tempo\", intent=\"session\", description=\"d\", expires=\"2099-01-01T00:00:00Z\", request=\"{}\"",
+        session_request_b64()
+    )
+}
+
+// Mount the session endpoint: a 402 session challenge on an unauthorized POST
+// (the probe), and 200 on any POST carrying an Authorization: Payment header
+// (credential submissions: open/topUp/voucher/close).
+async fn mount_session(server: &MockServer, network: &str) {
+    let path_str = format!("/session/{network}");
+    Mock::given(method("POST"))
+        .and(path(path_str.clone()))
+        .and(wiremock::matchers::header_exists("authorization"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0xok"
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(path_str))
+        .respond_with(
+            ResponseTemplate::new(402)
+                .insert_header("WWW-Authenticate", session_www_authenticate().as_str())
+                .set_body_json(json!({ "type": "about:blank" })),
+        )
+        .mount(server)
+        .await;
+}
+
+fn mpp_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
+    vec![
+        "--config-file",
+        cfg,
+        "rpc",
+        "mpp",
+        verb,
+        "--network",
+        "tempo-testnet",
+        "--payment-key-file",
+        key_path,
+        "--payment-network",
+        "eip155:42431",
+        "--payment-asset",
+        "0x20c0000000000000000000000000000000000000",
+        "--max-amount",
+        "100000000",
+    ]
+}
+
+#[tokio::test]
+async fn mpp_open_happy_path_and_caches_channel() {
+    let server = MockServer::start().await;
+    mount_session(&server, "tempo-testnet").await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let mut args = mpp_args(&cfg, &key_path, "open");
+    args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    assert!(
+        dir.path().join("channels.toml").exists(),
+        "open must cache the channel state"
+    );
+}
+
+#[tokio::test]
+async fn mpp_open_without_yes_is_needs_confirmation_and_settles_nothing() {
+    let server = MockServer::start().await;
+    // Gate is checked before any network I/O: nothing reaches the gateway.
+    Mock::given(method("POST"))
+        .and(path("/session/tempo-testnet"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let mut args = mpp_args(&cfg, &key_path, "open");
+    args.extend_from_slice(&["--deposit", "1000000"]);
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn mpp_session_call_without_open_channel_points_at_open() {
+    let server = MockServer::start().await;
+    // No channel cached; the call must refuse before any gateway I/O.
+    Mock::given(method("POST"))
+        .and(path("/session/tempo-testnet"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "tempo-testnet",
+            "--mpp-session",
+            "--payment-key-file",
+            &key_path,
+            "--payment-network",
+            "eip155:42431",
+            "--payment-asset",
+            "0x20c0000000000000000000000000000000000000",
+            "--max-amount",
+            "100000000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("mpp open"),
+        "should point at 'mpp open', got: {}",
+        out.stderr
+    );
+}

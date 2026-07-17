@@ -24,6 +24,7 @@
 //! branches off before any of this module's token-cache or Tooling Access
 //! machinery runs.
 
+mod mpp;
 mod pay_asset;
 mod pay_network;
 mod pay_networks;
@@ -73,6 +74,9 @@ pub enum RpcCmd {
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402-drawdown \\\n      \
         --payment-wallet payer --payment-network base-sepolia --payment-asset USDC\n\n\
+        MPP payment channel (open once, then pay per call with a voucher):\n  \
+        qn rpc mpp open --network tempo-testnet --deposit 1000000 --payment-wallet payer\n  \
+        qn rpc call eth_blockNumber --network tempo-testnet --mpp-session --payment-wallet payer\n\n\
         See payable networks and manage wallets:\n  \
         qn rpc pay-networks\n  \
         qn rpc wallet generate --chain evm --name payer")]
@@ -93,12 +97,16 @@ pub enum RpcCmd {
     /// Manage x402 credit drawdown: buy prepaid credits, check the balance, or
     /// drip testnet credits. Pair with `qn rpc call --x402-drawdown`.
     X402(x402::Args),
+
+    /// Manage an MPP payment channel: open, top-up, close, or check status.
+    /// Pair with `qn rpc call --mpp-session`.
+    Mpp(mpp::Args),
 }
 
 #[derive(Debug, ClapArgs)]
 #[command(
     group(ArgGroup::new("params_source").args(["params", "params_file"])),
-    group(ArgGroup::new("payment").args(["x402", "mpp", "x402_drawdown"])),
+    group(ArgGroup::new("payment").args(["x402", "mpp", "x402_drawdown", "mpp_session"])),
 )]
 pub struct CallArgs {
     /// The JSON-RPC method, e.g. `eth_blockNumber`.
@@ -150,6 +158,12 @@ pub struct CallArgs {
     /// session JWT is authenticated and refreshed automatically.
     #[arg(long, conflicts_with = "endpoint_url", help_heading = "Payment")]
     pub x402_drawdown: bool,
+
+    /// Pay for this call from an open MPP channel (session): a cumulative
+    /// EIP-712 voucher, no on-chain tx per call. Open a channel first with
+    /// `qn rpc mpp open`. Requires --network (the query chain).
+    #[arg(long, conflicts_with = "endpoint_url", help_heading = "Payment")]
+    pub mpp_session: bool,
 
     /// File containing the raw payment private key (EVM/Tempo hex, Solana
     /// base58); pass `-` to read it from stdin. Never accepts the key itself.
@@ -236,6 +250,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
         }
         RpcCmd::PayNetworks => pay_networks::run(global).await,
         RpcCmd::X402(x402_args) => x402::run(x402_args, global).await,
+        RpcCmd::Mpp(mpp_args) => mpp::run(mpp_args, global).await,
     }
 }
 
@@ -262,6 +277,9 @@ async fn run_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
     }
     if args.x402_drawdown {
         return payment::run_drawdown_call(args, global).await;
+    }
+    if args.mpp_session {
+        return payment::run_session_call(args, global).await;
     }
 
     let params = parse_params(args.params.as_deref(), args.params_file.as_deref())?;

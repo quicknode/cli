@@ -544,6 +544,147 @@ pub fn save_gateway_session(
     write_atomic_0600(path, text.as_bytes(), ".qn-sessions-")
 }
 
+// ── MPP channel state ────────────────────────────────────────────────────────
+//
+// An open MPP payment channel is long-lived local state (channelId, deposit,
+// cumulative spend) reused across `qn rpc` processes. We persist it in
+// `channels.toml` alongside the config, keyed by payer address + query network
+// so one wallet can hold a channel per network. The gateway is the source of
+// truth for the high-water mark; `qn rpc mpp status` re-derives a lost entry.
+
+/// On-disk shape of `~/.config/qn/channels.toml`. Amounts are stored as
+/// strings because TOML has no unsigned-128-bit integer type; they round-trip
+/// through [`ChannelEntry`] to the SDK's `u128`-typed `ChannelState`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ChannelCacheFile {
+    /// "<payer-address>:<network>" -> the open channel's state.
+    #[serde(default)]
+    pub channels: HashMap<String, ChannelEntry>,
+}
+
+/// TOML-safe channel record (u128 amounts as decimal strings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelEntry {
+    pub channel_id: String,
+    pub token: String,
+    pub payee: String,
+    pub operator: String,
+    pub salt: String,
+    pub authorized_signer: String,
+    pub expiring_nonce_hash: String,
+    pub deposit: String,
+    pub cumulative_spent: String,
+    pub per_call: String,
+    pub chain_id: u64,
+}
+
+impl ChannelEntry {
+    fn from_state(s: &quicknode_sdk::ChannelState) -> Self {
+        ChannelEntry {
+            channel_id: s.channel_id.clone(),
+            token: s.token.clone(),
+            payee: s.payee.clone(),
+            operator: s.operator.clone(),
+            salt: s.salt.clone(),
+            authorized_signer: s.authorized_signer.clone(),
+            expiring_nonce_hash: s.expiring_nonce_hash.clone(),
+            deposit: s.deposit.to_string(),
+            cumulative_spent: s.cumulative_spent.to_string(),
+            per_call: s.per_call.to_string(),
+            chain_id: s.chain_id,
+        }
+    }
+
+    fn to_state(&self) -> Option<quicknode_sdk::ChannelState> {
+        Some(quicknode_sdk::ChannelState {
+            channel_id: self.channel_id.clone(),
+            token: self.token.clone(),
+            payee: self.payee.clone(),
+            operator: self.operator.clone(),
+            salt: self.salt.clone(),
+            authorized_signer: self.authorized_signer.clone(),
+            expiring_nonce_hash: self.expiring_nonce_hash.clone(),
+            deposit: self.deposit.parse().ok()?,
+            cumulative_spent: self.cumulative_spent.parse().ok()?,
+            per_call: self.per_call.parse().ok()?,
+            chain_id: self.chain_id,
+        })
+    }
+}
+
+/// The channel-state cache path: `channels.toml` alongside the resolved config.
+pub fn channels_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("channels.toml")),
+        None => config_dir().map(|d| d.join("qn").join("channels.toml")),
+    }
+}
+
+fn channel_key(address: &str, network: &str) -> String {
+    format!("{}:{}", address.to_lowercase(), network)
+}
+
+/// Loads the open channel for `(address, network)`, if any.
+pub fn load_channel(
+    path: &Path,
+    address: &str,
+    network: &str,
+) -> Option<quicknode_sdk::ChannelState> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: ChannelCacheFile = toml::from_str(&text).ok()?;
+    cache
+        .channels
+        .get(&channel_key(address, network))
+        .and_then(ChannelEntry::to_state)
+}
+
+/// Stores `channel` under `(address, network)`, preserving other entries.
+/// Written atomically at 0600.
+pub fn save_channel(
+    path: &Path,
+    address: &str,
+    network: &str,
+    channel: &quicknode_sdk::ChannelState,
+) -> Result<(), CliError> {
+    let mut cache: ChannelCacheFile = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    cache.channels.insert(
+        channel_key(address, network),
+        ChannelEntry::from_state(channel),
+    );
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
+}
+
+/// Drops the channel entry for `(address, network)` (e.g. after a close),
+/// leaving other entries intact. No-op if absent.
+pub fn delete_channel(path: &Path, address: &str, network: &str) -> Result<(), CliError> {
+    let mut cache: ChannelCacheFile = match fs::read_to_string(path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+    {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    if cache
+        .channels
+        .remove(&channel_key(address, network))
+        .is_none()
+    {
+        return Ok(());
+    }
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
+}
+
 /// Loads the cached network map for `endpoint_id` from `path`, if present, for
 /// the same endpoint, and fetched within the TTL (relative to `now_unix`).
 /// Returns `None` (a cache miss) on any mismatch or parse failure.

@@ -231,6 +231,97 @@ fn map_drawdown_error(e: SdkError) -> CliError {
     e.into()
 }
 
+/// Entry point from `run_call` once `--mpp-session` is present. Pays for the
+/// call from an open MPP channel with a cumulative EIP-712 voucher: no on-chain
+/// tx per call. Single-attempt (a paid lane never blind-retries).
+///
+/// Requires an already-open channel for this wallet + query network (from
+/// `qn rpc mpp open`); a missing channel or one whose deposit is exhausted
+/// surfaces an actionable error pointing at `mpp open` / `mpp top-up`.
+pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
+    let Some(network) = args.network.clone() else {
+        return Err(CliError::Arg(
+            "--mpp-session requires --network: the chain the call queries, as \
+             the payment gateway's path slug (e.g. --network tempo-testnet)."
+                .to_string(),
+        ));
+    };
+
+    let section = load_payment_section(&global)?;
+    let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
+    let (payment, key_file_warning) = resolve_payment_params(
+        "mpp",
+        &args.payment_params(),
+        &section,
+        wallets_dir.as_deref(),
+        global.base_url.clone(),
+    )?;
+    let params = super::parse_params(args.params.as_deref(), args.params_file.as_deref())?;
+
+    let ctx = Ctx::from_global_keyless_payment(global.clone(), payment)?;
+    if let Some(w) = key_file_warning {
+        ctx.out.warn(&w);
+    }
+
+    let address = ctx.sdk.rpc.payment_address()?;
+    let channels_path = config::channels_cache_path(global.resolve_config_path().as_deref());
+    let mut channel = channels_path
+        .as_deref()
+        .and_then(|p| config::load_channel(p, &address, &network))
+        .ok_or_else(|| {
+            CliError::Arg(format!(
+                "no open MPP channel for this wallet on {network}. Open one with \
+                 'qn rpc mpp open --network {network} --deposit <BASE_UNITS>'."
+            ))
+        })?;
+
+    // Advance the cumulative by one per-call unit. Refuse (before any signing)
+    // when the deposit can't cover it: point at top-up.
+    let new_cumulative = channel.cumulative_spent.saturating_add(channel.per_call);
+    if new_cumulative > channel.deposit {
+        return Err(CliError::Arg(format!(
+            "MPP channel deposit exhausted (deposit {}, would need {}). Top up \
+             with 'qn rpc mpp top-up --network {network} --deposit <BASE_UNITS>'.",
+            channel.deposit, new_cumulative
+        )));
+    }
+
+    let result = ctx
+        .sdk
+        .rpc
+        .mpp_session_call(&args.method, params, &network, &channel, new_cumulative)
+        .await
+        .map_err(map_session_error)?;
+
+    // The voucher was accepted: advance and persist the local high-water mark.
+    channel.cumulative_spent = new_cumulative;
+    if let Some(path) = &channels_path {
+        let _ = config::save_channel(path, &address, &network, &channel);
+    }
+
+    super::emit_result(&ctx, &result)
+}
+
+/// Maps a session-call failure onto an actionable CLI error. A refusal to
+/// accept the voucher for want of deposit points at `mpp top-up`; everything
+/// else keeps its normal exit-code mapping.
+fn map_session_error(e: SdkError) -> CliError {
+    if let SdkError::Api { status, body } = &e {
+        if status.as_u16() == 402
+            || body.contains("amount-exceeds-deposit")
+            || body.contains("AmountExceedsDeposit")
+            || body.contains("insufficient")
+        {
+            return CliError::Arg(
+                "the MPP channel can't cover this call. Top up with \
+                 'qn rpc mpp top-up', or open a new channel with 'qn rpc mpp open'."
+                    .to_string(),
+            );
+        }
+    }
+    map_paid_error(e)
+}
+
 /// Loads `[rpc.payment]` from the resolved config file. A missing file is an
 /// empty section; an unreadable/invalid file is a hard error, since payment
 /// parameters the user set there would otherwise be silently ignored.
@@ -548,6 +639,7 @@ mod tests {
             x402,
             mpp: !x402,
             x402_drawdown: false,
+            mpp_session: false,
             payment_key_file: None,
             payment_wallet: None,
             max_amount: Some("10000".to_string()),
