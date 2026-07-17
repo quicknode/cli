@@ -31,6 +31,23 @@ use super::CallArgs;
 // within this window, absorbing clock skew (mirrors the tooling token margin).
 const SESSION_MARGIN_SECS: i64 = 60;
 
+/// Rejects reading both the params and the payment key from stdin — there is
+/// only one stdin, and draining it into the key would silently leave the params
+/// empty. Shared by every paid lane (per-request, drawdown, session).
+fn check_single_stdin(args: &CallArgs) -> Result<(), CliError> {
+    let params_use_stdin = matches!(args.params.as_deref(), Some("-"))
+        || matches!(&args.params_file, Some(p) if p.as_os_str() == "-");
+    let key_use_stdin = matches!(&args.payment_key_file, Some(p) if p.as_os_str() == "-");
+    if params_use_stdin && key_use_stdin {
+        return Err(CliError::Arg(
+            "cannot read both the params and the payment key from stdin; \
+             put one of them in a file"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Entry point from `run_call` once `--x402`/`--mpp` is present.
 pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
     // Both the key and the params may come from stdin; there is only one stdin.
@@ -110,6 +127,7 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
 /// that path signs nothing and draws no credit, so it is not a paid retry. The
 /// credit-drawing call itself is single-attempt.
 pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
+    check_single_stdin(&args)?;
     // The query chain, required here so the error can explain the distinction.
     let Some(network) = args.network.clone() else {
         return Err(CliError::Arg(
@@ -196,32 +214,34 @@ async fn reauthenticate(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession
     Ok(session)
 }
 
-/// True when a gateway error is a `token_expired`/`invalid_token` 401 — the one
-/// case worth a transparent re-auth (it drew no credit).
+/// True when a gateway error is an expired/invalid session token — the one case
+/// worth a transparent re-auth (it drew no credit). The gateway surfaces this
+/// as a 401 OR a 403 (see the drawdown SDK docs), so match both.
 fn is_token_expired(e: &SdkError) -> bool {
     matches!(
         e,
         SdkError::Api { status, body }
-            if status.as_u16() == 401
+            if matches!(status.as_u16(), 401 | 403)
                 && (body.contains("token_expired") || body.contains("invalid_token"))
     )
 }
 
 /// Maps a drawdown-call failure onto an actionable CLI error. An empty-credits
-/// or monthly-limit gateway refusal points forward at the fixing verb; every
-/// other SDK error keeps its normal exit-code mapping.
+/// or monthly-limit gateway refusal points forward at the fixing verb; because
+/// nothing settled, both map to exit 2 (`PaymentRefused`), not the generic
+/// arg-error bucket. Every other SDK error keeps its normal exit-code mapping.
 fn map_drawdown_error(e: SdkError) -> CliError {
     if let SdkError::Api { status, body } = &e {
         let s = status.as_u16();
         if s == 402 || body.contains("insufficient_credits") || body.contains("no_credits") {
-            return CliError::Arg(
+            return CliError::PaymentRefused(
                 "out of x402 credits. Buy more with 'qn rpc x402 buy-credits', \
                  then retry this call."
                     .to_string(),
             );
         }
         if body.contains("monthly_limit_reached") {
-            return CliError::Arg(
+            return CliError::PaymentRefused(
                 "the account's monthly x402 limit was reached; no credits were \
                  drawn. Try again after the limit resets."
                     .to_string(),
@@ -239,6 +259,7 @@ fn map_drawdown_error(e: SdkError) -> CliError {
 /// `qn rpc mpp open`); a missing channel or one whose deposit is exhausted
 /// surfaces an actionable error pointing at `mpp open` / `mpp top-up`.
 pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
+    check_single_stdin(&args)?;
     let Some(network) = args.network.clone() else {
         return Err(CliError::Arg(
             "--mpp-session requires --network: the chain the call queries, as \
@@ -312,7 +333,7 @@ fn map_session_error(e: SdkError) -> CliError {
             || body.contains("AmountExceedsDeposit")
             || body.contains("insufficient")
         {
-            return CliError::Arg(
+            return CliError::PaymentRefused(
                 "the MPP channel can't cover this call. Top up with \
                  'qn rpc mpp top-up', or open a new channel with 'qn rpc mpp open'."
                     .to_string(),

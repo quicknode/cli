@@ -50,6 +50,14 @@ pub enum CliError {
     )]
     PaymentMaybeCharged(#[source] SdkError),
 
+    /// The gateway refused a paid request and nothing settled (out of credits,
+    /// monthly limit, an exhausted channel). Carries an actionable message and
+    /// maps to exit 2 — the "refused, nothing settled" bucket — so scripts can
+    /// distinguish it from a generic arg error (exit 1) or an unknown outcome
+    /// (exit 3).
+    #[error("{0}")]
+    PaymentRefused(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -78,6 +86,7 @@ pub fn exit_code_for(err: &CliError) -> i32 {
         CliError::NoApiKey | CliError::BadConfig { .. } | CliError::ConfigWrite { .. } => 4,
         CliError::Cancelled | CliError::NeedsConfirmation => 5,
         CliError::PaymentMaybeCharged(_) => 3,
+        CliError::PaymentRefused(_) => 2,
         CliError::Sdk(sdk) => match sdk {
             SdkError::Api { .. } => 2,
             SdkError::Http(_) => 3,

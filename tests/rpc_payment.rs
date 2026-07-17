@@ -1341,7 +1341,10 @@ async fn x402_drawdown_happy_path_uses_bearer_no_signing() {
 
 /// Sequenced /base-sepolia responder: the FIRST drawdown call 401s with
 /// token_expired; the SECOND (after a transparent re-auth) returns the result.
+/// `status` is the HTTP code of the expired-token response (the gateway uses
+/// 401 or 403).
 struct ExpiredThenOk {
+    status: u16,
     calls: AtomicUsize,
 }
 
@@ -1349,7 +1352,7 @@ impl Respond for ExpiredThenOk {
     fn respond(&self, _req: &Request) -> ResponseTemplate {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if n == 0 {
-            ResponseTemplate::new(401).set_body_json(json!({
+            ResponseTemplate::new(self.status).set_body_json(json!({
                 "error": "token_expired", "message": "session token expired"
             }))
         } else {
@@ -1360,10 +1363,9 @@ impl Respond for ExpiredThenOk {
     }
 }
 
-#[tokio::test]
-async fn x402_drawdown_reauths_once_on_token_expired() {
+async fn assert_drawdown_reauths_on(status: u16) {
     let server = MockServer::start().await;
-    // Two /auth calls: the initial auth + the re-auth after the 401.
+    // Two /auth calls: the initial auth + the re-auth after the expired token.
     Mock::given(method("POST"))
         .and(path("/auth"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1377,6 +1379,7 @@ async fn x402_drawdown_reauths_once_on_token_expired() {
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ExpiredThenOk {
+            status,
             calls: AtomicUsize::new(0),
         })
         .expect(2) // one expired attempt + one retry after re-auth
@@ -1389,7 +1392,64 @@ async fn x402_drawdown_reauths_once_on_token_expired() {
     let (_guard, key_path) = key_file();
 
     let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
-    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    assert_eq!(out.exit_code, 0, "status={status} stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_drawdown_reauths_once_on_token_expired_401() {
+    // The gateway can surface an expired token as a 401.
+    assert_drawdown_reauths_on(401).await;
+}
+
+#[tokio::test]
+async fn x402_drawdown_reauths_once_on_token_expired_403() {
+    // ...or as a 403 — both must trigger the transparent re-auth + retry.
+    assert_drawdown_reauths_on(403).await;
+}
+
+#[tokio::test]
+async fn x402_drawdown_rejects_key_and_params_both_from_stdin() {
+    // Only one stdin: reading the key from it would silently drain the params.
+    // The lane must refuse up front with zero gateway I/O.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_call",
+            "-", // params from stdin
+            "--network",
+            "base-sepolia",
+            "--x402-drawdown",
+            "--payment-key-file",
+            "-", // key ALSO from stdin
+            "--payment-network",
+            "eip155:84532",
+            "--payment-asset",
+            USDC,
+            "--max-amount",
+            "10000000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(
+        out.stderr.contains("both") && out.stderr.contains("stdin"),
+        "expected the both-from-stdin guard, got: {}",
+        out.stderr
+    );
 }
 
 #[tokio::test]
@@ -1397,7 +1457,8 @@ async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
     // 402 on the drawdown call = no credits; must NOT sign or resend (single
-    // attempt), and must surface an actionable "buy-credits" error at exit 1.
+    // attempt), and must surface an actionable "buy-credits" error at exit 2
+    // (the gateway refused and nothing settled).
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(402).set_body_json(json!({
@@ -1412,8 +1473,8 @@ async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
     let (_guard, key_path) = key_file();
 
     let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
-    // Actionable arg error (exit 1) pointing forward at the fixing verb.
-    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    // Refused, nothing settled → exit 2, with a message pointing at the fix.
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
     assert!(
         out.stderr.contains("buy-credits"),
         "stderr should point at buy-credits, got: {}",
