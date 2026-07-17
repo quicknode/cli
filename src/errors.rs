@@ -112,13 +112,22 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
         CliError::Sdk(SdkError::PaymentRejected { status, body }) => {
             // Only 4xx rejections reach this arm from the paid lane (5xx are
             // wrapped into PaymentMaybeCharged): the gateway refused the
-            // credential without settling it.
-            let msg = format!(
-                "Error: the gateway refused the payment (HTTP {status}). The signed \
-                 payment was not accepted, so nothing should have settled; check the \
-                 wallet balance and --pay-network/--asset/--max-amount, then retry."
+            // credential without settling it. The SDK has already reduced the
+            // body to the gateway's own reason when it was the JSON error shape.
+            let reason = payment_rejection_reason(body);
+            let mut msg = format!("Error: the gateway refused the payment (HTTP {status}).");
+            if let Some(r) = &reason {
+                let r = r.trim_end_matches('.');
+                msg.push_str(&format!(" Gateway: {r}."));
+            }
+            msg.push_str(
+                " The signed payment was not accepted, so nothing should have settled. \
+                 Common causes: the wallet is unfunded, or --pay-network/--asset/--max-amount \
+                 don't match an offer (see 'qn rpc pay-networks').",
             );
-            if verbose && !body.is_empty() {
+            // When the reason wasn't a clean one-liner, append the raw body under
+            // --verbose for the full detail.
+            if verbose && reason.is_none() && !body.is_empty() {
                 format!("{msg}\n{body}")
             } else {
                 msg
@@ -194,6 +203,19 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
 
 /// Status codes have a small set of canonical user-facing messages. Validation
 /// (400/422) gets the structured body treatment from `parse_api_body`.
+/// The gateway's own rejection reason, when the body is a clean short string
+/// (the SDK reduces its JSON `{error, message}` shape to that before this
+/// point). A long body — e.g. a full 402 payment menu — is not a reason, so it
+/// returns `None` and the caller falls back to the generic guidance (plus the
+/// raw body under `--verbose`).
+fn payment_rejection_reason(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() || trimmed.len() > 200 || trimmed.starts_with('{') {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> String {
     let headline = match code {
         400 | 422 => "invalid request.".to_string(),
@@ -568,17 +590,36 @@ mod tests {
 
     #[test]
     fn renders_payment_rejected_as_refused_without_settling() {
+        // A short gateway reason surfaces in the default message (the SDK has
+        // already reduced its JSON error shape to this string).
         let err = CliError::Sdk(SdkError::PaymentRejected {
             status: 402,
-            body: "invalid signature".to_string(),
+            body: "insufficient funds".to_string(),
         });
         let msg = render(&err, false);
         assert!(msg.contains("402"), "got: {msg}");
         assert!(msg.contains("refused"), "got: {msg}");
         assert!(msg.contains("nothing should have settled"), "got: {msg}");
-        assert!(!msg.contains("invalid signature"), "got: {msg}");
+        assert!(msg.contains("Gateway: insufficient funds"), "got: {msg}");
+    }
+
+    #[test]
+    fn payment_rejected_hides_long_body_unless_verbose() {
+        // A long/JSON body (e.g. a full 402 payment menu) is not a reason: the
+        // default message stays generic and the raw body appears under --verbose.
+        let body = format!("{{\"accepts\":[{}]}}", "\"x\",".repeat(80));
+        let err = CliError::Sdk(SdkError::PaymentRejected {
+            status: 402,
+            body: body.clone(),
+        });
+        let msg = render(&err, false);
+        assert!(
+            !msg.contains(&body),
+            "long body must not leak by default: {msg}"
+        );
+        assert!(msg.contains("qn rpc pay-networks"), "got: {msg}");
         let verbose = render(&err, true);
-        assert!(verbose.contains("invalid signature"), "got: {verbose}");
+        assert!(verbose.contains("accepts"), "got: {verbose}");
     }
 
     #[test]

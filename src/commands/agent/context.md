@@ -253,24 +253,24 @@ qn rpc wallet generate --chain evm --name payer      # dedicated wallet; prints 
 # x402 on EVM (Base Sepolia testnet, USDC):
 qn rpc call eth_blockNumber --network base-sepolia --x402 \
     --payment-wallet payer --pay-network base-sepolia \
-    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e --max-amount 1000000
+    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e --max-amount 1000
 
 # MPP on Tempo (testnet); same EVM wallet, --receipt adds the settlement ref:
 qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \
     --payment-wallet payer --pay-network tempo-testnet \
-    --asset 0x20c0000000000000000000000000000000000000 --max-amount 1000000
+    --asset 0x20c0000000000000000000000000000000000000 --max-amount 1000
 
 # x402 on Solana (devnet); needs an SVM wallet:
 qn rpc wallet generate --chain svm --name sol-payer
 qn rpc call getSlot --network solana-devnet --x402 \
     --payment-wallet sol-payer --pay-network solana-devnet \
-    --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU --max-amount 1000000
+    --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU --max-amount 1000
 
 # Store the parameters in config to keep calls short (never the raw key):
 cat >> ~/.config/qn/config.toml <<'EOF'
 [rpc.payment]
 wallet      = "payer"                             # a stored wallet, or key_file = "<path>" (chmod 600)
-max_amount  = "1000000"                           # spend ceiling per call, base units
+max_amount  = "1000"                           # spend ceiling per call, base units
 pay_network = "base-sepolia"                      # settlement chain: network name or CAIP-2 id
 asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 EOF

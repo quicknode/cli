@@ -349,8 +349,12 @@ qn rpc call eth_blockNumber \
     --payment-wallet payer \
     --pay-network base-sepolia \
     --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
-    --max-amount 1000000
+    --max-amount 1000
 ```
+
+`--max-amount 1000` selects the per-request USDC offer (0.001 USDC). Fund the
+wallet's address with a little Base Sepolia USDC and the same command returns
+the block number.
 
 **MPP on Tempo (testnet):** same EVM wallet works (MPP uses the secp256k1 key
 format); `--receipt` wraps the result with the settlement reference.
@@ -361,7 +365,7 @@ qn rpc call eth_blockNumber \
     --payment-wallet payer \
     --pay-network tempo-testnet \
     --asset 0x20c0000000000000000000000000000000000000 \
-    --max-amount 1000000
+    --max-amount 1000
 ```
 
 **x402 on Solana (devnet):** needs an SVM wallet.
@@ -373,7 +377,7 @@ qn rpc call getSlot \
     --payment-wallet sol-payer \
     --pay-network solana-devnet \
     --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
-    --max-amount 1000000
+    --max-amount 1000
 ```
 
 The query chain (`--network`) and the settlement chain (`--pay-network`) are
