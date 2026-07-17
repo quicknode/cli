@@ -334,25 +334,53 @@ request instead of using an account API key — no login and no Tooling Access
 needed. **This moves real funds** (testnet tokens are still real transfers):
 use a dedicated, minimally funded wallet.
 
-The quickest path: see what's payable, generate a wallet, fund it, then pay by
-name.
+The quickest path: see what's payable, generate a wallet, fund that exact
+address, then pay by name. `--asset` and `--max-amount` must match a real
+payment offer for the network — `qn rpc pay-networks` shows the x402 asset per
+network, and a paid call that names an unfunded wallet or a mismatched
+asset/amount is refused with HTTP 402 before anything settles.
+
+**x402 on EVM (Base Sepolia testnet, USDC):**
 
 ```sh
-qn rpc pay-networks                                   # payable networks + the x402 asset per network
-qn rpc wallet generate --chain evm --name payer       # new wallet; prints its address + a QR to fund it
-# → send funds to that address, then:
-qn rpc call eth_blockNumber --network base-sepolia --x402 \
+qn rpc wallet generate --chain evm --name payer       # prints the address + a QR; fund THAT address
+qn rpc call eth_blockNumber \
+    --network base-sepolia --x402 \
     --payment-wallet payer \
     --pay-network base-sepolia \
     --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
-    --max-amount 10000
-
-# MPP settles on Tempo and returns a settlement receipt with --receipt:
-qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt ...
+    --max-amount 1000000
 ```
 
-You can also point `--payment-key-file <PATH>` at a key file you manage
-yourself instead of a stored wallet.
+**MPP on Tempo (testnet):** same EVM wallet works (MPP uses the secp256k1 key
+format); `--receipt` wraps the result with the settlement reference.
+
+```sh
+qn rpc call eth_blockNumber \
+    --network tempo-testnet --mpp --receipt \
+    --payment-wallet payer \
+    --pay-network tempo-testnet \
+    --asset 0x20c0000000000000000000000000000000000000 \
+    --max-amount 1000000
+```
+
+**x402 on Solana (devnet):** needs an SVM wallet.
+
+```sh
+qn rpc wallet generate --chain svm --name sol-payer   # fund this base58 address
+qn rpc call getSlot \
+    --network solana-devnet --x402 \
+    --payment-wallet sol-payer \
+    --pay-network solana-devnet \
+    --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
+    --max-amount 1000000
+```
+
+The query chain (`--network`) and the settlement chain (`--pay-network`) are
+independent, but the `--pay-network`/`--asset`/`--max-amount` trio must be a
+combination the gateway actually offers (again, `qn rpc pay-networks`). You can
+also point `--payment-key-file <PATH>` at a key file you manage yourself
+instead of a stored wallet.
 
 - `--network` is required and names the chain you *query*, as the payment
   gateway's path slug (independent of `--pay-network`, the chain the payment

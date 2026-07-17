@@ -241,25 +241,40 @@ is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 
 **Pay per call with a crypto micropayment (no API key, no login):**
 
+`--asset`/`--max-amount` must match a real offer for the network (see
+`qn rpc pay-networks`); an unfunded wallet or a mismatched asset/amount is
+refused with HTTP 400/402 before anything settles.
+
 ```sh
 qn rpc pay-networks                                  # which networks are payable, and the x402 asset
-qn rpc wallet generate --chain evm --name payer      # create a dedicated wallet; prints its address + a QR to fund
-# → fund that address, then:
+qn rpc wallet generate --chain evm --name payer      # dedicated wallet; prints its address + a QR to fund
+# → fund THAT address, then pick a lane:
+
+# x402 on EVM (Base Sepolia testnet, USDC):
 qn rpc call eth_blockNumber --network base-sepolia --x402 \
     --payment-wallet payer --pay-network base-sepolia \
-    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e --max-amount 10000
+    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e --max-amount 1000000
 
-# Or store the parameters (never the raw key) in config to keep calls short:
+# MPP on Tempo (testnet); same EVM wallet, --receipt adds the settlement ref:
+qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \
+    --payment-wallet payer --pay-network tempo-testnet \
+    --asset 0x20c0000000000000000000000000000000000000 --max-amount 1000000
+
+# x402 on Solana (devnet); needs an SVM wallet:
+qn rpc wallet generate --chain svm --name sol-payer
+qn rpc call getSlot --network solana-devnet --x402 \
+    --payment-wallet sol-payer --pay-network solana-devnet \
+    --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU --max-amount 1000000
+
+# Store the parameters in config to keep calls short (never the raw key):
 cat >> ~/.config/qn/config.toml <<'EOF'
 [rpc.payment]
-wallet      = "payer"                             # a stored wallet, or use key_file = "<path>" (chmod 600)
-max_amount  = "10000"                             # spend ceiling per call, base units
+wallet      = "payer"                             # a stored wallet, or key_file = "<path>" (chmod 600)
+max_amount  = "1000000"                           # spend ceiling per call, base units
 pay_network = "base-sepolia"                      # settlement chain: network name or CAIP-2 id
 asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 EOF
-
-qn rpc call eth_blockNumber --network base-sepolia --x402            # pays, prints the result
-qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt  # + settlement receipt
+qn rpc call eth_blockNumber --network base-sepolia --x402   # params now come from config
 ```
 
 This moves real funds (even testnet tokens are real transfers) — use a
