@@ -323,16 +323,12 @@ async fn generate_prints_key_path_and_custody_note() {
     // Address is the only thing on stdout (the pipeable value).
     assert!(stdout.trim().starts_with("0x"), "stdout={stdout}");
 
-    // Labeled public key + private key file path and the custody note go to
-    // stderr.
+    // The private key file path and the custody note go to stderr (the address
+    // is on stdout, so it isn't repeated on stderr).
     let key_path = wallets_dir(dir.path()).join("payer");
     assert!(
-        stderr.contains(&format!("Private Key File: {}", key_path.display())),
+        stderr.contains(&format!("Private key file: {}", key_path.display())),
         "stderr missing labeled key path: {stderr}"
-    );
-    assert!(
-        stderr.contains("Public Key: 0x"),
-        "stderr missing labeled public key: {stderr}"
     );
     assert!(
         stderr.contains("stored only on this machine") && stderr.contains("Quicknode does not"),

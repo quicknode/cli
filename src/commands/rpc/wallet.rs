@@ -217,27 +217,76 @@ const CUSTODY_NOTE: &str = "This wallet is stored only on this machine. \
     Quicknode does not hold, back up, or recover it — keep your own backup of \
     the key file; if you lose it, any funds in the wallet are gone.";
 
-/// Prints the address to stdout (the pipeable value), and to stderr: the
-/// labeled public key + private key file path and the custody note always
-/// (plain text, `--quiet`-gated), plus a QR code and funding hint only on a
-/// TTY. Everything but the bare address goes to stderr, so a piped `qn rpc
-/// wallet show` yields just the address. A QR must never go to stdout — it
-/// would corrupt the pipe.
+/// Prints the address to stdout (the pipeable value), and to stderr a spaced,
+/// lightly-styled block: the QR (TTY only), the private key file path, a
+/// funding hint, and the custody note. Everything but the bare address goes to
+/// stderr, so a piped `qn rpc wallet show` yields just the address; the QR
+/// must never go to stdout — it would corrupt the pipe. Styling is applied
+/// only when `ctx.out.color` is set (a TTY with color enabled).
 fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     println!("{}", meta.address);
-    ctx.out.note(&format!("Public Key: {}", meta.address));
-    ctx.out
-        .note(&format!("Private Key File: {}", key_path.display()));
-    if with_qr && ctx.out.stdout_is_tty && !ctx.out.quiet {
+    if ctx.out.quiet {
+        return;
+    }
+    let c = ctx.out.color;
+    let on_tty = with_qr && ctx.out.stdout_is_tty;
+
+    // Build one spaced block so blank lines land predictably around the QR.
+    let mut block = String::new();
+
+    if on_tty {
         if let Some(qr) = render_qr(&meta.address) {
-            ctx.out.note(&qr);
+            // Blank line above so the QR isn't jammed against the address.
+            block.push('\n');
+            block.push_str(&qr);
+            block.push('\n');
         }
-        ctx.out.note(&format!(
-            "Fund this {} address to use it with 'qn rpc call --payment-wallet {}'.",
-            meta.chain, meta.name
+    }
+
+    // Private key file path (the address is already on stdout, so it isn't
+    // echoed here).
+    block.push_str(&format!(
+        "{} {}\n",
+        style("Private key file:", Style::Dim, c),
+        style(&key_path.display().to_string(), Style::Bold, c)
+    ));
+
+    // Funding hint (only meaningful interactively, where the QR is shown).
+    if on_tty {
+        block.push('\n');
+        block.push_str(&format!(
+            "Fund this {} address, then use it with {}.\n",
+            meta.chain,
+            style(
+                &format!("qn rpc call --payment-wallet {}", meta.name),
+                Style::Bold,
+                c
+            ),
         ));
     }
-    ctx.out.note(CUSTODY_NOTE);
+
+    // Custody note as dim fine-print, set off by a blank line.
+    block.push('\n');
+    block.push_str(&style(&format!("⚠ {CUSTODY_NOTE}"), Style::Dim, c));
+
+    ctx.out.note(&block);
+}
+
+/// A minimal ANSI style set, applied only when color is enabled.
+enum Style {
+    Bold,
+    Dim,
+}
+
+fn style(s: &str, style: Style, color: bool) -> String {
+    if !color {
+        return s.to_string();
+    }
+    let code = match style {
+        Style::Bold => "1",
+        Style::Dim => "2",
+    };
+    format!("\x1b[{code}m{s}\x1b[0m")
 }
 
 /// Unicode (half-block) QR of `data`, or `None` if it can't be encoded.
