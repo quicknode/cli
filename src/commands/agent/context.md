@@ -143,10 +143,11 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   the call per request with a crypto micropayment instead of an API key — no
   login, no Tooling Access. Requires `--network` as the payment gateway's path
   slug (e.g. `base-sepolia`; NOT validated by `list-networks`). Parameters:
-  `--pay-network <NETWORK>` (the chain the payment settles on — independent of
+  `--payment-network <NETWORK>` (the chain the payment settles on — independent of
   `--network`; a network name like `base-sepolia`/`solana-devnet`/`tempo-testnet`,
   or a raw CAIP-2 id like `eip155:84532`, which always passes through
-  verbatim), `--asset <ADDRESS>`, `--max-amount <BASE_UNITS>` (spend ceiling
+  verbatim), `--payment-asset <ADDRESS>` (a token contract/mint, or the symbol
+  `USDC`, resolved to that network's address), `--max-amount <BASE_UNITS>` (spend ceiling
   per call, integer base units, no default), and the private key via
   `--payment-key-file <PATH|->` > `--payment-wallet <NAME>` > `key_file` >
   `wallet` under `[rpc.payment]` in config. The key always comes from a file
@@ -169,7 +170,7 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **Discovery**: `qn rpc pay-networks` (alias `pay-nets`) lists the networks
   payable via the paid lane, from the gateways' public discovery endpoints
   (no API key). A listed slug is a valid `--network`; the x402 asset column is
-  a ready `--asset` value.
+  a ready `--payment-asset` value.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -241,7 +242,7 @@ is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 
 **Pay per call with a crypto micropayment (no API key, no login):**
 
-`--asset`/`--max-amount` must match a real offer for the network (see
+`--payment-asset`/`--max-amount` must match a real offer for the network (see
 `qn rpc pay-networks`); an unfunded wallet or a mismatched asset/amount is
 refused with HTTP 400/402 before anything settles.
 
@@ -252,27 +253,27 @@ qn rpc wallet generate --chain evm --name payer      # dedicated wallet; prints 
 
 # x402 on EVM (Base Sepolia testnet, USDC):
 qn rpc call eth_blockNumber --network base-sepolia --x402 \
-    --payment-wallet payer --pay-network base-sepolia \
-    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e --max-amount 1000
+    --payment-wallet payer --payment-network base-sepolia \
+    --payment-asset USDC --max-amount 1000
 
 # MPP on Tempo (testnet); same EVM wallet, --receipt adds the settlement ref:
 qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \
-    --payment-wallet payer --pay-network tempo-testnet \
-    --asset 0x20c0000000000000000000000000000000000000 --max-amount 1000
+    --payment-wallet payer --payment-network tempo-testnet \
+    --payment-asset USDC --max-amount 1000
 
 # x402 on Solana (devnet); needs an SVM wallet:
 qn rpc wallet generate --chain svm --name sol-payer
 qn rpc call getSlot --network solana-devnet --x402 \
-    --payment-wallet sol-payer --pay-network solana-devnet \
-    --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU --max-amount 1000
+    --payment-wallet sol-payer --payment-network solana-devnet \
+    --payment-asset USDC --max-amount 1000
 
 # Store the parameters in config to keep calls short (never the raw key):
 cat >> ~/.config/qn/config.toml <<'EOF'
 [rpc.payment]
-wallet      = "payer"                             # a stored wallet, or key_file = "<path>" (chmod 600)
-max_amount  = "1000"                           # spend ceiling per call, base units
-pay_network = "base-sepolia"                      # settlement chain: network name or CAIP-2 id
-asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+wallet          = "payer"                         # a stored wallet, or key_file = "<path>" (chmod 600)
+max_amount      = "1000"                          # spend ceiling per call, base units
+payment_network = "base-sepolia"                  # settlement chain: network name or CAIP-2 id
+payment_asset   = "USDC"                          # symbol (resolved per network), or a raw address/mint
 EOF
 qn rpc call eth_blockNumber --network base-sepolia --x402   # params now come from config
 ```

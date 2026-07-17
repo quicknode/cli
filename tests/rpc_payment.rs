@@ -134,9 +134,9 @@ async fn x402_happy_path_pays_and_bypasses_control_plane() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -148,6 +148,49 @@ async fn x402_happy_path_pays_and_bypasses_control_plane() {
         !dir.path().join("tokens.toml").exists(),
         "paid lane must not write the token cache"
     );
+}
+
+#[tokio::test]
+async fn x402_resolves_usdc_symbol_to_network_asset() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(X402Seq::new("1000"))
+        .expect(2) // one unpaid probe + one paid resend
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    // The symbol resolves to base-sepolia's USDC address (matching the offer's
+    // `asset`), so signing and the paid resend succeed exactly as passing the
+    // raw address would.
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "eth_blockNumber",
+            "--network",
+            "base-sepolia",
+            "--x402",
+            "--payment-key-file",
+            &key_path,
+            "--payment-network",
+            "eip155:84532",
+            "--payment-asset",
+            "USDC",
+            "--max-amount",
+            "10000",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
 #[tokio::test]
@@ -197,9 +240,9 @@ async fn payment_wallet_resolves_stored_key_for_paid_call() {
             "--x402",
             "--payment-wallet",
             "payer",
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -235,9 +278,9 @@ async fn pay_network_name_matches_caip2_offer() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "base-sepolia",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -267,7 +310,7 @@ async fn paid_call_works_keyless_with_config_params() {
         &cfg,
         format!(
             "[rpc.payment]\nkey_file = \"{key_path}\"\nmax_amount = \"10000\"\n\
-             pay_network = \"eip155:84532\"\nasset = \"{USDC}\"\n"
+             payment_network = \"eip155:84532\"\npayment_asset = \"{USDC}\"\n"
         ),
     )
     .unwrap();
@@ -315,9 +358,9 @@ async fn over_cap_offer_is_refused_before_signing() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -351,7 +394,7 @@ async fn flag_max_amount_overrides_config() {
         &cfg,
         format!(
             "[rpc.payment]\nkey_file = \"{key_path}\"\nmax_amount = \"999999\"\n\
-             pay_network = \"eip155:84532\"\nasset = \"{USDC}\"\n"
+             payment_network = \"eip155:84532\"\npayment_asset = \"{USDC}\"\n"
         ),
     )
     .unwrap();
@@ -407,7 +450,7 @@ async fn config_presence_does_not_auto_activate_payment() {
         format!(
             "[api]\nkey = \"test\"\n\n\
              [rpc.payment]\nkey_file = \"{key_path}\"\nmax_amount = \"10000\"\n\
-             pay_network = \"eip155:84532\"\nasset = \"{USDC}\"\n"
+             payment_network = \"eip155:84532\"\npayment_asset = \"{USDC}\"\n"
         ),
     )
     .unwrap();
@@ -454,9 +497,9 @@ async fn paid_lane_is_never_retried() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -494,9 +537,9 @@ async fn payment_rejected_on_paid_resend_exits_2_as_refused() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -544,9 +587,9 @@ async fn settlement_5xx_on_paid_resend_exits_3_check_wallet() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -589,9 +632,9 @@ async fn unparseable_paid_response_exits_3_check_wallet() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -631,9 +674,9 @@ async fn malformed_challenge_menu_exits_2_nothing_charged() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -680,9 +723,9 @@ async fn missing_network_fails_before_any_request() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -705,9 +748,9 @@ async fn unknown_pay_network_name_fails_before_any_request() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "not-a-chain",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -733,9 +776,9 @@ async fn missing_key_fails_before_any_request() {
             "--network",
             "base-sepolia",
             "--x402",
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -762,9 +805,9 @@ async fn missing_max_amount_fails_before_any_request() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
         ],
         "--max-amount",
@@ -785,9 +828,9 @@ async fn non_integer_max_amount_fails_before_any_request() {
             "--x402",
             "--payment-key-file",
             &key_path,
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "1.5",
@@ -804,7 +847,7 @@ async fn inline_config_key_fails_before_any_request() {
     std::fs::write(
         &cfg,
         "[rpc.payment]\nkey = \"0xdeadbeef\"\nmax_amount = \"10000\"\n\
-         pay_network = \"eip155:84532\"\nasset = \"0xabc\"\n",
+         payment_network = \"eip155:84532\"\npayment_asset = \"0xabc\"\n",
     )
     .unwrap();
     expect_preflight_error(
@@ -837,9 +880,9 @@ async fn params_and_key_both_from_stdin_conflict() {
             "--x402",
             "--payment-key-file",
             "-",
-            "--pay-network",
+            "--payment-network",
             "eip155:84532",
-            "--asset",
+            "--payment-asset",
             USDC,
             "--max-amount",
             "10000",
@@ -870,8 +913,8 @@ fn x402_and_mpp_are_mutually_exclusive() {
 fn payment_flags_require_a_scheme_flag() {
     for orphan in [
         vec!["--receipt"],
-        vec!["--pay-network", "eip155:84532"],
-        vec!["--asset", "0xabc"],
+        vec!["--payment-network", "eip155:84532"],
+        vec!["--payment-asset", "0xabc"],
         vec!["--max-amount", "1"],
         vec!["--payment-key-file", "/k"],
         vec!["--svm-rpc-url", "https://x"],
@@ -992,9 +1035,9 @@ async fn receipt_flag_wraps_stdout_on_mpp() {
             "tempo-testnet",
             "--mpp",
             "--receipt",
-            "--pay-network",
+            "--payment-network",
             "eip155:42431",
-            "--asset",
+            "--payment-asset",
             "0x20c0000000000000000000000000000000000000",
             "--max-amount",
             "10000",
@@ -1032,9 +1075,9 @@ async fn receipt_is_null_on_x402_and_bare_without_flag() {
         "--network",
         "base-sepolia",
         "--x402",
-        "--pay-network",
+        "--payment-network",
         "eip155:84532",
-        "--asset",
+        "--payment-asset",
         USDC,
         "--max-amount",
         "10000",

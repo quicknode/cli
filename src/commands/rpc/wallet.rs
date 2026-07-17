@@ -252,16 +252,17 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     ));
 
     // Funding hint (only meaningful interactively, where the QR is shown).
+    // Show a complete, runnable paid-lane call for this wallet's chain family
+    // so the address can go straight from funded to used.
     if on_tty {
         block.push('\n');
+        block.push_str(
+            "This wallet pays for RPC calls via micropayments (x402/MPP).\n\
+             Fund it on the chain you'll pay from, then use it:\n\n",
+        );
         block.push_str(&format!(
-            "Fund this {} address, then use it with {}.\n",
-            meta.chain,
-            style(
-                &format!("qn rpc call --payment-wallet {}", meta.name),
-                Style::Bold,
-                c
-            ),
+            "{}\n",
+            style(&example_call(&meta.chain, &meta.name), Style::Bold, c),
         ));
     }
 
@@ -270,6 +271,40 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     block.push_str(&style(&format!("⚠ {CUSTODY_NOTE}"), Style::Dim, c));
 
     ctx.out.note(&block);
+}
+
+/// A complete, runnable paid-lane `qn rpc call` for a freshly funded wallet,
+/// matching the documented examples in the README. SVM gets one x402/Solana
+/// example; EVM gets both an x402 (Base Sepolia USDC) and an MPP (Tempo
+/// testnet) example, since the same secp256k1 key works for both.
+/// `--max-amount 1000` selects the per-request offer (0.001 USDC).
+fn example_call(chain: &str, name: &str) -> String {
+    match chain {
+        "svm" => format!(
+            "qn rpc call getSlot \\\n  \
+             --network solana-devnet --x402 \\\n  \
+             --payment-wallet {name} \\\n  \
+             --payment-network solana-devnet \\\n  \
+             --payment-asset USDC \\\n  \
+             --max-amount 1000"
+        ),
+        _ => format!(
+            "# x402 (Base Sepolia USDC):\n\
+             qn rpc call eth_blockNumber \\\n  \
+             --network base-sepolia --x402 \\\n  \
+             --payment-wallet {name} \\\n  \
+             --payment-network base-sepolia \\\n  \
+             --payment-asset USDC \\\n  \
+             --max-amount 1000\n\n\
+             # MPP (Tempo testnet):\n\
+             qn rpc call eth_blockNumber \\\n  \
+             --network tempo-testnet --mpp \\\n  \
+             --payment-wallet {name} \\\n  \
+             --payment-network tempo-testnet \\\n  \
+             --payment-asset USDC \\\n  \
+             --max-amount 1000"
+        ),
+    }
 }
 
 /// A minimal ANSI style set, applied only when color is enabled.

@@ -24,6 +24,7 @@
 //! branches off before any of this module's token-cache or Tooling Access
 //! machinery runs.
 
+mod pay_asset;
 mod pay_network;
 mod pay_networks;
 mod payment;
@@ -63,8 +64,8 @@ pub enum RpcCmd {
         Paid (crypto micropayment, no API key; params from [rpc.payment] in config):\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402\n  \
         qn rpc call eth_blockNumber --network base-sepolia --x402 \\\n      \
-        --payment-wallet payer --pay-network base-sepolia \\\n      \
-        --asset 0x036C... --max-amount 10000\n  \
+        --payment-wallet payer --payment-network base-sepolia \\\n      \
+        --payment-asset USDC --max-amount 10000\n  \
         qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt\n\n\
         See payable networks and manage wallets:\n  \
         qn rpc pay-networks\n  \
@@ -170,24 +171,25 @@ pub struct CallArgs {
 
     /// Chain you PAY on — a network name (e.g. `base-sepolia`) or CAIP-2 id
     /// (e.g. `eip155:84532`) — independent of --network (the chain you
-    /// query). Falls back to `pay_network` under [rpc.payment].
+    /// query). Falls back to `payment_network` under [rpc.payment].
     #[arg(
         long,
         value_name = "NETWORK",
         requires = "payment",
         help_heading = "Payment"
     )]
-    pub pay_network: Option<String>,
+    pub payment_network: Option<String>,
 
-    /// Token to pay with: EVM contract address or Solana mint. Falls back to
-    /// `asset` under [rpc.payment].
+    /// Token to pay with: EVM contract address, Solana mint, or a symbol like
+    /// USDC (resolved per network). Falls back to `payment_asset` under
+    /// [rpc.payment].
     #[arg(
         long,
         value_name = "ADDRESS",
         requires = "payment",
         help_heading = "Payment"
     )]
-    pub asset: Option<String>,
+    pub payment_asset: Option<String>,
 
     /// Explicit Solana RPC URL for building x402/Solana payments. Falls back
     /// to `svm_rpc_url` under [rpc.payment], then a public Solana RPC (which

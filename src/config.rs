@@ -94,18 +94,18 @@ pub struct PaymentSection {
     /// silently ignore `key = "..."` and the user would think it took effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<toml::Value>,
-    /// Default spend ceiling per paid call, in integer base units of `asset`.
-    /// Accepts a TOML string or integer.
+    /// Default spend ceiling per paid call, in integer base units of
+    /// `payment_asset`. Accepts a TOML string or integer.
     #[serde(default, deserialize_with = "de_opt_string_or_int")]
     pub max_amount: Option<String>,
     /// Chain payments settle on: a Quicknode network name (e.g.
     /// `base-sepolia`) or a CAIP-2 id (e.g. `eip155:84532`). Independent of
     /// `--network` (the chain the RPC call queries).
     #[serde(default)]
-    pub pay_network: Option<String>,
+    pub payment_network: Option<String>,
     /// Token to pay with: EVM contract address or Solana mint.
     #[serde(default)]
-    pub asset: Option<String>,
+    pub payment_asset: Option<String>,
     /// Explicit Solana RPC URL for x402/Solana payment builds.
     #[serde(default)]
     pub svm_rpc_url: Option<String>,
@@ -892,8 +892,8 @@ mod tests {
             "[rpc.payment]\n\
              key_file = \"/keys/payer.key\"\n\
              max_amount = \"10000\"\n\
-             pay_network = \"eip155:84532\"\n\
-             asset = \"0xabc\"\n\
+             payment_network = \"eip155:84532\"\n\
+             payment_asset = \"0xabc\"\n\
              svm_rpc_url = \"https://solana.example/rpc\"\n",
         )
         .unwrap();
@@ -901,8 +901,8 @@ mod tests {
         let p = &cfg.rpc.payment;
         assert_eq!(p.key_file.as_deref(), Some(Path::new("/keys/payer.key")));
         assert_eq!(p.max_amount.as_deref(), Some("10000"));
-        assert_eq!(p.pay_network.as_deref(), Some("eip155:84532"));
-        assert_eq!(p.asset.as_deref(), Some("0xabc"));
+        assert_eq!(p.payment_network.as_deref(), Some("eip155:84532"));
+        assert_eq!(p.payment_asset.as_deref(), Some("0xabc"));
         assert_eq!(p.svm_rpc_url.as_deref(), Some("https://solana.example/rpc"));
         assert!(p.key.is_none());
     }

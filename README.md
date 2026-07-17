@@ -335,9 +335,9 @@ needed. **This moves real funds** (testnet tokens are still real transfers):
 use a dedicated, minimally funded wallet.
 
 The quickest path: see what's payable, generate a wallet, fund that exact
-address, then pay by name. `--asset` and `--max-amount` must match a real
-payment offer for the network — `qn rpc pay-networks` shows the x402 asset per
-network, and a paid call that names an unfunded wallet or a mismatched
+address, then pay by name. `--payment-asset` and `--max-amount` must match a
+real payment offer for the network — `qn rpc pay-networks` shows the x402 asset
+per network, and a paid call that names an unfunded wallet or a mismatched
 asset/amount is refused with HTTP 402 before anything settles.
 
 **x402 on EVM (Base Sepolia testnet, USDC):**
@@ -347,8 +347,8 @@ qn rpc wallet generate --chain evm --name payer       # prints the address + a Q
 qn rpc call eth_blockNumber \
     --network base-sepolia --x402 \
     --payment-wallet payer \
-    --pay-network base-sepolia \
-    --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+    --payment-network base-sepolia \
+    --payment-asset USDC \
     --max-amount 1000
 ```
 
@@ -363,8 +363,8 @@ format); `--receipt` wraps the result with the settlement reference.
 qn rpc call eth_blockNumber \
     --network tempo-testnet --mpp --receipt \
     --payment-wallet payer \
-    --pay-network tempo-testnet \
-    --asset 0x20c0000000000000000000000000000000000000 \
+    --payment-network tempo-testnet \
+    --payment-asset USDC \
     --max-amount 1000
 ```
 
@@ -375,24 +375,27 @@ qn rpc wallet generate --chain svm --name sol-payer   # fund this base58 address
 qn rpc call getSlot \
     --network solana-devnet --x402 \
     --payment-wallet sol-payer \
-    --pay-network solana-devnet \
-    --asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
+    --payment-network solana-devnet \
+    --payment-asset USDC \
     --max-amount 1000
 ```
 
-The query chain (`--network`) and the settlement chain (`--pay-network`) are
-independent, but the `--pay-network`/`--asset`/`--max-amount` trio must be a
-combination the gateway actually offers (again, `qn rpc pay-networks`). You can
-also point `--payment-key-file <PATH>` at a key file you manage yourself
-instead of a stored wallet.
+The query chain (`--network`) and the settlement chain (`--payment-network`)
+are independent, but the `--payment-network`/`--payment-asset`/`--max-amount`
+trio must be a combination the gateway actually offers (again, `qn rpc
+pay-networks`). You can also point `--payment-key-file <PATH>` at a key file
+you manage yourself instead of a stored wallet.
 
 - `--network` is required and names the chain you *query*, as the payment
-  gateway's path slug (independent of `--pay-network`, the chain the payment
-  *settles* on).
-- `--pay-network` takes a Quicknode network name (`base-sepolia`,
+  gateway's path slug (independent of `--payment-network`, the chain the
+  payment *settles* on).
+- `--payment-network` takes a Quicknode network name (`base-sepolia`,
   `solana-devnet`, `tempo-testnet`, ...) or a raw CAIP-2 id (`eip155:84532`,
   `solana:EtWTRA...`). Anything containing a `:` is passed through verbatim,
   so any `eip155:<chain-id>` works even without a named entry.
+- `--payment-asset` takes a token contract address (EVM), a mint (Solana), or
+  a symbol like `USDC` resolved to that network's address; run `qn rpc
+  pay-networks` for the raw addresses.
 - The private key resolves from `--payment-key-file <PATH>` (`-` for stdin),
   then `--payment-wallet <NAME>` (a stored wallet), then `key_file`, then
   `wallet` in config. It always comes from a file or a stored wallet — never
@@ -418,10 +421,10 @@ payment by itself:
 
 ```toml
 [rpc.payment]
-wallet      = "payer"                             # a stored wallet name (or key_file = "<path>")
-max_amount  = "10000"
-pay_network = "base-sepolia"                      # network name or CAIP-2 id
-asset       = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+wallet          = "payer"                         # a stored wallet name (or key_file = "<path>")
+max_amount      = "10000"
+payment_network = "base-sepolia"                  # network name or CAIP-2 id
+payment_asset   = "USDC"                           # symbol (resolved per network), or a raw address/mint
 ```
 
 ```sh
@@ -454,8 +457,9 @@ wallet are gone.
 
 `qn rpc pay-networks` (alias `pay-nets`) lists the networks the paid lane can
 use, read from the gateways' public discovery endpoints (no API key). A listed
-network is a valid `--network`; the x402 asset column is a ready `--asset`
-value. The list is cached in `~/.config/qn/pay-networks.toml` (24h TTL).
+network is a valid `--network`; the x402 asset column is a ready
+`--payment-asset` value. The list is cached in
+`~/.config/qn/pay-networks.toml` (24h TTL).
 
 ### Other
 

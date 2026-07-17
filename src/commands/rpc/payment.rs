@@ -173,32 +173,33 @@ fn resolve_payment_config(
         )));
     }
 
-    let pay_network = args
-        .pay_network
+    let payment_network = args
+        .payment_network
         .clone()
-        .or_else(|| section.pay_network.clone())
+        .or_else(|| section.payment_network.clone())
         .ok_or_else(|| {
             CliError::Arg(
-                "no pay network set. Pass --pay-network <NETWORK> (a network \
-                 name like base-sepolia, or a CAIP-2 id like eip155:84532) \
-                 or set `pay_network` under [rpc.payment]"
+                "no payment network set. Pass --payment-network <NETWORK> (a \
+                 network name like base-sepolia, or a CAIP-2 id like \
+                 eip155:84532) or set `payment_network` under [rpc.payment]"
                     .to_string(),
             )
         })?;
-    let pay_network = super::pay_network::resolve(&pay_network)?;
+    let payment_network = super::pay_network::resolve(&payment_network)?;
 
-    let asset = args
-        .asset
+    let payment_asset = args
+        .payment_asset
         .clone()
-        .or_else(|| section.asset.clone())
+        .or_else(|| section.payment_asset.clone())
         .ok_or_else(|| {
             CliError::Arg(
-                "no payment asset set. Pass --asset <ADDRESS> (the token \
-                 contract or mint to pay with) or set `asset` under \
-                 [rpc.payment]"
+                "no payment asset set. Pass --payment-asset <ADDRESS> (a token \
+                 contract or mint to pay with, or a symbol like USDC) or set \
+                 `payment_asset` under [rpc.payment]"
                     .to_string(),
             )
         })?;
+    let payment_asset = super::pay_asset::resolve(&payment_asset, &payment_network)?;
 
     let svm_rpc_url = match args
         .svm_rpc_url
@@ -213,8 +214,8 @@ fn resolve_payment_config(
         PaymentConfig {
             scheme: scheme.to_string(),
             key,
-            pay_network,
-            asset,
+            pay_network: payment_network,
+            asset: payment_asset,
             max_amount,
             svm_rpc_url,
             base_url_override,
@@ -368,8 +369,8 @@ mod tests {
             payment_key_file: None,
             payment_wallet: None,
             max_amount: Some("10000".to_string()),
-            pay_network: Some("eip155:84532".to_string()),
-            asset: Some("0xabc".to_string()),
+            payment_network: Some("eip155:84532".to_string()),
+            payment_asset: Some("0xabc".to_string()),
             svm_rpc_url: None,
             receipt: false,
         }
@@ -413,7 +414,7 @@ mod tests {
     #[test]
     fn pay_network_name_resolves_to_caip2() {
         let (mut args, _f) = paid_args_with_key(true);
-        args.pay_network = Some("base-sepolia".to_string());
+        args.payment_network = Some("base-sepolia".to_string());
         let (cfg, _, _) = resolve_payment_config(&args, &empty_section(), None, None).unwrap();
         assert_eq!(cfg.pay_network, "eip155:84532");
     }
@@ -421,9 +422,9 @@ mod tests {
     #[test]
     fn config_pay_network_name_resolves_too() {
         let mut section = empty_section();
-        section.pay_network = Some("solana-devnet".to_string());
+        section.payment_network = Some("solana-devnet".to_string());
         let (mut args, _f) = paid_args_with_key(true);
-        args.pay_network = None;
+        args.payment_network = None;
         let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
         assert_eq!(cfg.pay_network, "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1");
     }
@@ -431,7 +432,7 @@ mod tests {
     #[test]
     fn unknown_pay_network_name_is_an_arg_error() {
         let (mut args, _f) = paid_args_with_key(true);
-        args.pay_network = Some("btc".to_string());
+        args.payment_network = Some("btc".to_string());
         let err = resolve_payment_config(&args, &empty_section(), None, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unknown pay network 'btc'"), "got: {msg}");
@@ -610,14 +611,14 @@ mod tests {
             wallet: None,
             key: None,
             max_amount: Some("5000".to_string()),
-            pay_network: Some("eip155:42431".to_string()),
-            asset: Some("0xdef".to_string()),
+            payment_network: Some("eip155:42431".to_string()),
+            payment_asset: Some("0xdef".to_string()),
             svm_rpc_url: None,
         };
         let mut args = paid_args(false);
         args.max_amount = None;
-        args.pay_network = None;
-        args.asset = None;
+        args.payment_network = None;
+        args.payment_asset = None;
         let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
         assert_eq!(cfg.scheme, "mpp");
         assert_eq!(cfg.max_amount, "5000");
