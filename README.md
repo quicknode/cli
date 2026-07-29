@@ -423,7 +423,7 @@ qn wallet generate --chain evm --name payer           # dedicated wallet
 
 # Testnet only: fund the wallet from the faucet (Base Sepolia, once per
 # account). Prints the funding tx; mainnet wallets are funded normally.
-qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
+qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia
 
 # Buy prepaid credits with the funded wallet (moves real funds; gated — pass
 # --yes to skip the prompt).
@@ -431,7 +431,7 @@ qn rpc x402 buy-credits --network base-sepolia --payment-wallet payer \
     --payment-network base-sepolia --payment-asset USDC --max-amount 10000000
 
 # Check the balance (prints the bare number).
-qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia --payment-asset USDC
+qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia
 
 # Spend credits on calls. A drawdown call signs nothing per request, so it
 # needs only the wallet — no asset or spend ceiling.
