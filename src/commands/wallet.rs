@@ -9,7 +9,7 @@
 //! Storage layout, per wallet `<name>`:
 //! - `<name>`        — the raw private key (0600), the exact bytes the paid
 //!   lane's `read_key_file` expects.
-//! - `<name>.toml`   — public metadata (chain, address, created-at). Never the
+//! - `<name>.toml`   — public metadata (vm, address, created-at). Never the
 //!   key, so `list`/`show` read this and never open the key file.
 //!
 //! The key is stored **unencrypted** at 0600 (the `solana-keygen` model): the
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, set_header_bold, write_table, Render};
+use crate::output::{new_table, set_header_bold, style, write_table, Render, Style};
 
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
@@ -39,11 +39,11 @@ pub struct Args {
 pub enum WalletCmd {
     /// Generate a new payment wallet and store it locally.
     #[command(after_help = "Examples:\n  \
-        qn wallet generate --chain evm --name payer\n  \
-        qn wallet generate --chain svm --name sol-payer")]
+        qn wallet generate --vm evm --name payer\n  \
+        qn wallet generate --vm svm --name sol-payer")]
     Generate(GenerateArgs),
 
-    /// List stored wallets (names, chain, address — never keys).
+    /// List stored wallets (names, VM family, address — never keys).
     #[command(visible_alias = "ls")]
     List,
 
@@ -54,38 +54,38 @@ pub enum WalletCmd {
     Rm(RmArgs),
 }
 
-/// Pay-chain family a generated wallet targets. `evm` also covers MPP/Tempo
+/// VM family a generated wallet targets. `evm` also covers MPP/Tempo
 /// (same secp256k1 key format).
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[value(rename_all = "lower")]
-pub enum WalletChain {
+pub enum WalletVm {
     /// secp256k1 wallet for x402/EVM and MPP/Tempo (`0x…` hex key).
     Evm,
     /// ed25519 wallet for x402/Solana (base58 key).
     Svm,
 }
 
-impl WalletChain {
+impl WalletVm {
     fn kind(self) -> ChainKind {
         match self {
-            WalletChain::Evm => ChainKind::Evm,
-            WalletChain::Svm => ChainKind::Svm,
+            WalletVm::Evm => ChainKind::Evm,
+            WalletVm::Svm => ChainKind::Svm,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            WalletChain::Evm => "evm",
-            WalletChain::Svm => "svm",
+            WalletVm::Evm => "evm",
+            WalletVm::Svm => "svm",
         }
     }
 }
 
 #[derive(Debug, ClapArgs)]
 pub struct GenerateArgs {
-    /// Pay-chain family: `evm` (x402/EVM, also MPP/Tempo) or `svm` (x402/Solana).
+    /// VM family: `evm` (x402/EVM, also MPP/Tempo) or `svm` (x402/Solana).
     #[arg(long)]
-    pub chain: WalletChain,
+    pub vm: WalletVm,
 
     /// Wallet name (a-z, 0-9, `-`, `_`). Becomes the key file name and the
     /// `--payment-wallet` handle.
@@ -134,10 +134,10 @@ fn generate(a: GenerateArgs, ctx: Ctx) -> Result<(), CliError> {
         )));
     }
 
-    let wallet = generate_payment_wallet(a.chain.kind())?;
+    let wallet = generate_payment_wallet(a.vm.kind())?;
     let meta = WalletMeta {
         name: name.clone(),
-        chain: a.chain.label().to_string(),
+        vm: a.vm.label().to_string(),
         address: wallet.address.clone(),
         created_at_unix: now_unix(),
     };
@@ -148,7 +148,7 @@ fn generate(a: GenerateArgs, ctx: Ctx) -> Result<(), CliError> {
     write_meta(&meta_path, &meta)?;
 
     ctx.out
-        .note(&format!("✓ Generated {} wallet '{name}'", a.chain.label()));
+        .note(&format!("✓ Generated {} wallet '{name}'", a.vm.label()));
     emit_address(&ctx, &meta, &key_path, /* with_qr */ true);
     Ok(())
 }
@@ -252,18 +252,33 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     ));
 
     // Funding hint (only meaningful interactively, where the QR is shown).
-    // Show a complete, runnable paid-lane call for this wallet's chain family
-    // so the address can go straight from funded to used.
+    // Show the testnet funding routes for this wallet's VM family, then a
+    // complete, runnable paid-lane call so the address can go straight from
+    // funded to used.
     if on_tty {
         block.push('\n');
         block.push_str(
-            "This wallet pays for RPC calls via micropayments (x402/MPP).\n\
-             Fund it on the chain you'll pay from, then use it:\n\n",
+            "This wallet can be used to pay for RPC calls via micropayments (x402/MPP).\n\
+             Fund it on the network you'll pay from. Testnet funding:\n\n",
         );
+        block.push_str(&format!("{}\n\n", funding_hint(&meta.vm, &meta.name)));
+        block.push_str("Then use it:\n\n");
         block.push_str(&format!(
             "{}\n",
-            style(&example_call(&meta.chain, &meta.name), Style::Bold, c),
+            style(&example_call(&meta.vm, &meta.name), Style::Bold, c),
         ));
+
+        let config_path = ctx
+            .global
+            .resolve_config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "~/.config/qn/config.toml".to_string());
+        block.push('\n');
+        block.push_str(&format!(
+            "To make it the default payment wallet (per-call flags still \
+             override), add to {config_path}:\n\n",
+        ));
+        block.push_str(&format!("{}\n", config_example(&meta.vm, &meta.name)));
     }
 
     // Custody note as dim fine-print, set off by a blank line.
@@ -273,13 +288,46 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     ctx.out.note(&block);
 }
 
+/// A paste-ready `[rpc.payment]` config section that makes this wallet the
+/// default payer, with network/asset/ceiling defaults matching the printed
+/// example call. The section only supplies values — a scheme flag
+/// (`--x402`/`--mpp`) still activates payment per call.
+fn config_example(vm: &str, name: &str) -> String {
+    let network = match vm {
+        "svm" => "solana-devnet",
+        _ => "base-sepolia",
+    };
+    format!(
+        "  [rpc.payment]\n  \
+           wallet = \"{name}\"\n  \
+           payment_network = \"{network}\"\n  \
+           payment_asset = \"USDC\"\n  \
+           max_amount = 1000"
+    )
+}
+
+/// Testnet funding routes for a fresh wallet, per VM family. EVM gets the
+/// gateway's built-in Base Sepolia faucet (`qn rpc x402 drip`, pre-filled with
+/// this wallet's name), the Circle faucet for the USDC testnets, and the
+/// XLayer USDG note; SVM gets the Circle faucet on Solana Devnet.
+fn funding_hint(vm: &str, name: &str) -> String {
+    match vm {
+        "svm" => "  Circle faucet:  https://faucet.circle.com (USDC on Solana Devnet)".to_string(),
+        _ => format!(
+            "  Base Sepolia:   qn rpc x402 drip --payment-wallet {name} --payment-network base-sepolia\n  \
+               Circle faucet:  https://faucet.circle.com (USDC on Base Sepolia, Polygon Amoy, Arc)\n  \
+               XLayer Testnet: send USDG to the address above"
+        ),
+    }
+}
+
 /// A complete, runnable paid-lane `qn rpc call` for a freshly funded wallet,
 /// matching the documented examples in the README. SVM gets one x402/Solana
 /// example; EVM gets both an x402 (Base Sepolia USDC) and an MPP (Tempo
 /// testnet) example, since the same secp256k1 key works for both.
 /// `--max-amount 1000` selects the per-request offer (0.001 USDC).
-fn example_call(chain: &str, name: &str) -> String {
-    match chain {
+fn example_call(vm: &str, name: &str) -> String {
+    match vm {
         "svm" => format!(
             "qn rpc call getSlot \\\n  \
              --network solana-devnet --x402 \\\n  \
@@ -305,23 +353,6 @@ fn example_call(chain: &str, name: &str) -> String {
              --max-amount 1000"
         ),
     }
-}
-
-/// A minimal ANSI style set, applied only when color is enabled.
-enum Style {
-    Bold,
-    Dim,
-}
-
-fn style(s: &str, style: Style, color: bool) -> String {
-    if !color {
-        return s.to_string();
-    }
-    let code = match style {
-        Style::Bold => "1",
-        Style::Dim => "2",
-    };
-    format!("\x1b[{code}m{s}\x1b[0m")
 }
 
 /// Unicode (half-block) QR of `data`, or `None` if it can't be encoded.
@@ -352,11 +383,11 @@ impl Render for WalletsView {
             return Ok(());
         }
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["NAME", "CHAIN", "ADDRESS"]);
+        set_header_bold(&mut t, ctx, vec!["NAME", "VM", "ADDRESS"]);
         for wl in &self.0 {
             t.add_row(vec![
                 Cell::new(&wl.name),
-                Cell::new(&wl.chain),
+                Cell::new(&wl.vm),
                 Cell::new(&wl.address),
             ]);
         }
@@ -371,7 +402,9 @@ impl Render for WalletsView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletMeta {
     name: String,
-    chain: String,
+    // `alias` keeps sidecars written before the `--vm` rename loadable.
+    #[serde(alias = "chain")]
+    vm: String,
     address: String,
     created_at_unix: i64,
 }
@@ -383,10 +416,10 @@ impl Render for WalletMeta {
         ctx: &crate::output::OutputCtx,
     ) -> std::io::Result<()> {
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["NAME", "CHAIN", "ADDRESS"]);
+        set_header_bold(&mut t, ctx, vec!["NAME", "VM", "ADDRESS"]);
         t.add_row(vec![
             Cell::new(&self.name),
-            Cell::new(&self.chain),
+            Cell::new(&self.vm),
             Cell::new(&self.address),
         ]);
         write_table(w, &t)

@@ -209,7 +209,7 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   `--x402`/`--mpp`/`--x402-drawdown`/`--endpoint-url`, and points at
   `qn rpc mpp top-up` when the channel deposit is exhausted.
 - `wallet` — the local store of payment wallets for the paid RPC lane; no API
-  key or login required. `qn wallet generate --chain <evm|svm> --name <NAME>`
+  key or login required. `qn wallet generate --vm <evm|svm> --name <NAME>`
   creates and stores a dedicated payment wallet (raw key at 0600 under
   `<config-dir>/qn/wallets/`, `evm` also covers MPP/Tempo), printing its
   address (and a QR to fund it on a terminal); `qn wallet list`/`show <NAME>`
@@ -295,7 +295,7 @@ refused with HTTP 400/402 before anything settles.
 
 ```sh
 qn rpc pay-networks                                  # which networks are payable, and the x402 asset
-qn wallet generate --chain evm --name payer          # dedicated wallet; prints its address + a QR to fund
+qn wallet generate --vm evm --name payer             # dedicated wallet; prints its address + a QR to fund
 # → fund THAT address, then pick a lane:
 
 # x402 on EVM (Base Sepolia testnet, USDC):
@@ -309,7 +309,7 @@ qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \
     --payment-asset USDC --max-amount 1000
 
 # x402 on Solana (devnet); needs an SVM wallet:
-qn wallet generate --chain svm --name sol-payer
+qn wallet generate --vm svm --name sol-payer
 qn rpc call getSlot --network solana-devnet --x402 \
     --payment-wallet sol-payer --payment-network solana-devnet \
     --payment-asset USDC --max-amount 1000

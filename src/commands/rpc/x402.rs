@@ -24,6 +24,7 @@ use quicknode_sdk::{CreditBalance, PaymentConfig};
 use crate::config::{self, PaymentSection};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
+use crate::output::{style, Style};
 
 use super::payment::{
     ensure_gateway_session, resolve_payment_params, resolve_session_params, PaymentParams,
@@ -256,23 +257,32 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
         "✓ Bought credits (balance: {})",
         fmt_credits(balance.credits)
     ));
-    ctx.out
-        .note(&format!("  Next: {}", drawdown_call_hint(&args, &network)));
+    ctx.out.note(&format!(
+        "\n{}\n\n{}",
+        style(
+            "Spend the credits on calls (signs nothing per request):",
+            Style::Bold,
+            ctx.out.color,
+        ),
+        drawdown_call_hint(&args, &network)
+    ));
     emit_balance(&ctx, &balance)
 }
 
-// A copy-pasteable `--x402-drawdown` call reflecting the flags the user just
-// used, so the chained next step runs as-is.
+// A copy-pasteable, multi-line `--x402-drawdown` call reflecting the flags the
+// user just used, so the chained next step runs as-is.
 fn drawdown_call_hint(args: &PaymentArgs, network: &str) -> String {
     let mut cmd = format!(
-        "qn rpc call eth_blockNumber --network {network} --x402-drawdown --payment-wallet {}",
+        "  qn rpc call eth_blockNumber \\\n    \
+           --network {network} --x402-drawdown \\\n    \
+           --payment-wallet {}",
         args.payment_wallet.as_deref().unwrap_or("<NAME>")
     );
     // The drawdown call defaults its pay network to --network, so only append
     // --payment-network when the user set an explicit one that differs.
     if let Some(pn) = &args.payment_network {
         if pn != network {
-            cmd.push_str(&format!(" --payment-network {pn}"));
+            cmd.push_str(&format!(" \\\n    --payment-network {pn}"));
         }
     }
     cmd
@@ -296,17 +306,54 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
         "✓ Faucet funded {} (tx: {})",
         receipt.account_id, receipt.transaction_hash
     ));
-    // Point at buy-credits with the flags the user already supplied.
-    let net = args.network.as_deref().or(args.payment_network.as_deref());
-    // buy-credits signs, so the hint carries the asset + ceiling placeholders
-    // the user fills in for the purchase (drip itself collects neither).
-    ctx.out.note(&format!(
-        "  Next: qn rpc x402 buy-credits --network {} --payment-wallet {} \
-         --payment-network {} --payment-asset <ASSET> --max-amount 1000000",
-        net.unwrap_or("<SLUG>"),
-        args.payment_wallet.as_deref().unwrap_or("<NAME>"),
-        args.payment_network.as_deref().unwrap_or("<NET>"),
+    // Point at the two paid lanes with the flags the user already supplied;
+    // USDC is the asset the faucet just funded.
+    let query_net = args
+        .network
+        .as_deref()
+        .or(args.payment_network.as_deref())
+        .unwrap_or("<SLUG>");
+    let wallet = args.payment_wallet.as_deref().unwrap_or("<NAME>");
+    let pay_net = args.payment_network.as_deref().unwrap_or("<NET>");
+    let c = ctx.out.color;
+
+    let mut block = String::new();
+    block.push_str(
+        "\nThis wallet now has funds that can be used to pay for blockchain calls\n\
+         using micropayments.\n\n",
+    );
+    block.push_str(&style(
+        "Pay per-request (sign a payment on each call):",
+        Style::Bold,
+        c,
     ));
+    block.push_str(&format!(
+        "\n\n  \
+         qn rpc call eth_blockNumber \\\n    \
+           --network {query_net} --x402 \\\n    \
+           --payment-wallet {wallet} \\\n    \
+           --payment-network {pay_net} \\\n    \
+           --payment-asset USDC \\\n    \
+           --max-amount 1000\n\n"
+    ));
+    block.push_str(&style(
+        "Credit drawdown (buy prepaid credits once, then spend them):",
+        Style::Bold,
+        c,
+    ));
+    block.push_str(&format!(
+        "\n\n  \
+         qn rpc x402 buy-credits \\\n    \
+           --network {query_net} \\\n    \
+           --payment-wallet {wallet} \\\n    \
+           --payment-network {pay_net} \\\n    \
+           --payment-asset USDC \\\n    \
+           --max-amount 1000000\n\n  \
+         qn rpc call eth_blockNumber \\\n    \
+           --network {query_net} --x402-drawdown \\\n    \
+           --payment-wallet {wallet}"
+    ));
+    ctx.out.note(&block);
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
         let v = serde_json::json!({
             "account_id": receipt.account_id,

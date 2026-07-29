@@ -217,7 +217,7 @@ async fn payment_wallet_resolves_stored_key_for_paid_call() {
             &cfg,
             "wallet",
             "generate",
-            "--chain",
+            "--vm",
             "evm",
             "--name",
             "payer",

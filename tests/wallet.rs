@@ -33,7 +33,7 @@ async fn generate_writes_key_and_sidecar_at_0600() {
             &cfg,
             "wallet",
             "generate",
-            "--chain",
+            "--vm",
             "evm",
             "--name",
             "payer",
@@ -51,9 +51,9 @@ async fn generate_writes_key_and_sidecar_at_0600() {
     let raw = std::fs::read_to_string(&key).unwrap();
     assert!(raw.trim().starts_with("0x"), "key not 0x-prefixed: {raw}");
 
-    // The sidecar records the chain + a derived 0x address, never the key.
+    // The sidecar records the vm + a derived 0x address, never the key.
     let meta_text = std::fs::read_to_string(&meta).unwrap();
-    assert!(meta_text.contains("chain = \"evm\""), "meta: {meta_text}");
+    assert!(meta_text.contains("vm = \"evm\""), "meta: {meta_text}");
     assert!(meta_text.contains("0x"), "meta has no address: {meta_text}");
     assert!(!meta_text.contains(raw.trim()), "sidecar leaked the key!");
 
@@ -85,7 +85,7 @@ async fn generate_svm_stores_base58_key() {
             &cfg,
             "wallet",
             "generate",
-            "--chain",
+            "--vm",
             "svm",
             "--name",
             "sol",
@@ -106,7 +106,7 @@ async fn generate_svm_stores_base58_key() {
 
     // The address in the sidecar is the base58 pubkey, not a 0x address.
     let meta = std::fs::read_to_string(wallets_dir(dir.path()).join("sol.toml")).unwrap();
-    assert!(meta.contains("chain = \"svm\""), "meta: {meta}");
+    assert!(meta.contains("vm = \"svm\""), "meta: {meta}");
 }
 
 #[tokio::test]
@@ -118,7 +118,7 @@ async fn generate_refuses_overwrite_without_force() {
         &cfg,
         "wallet",
         "generate",
-        "--chain",
+        "--vm",
         "evm",
         "--name",
         "dup",
@@ -150,7 +150,7 @@ async fn generate_rejects_unsafe_name() {
             &cfg,
             "wallet",
             "generate",
-            "--chain",
+            "--vm",
             "evm",
             "--name",
             "../escape",
@@ -177,7 +177,7 @@ async fn rm_without_yes_non_tty_needs_confirmation_and_keeps_files() {
                 &cfg,
                 "wallet",
                 "generate",
-                "--chain",
+                "--vm",
                 "evm",
                 "--name",
                 "keep",
@@ -207,7 +207,7 @@ async fn rm_with_yes_deletes_key_and_sidecar() {
                 &cfg,
                 "wallet",
                 "generate",
-                "--chain",
+                "--vm",
                 "evm",
                 "--name",
                 "gone",
@@ -274,7 +274,7 @@ async fn generate_prints_key_path_and_custody_note() {
             "--no-color",
             "wallet",
             "generate",
-            "--chain",
+            "--vm",
             "evm",
             "--name",
             "payer",

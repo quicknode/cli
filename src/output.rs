@@ -295,6 +295,24 @@ where
     }
 }
 
+/// A minimal ANSI style set for free-form stderr blocks (not tables),
+/// applied only when color is enabled.
+pub(crate) enum Style {
+    Bold,
+    Dim,
+}
+
+pub(crate) fn style(s: &str, style: Style, color: bool) -> String {
+    if !color {
+        return s.to_string();
+    }
+    let code = match style {
+        Style::Bold => "1",
+        Style::Dim => "2",
+    };
+    format!("\x1b[{code}m{s}\x1b[0m")
+}
+
 /// Helper: a Cell whose text is `value.map_or("—", |v| &v.to_string())`.
 pub fn opt_cell<T: ToString>(v: &Option<T>) -> Cell {
     match v {

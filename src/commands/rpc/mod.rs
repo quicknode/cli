@@ -77,7 +77,7 @@ pub enum RpcCmd {
         qn rpc call eth_blockNumber --network tempo-testnet --mpp-session --payment-wallet payer\n\n\
         See payable networks and manage wallets:\n  \
         qn rpc pay-networks\n  \
-        qn wallet generate --chain evm --name payer")]
+        qn wallet generate --vm evm --name payer")]
     Call(Box<CallArgs>),
 
     /// List the endpoint's available network keys (no RPC call).
