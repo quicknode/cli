@@ -1,4 +1,4 @@
-//! Integration tests for `qn rpc wallet …` — the local payment-wallet store.
+//! Integration tests for `qn wallet …` — the local payment-wallet store.
 //!
 //! These commands are keyless and make no HTTP calls, so there's no wiremock
 //! gateway here. The in-process harness doesn't capture stdout, so assertions
@@ -31,7 +31,6 @@ async fn generate_writes_key_and_sidecar_at_0600() {
         &[
             "--config-file",
             &cfg,
-            "rpc",
             "wallet",
             "generate",
             "--chain",
@@ -84,7 +83,6 @@ async fn generate_svm_stores_base58_key() {
         &[
             "--config-file",
             &cfg,
-            "rpc",
             "wallet",
             "generate",
             "--chain",
@@ -118,7 +116,6 @@ async fn generate_refuses_overwrite_without_force() {
     let args = &[
         "--config-file",
         &cfg,
-        "rpc",
         "wallet",
         "generate",
         "--chain",
@@ -151,7 +148,6 @@ async fn generate_rejects_unsafe_name() {
         &[
             "--config-file",
             &cfg,
-            "rpc",
             "wallet",
             "generate",
             "--chain",
@@ -179,7 +175,6 @@ async fn rm_without_yes_non_tty_needs_confirmation_and_keeps_files() {
             &[
                 "--config-file",
                 &cfg,
-                "rpc",
                 "wallet",
                 "generate",
                 "--chain",
@@ -194,11 +189,7 @@ async fn rm_without_yes_non_tty_needs_confirmation_and_keeps_files() {
     );
 
     // Non-TTY without --yes: exit 5, and both files remain.
-    let out = run_qn(
-        BASE,
-        &["--config-file", &cfg, "rpc", "wallet", "rm", "keep"],
-    )
-    .await;
+    let out = run_qn(BASE, &["--config-file", &cfg, "wallet", "rm", "keep"]).await;
     assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
     assert!(wallets_dir(dir.path()).join("keep").exists());
     assert!(wallets_dir(dir.path()).join("keep.toml").exists());
@@ -214,7 +205,6 @@ async fn rm_with_yes_deletes_key_and_sidecar() {
             &[
                 "--config-file",
                 &cfg,
-                "rpc",
                 "wallet",
                 "generate",
                 "--chain",
@@ -230,15 +220,7 @@ async fn rm_with_yes_deletes_key_and_sidecar() {
 
     let out = run_qn(
         BASE,
-        &[
-            "--config-file",
-            &cfg,
-            "rpc",
-            "wallet",
-            "rm",
-            "gone",
-            "--yes",
-        ],
+        &["--config-file", &cfg, "wallet", "rm", "gone", "--yes"],
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
@@ -252,15 +234,7 @@ async fn rm_unknown_wallet_errors() {
     let cfg = cfg_in(dir.path());
     let out = run_qn(
         BASE,
-        &[
-            "--config-file",
-            &cfg,
-            "rpc",
-            "wallet",
-            "rm",
-            "nope",
-            "--yes",
-        ],
+        &["--config-file", &cfg, "wallet", "rm", "nope", "--yes"],
     )
     .await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
@@ -275,11 +249,7 @@ async fn rm_unknown_wallet_errors() {
 async fn show_unknown_wallet_errors() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = cfg_in(dir.path());
-    let out = run_qn(
-        BASE,
-        &["--config-file", &cfg, "rpc", "wallet", "show", "ghost"],
-    )
-    .await;
+    let out = run_qn(BASE, &["--config-file", &cfg, "wallet", "show", "ghost"]).await;
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
     assert!(
         out.stderr.contains("no wallet named"),
@@ -302,7 +272,6 @@ async fn generate_prints_key_path_and_custody_note() {
             &cfg,
             "--no-input",
             "--no-color",
-            "rpc",
             "wallet",
             "generate",
             "--chain",

@@ -1,4 +1,4 @@
-//! `qn rpc wallet …` — a local store of dedicated payment wallets.
+//! `qn wallet …` — a local store of dedicated payment wallets.
 //!
 //! Removes the raw-key-file juggling the paid RPC lane otherwise requires:
 //! `generate` creates a fresh keypair, stores the raw key at 0600 under
@@ -39,8 +39,8 @@ pub struct Args {
 pub enum WalletCmd {
     /// Generate a new payment wallet and store it locally.
     #[command(after_help = "Examples:\n  \
-        qn rpc wallet generate --chain evm --name payer\n  \
-        qn rpc wallet generate --chain svm --name sol-payer")]
+        qn wallet generate --chain evm --name payer\n  \
+        qn wallet generate --chain svm --name sol-payer")]
     Generate(GenerateArgs),
 
     /// List stored wallets (names, chain, address — never keys).
@@ -220,7 +220,7 @@ const CUSTODY_NOTE: &str = "This wallet is stored only on this machine. \
 /// Prints the address to stdout (the pipeable value), and to stderr a spaced,
 /// lightly-styled block: the QR (TTY only), the private key file path, a
 /// funding hint, and the custody note. Everything but the bare address goes to
-/// stderr, so a piped `qn rpc wallet show` yields just the address; the QR
+/// stderr, so a piped `qn wallet show` yields just the address; the QR
 /// must never go to stdout — it would corrupt the pipe. Styling is applied
 /// only when `ctx.out.color` is set (a TTY with color enabled).
 fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
@@ -453,8 +453,23 @@ fn validate_name(name: &str) -> Result<String, CliError> {
 
 fn not_found(name: &str) -> CliError {
     CliError::Arg(format!(
-        "no wallet named '{name}'. Run 'qn rpc wallet list' to see stored wallets"
+        "no wallet named '{name}'. Run 'qn wallet list' to see stored wallets, \
+         or create one with 'qn wallet generate'"
     ))
+}
+
+/// Resolves a stored wallet name to its key file path, validating the name and
+/// checking the file exists. Also used by the paid RPC lane's
+/// `--payment-wallet`, so the name rules live in one place.
+pub(crate) fn key_path(name: &str, wallets_dir: Option<&Path>) -> Result<PathBuf, CliError> {
+    let name = validate_name(name)?;
+    let dir = wallets_dir
+        .ok_or_else(|| CliError::Arg("could not resolve the wallet store directory".to_string()))?;
+    let path = dir.join(&name);
+    if !path.exists() {
+        return Err(not_found(&name));
+    }
+    Ok(path)
 }
 
 fn remove_err(path: &Path, source: std::io::Error) -> CliError {

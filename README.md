@@ -353,8 +353,8 @@ Every path needs a payment wallet. Two options:
    referenced by name with `--payment-wallet`):
 
    ```sh
-   qn rpc wallet generate --chain evm --name payer   # evm also covers MPP/Tempo
-   qn rpc wallet generate --chain svm --name sol-payer  # svm for x402/Solana
+   qn wallet generate --chain evm --name payer       # evm also covers MPP/Tempo
+   qn wallet generate --chain svm --name sol-payer   # svm for x402/Solana
    ```
 
    `generate` prints the address (and a QR on a terminal) to fund. The key is
@@ -377,7 +377,7 @@ is a ready `--payment-asset`. Cached at `~/.config/qn/pay-networks.toml` (24h).
 Sign an x402 payment on each call (EVM or Solana stablecoin):
 
 ```sh
-qn rpc wallet generate --chain evm --name payer       # fund the printed address with Base Sepolia USDC
+qn wallet generate --chain evm --name payer           # fund the printed address with Base Sepolia USDC
 qn rpc call eth_blockNumber \
     --network base-sepolia --x402 \
     --payment-wallet payer \
@@ -400,7 +400,7 @@ uses the same secp256k1 key format); `--receipt` wraps the result with the
 settlement transaction hash:
 
 ```sh
-qn rpc wallet generate --chain evm --name payer       # fund on Tempo testnet
+qn wallet generate --chain evm --name payer           # fund on Tempo testnet
 qn rpc call eth_blockNumber \
     --network tempo-testnet --mpp --receipt \
     --payment-wallet payer \
@@ -419,7 +419,7 @@ Buy a block of prepaid credits once, then spend them with no per-call signing
 (one credit per successful response):
 
 ```sh
-qn rpc wallet generate --chain evm --name payer       # dedicated wallet
+qn wallet generate --chain evm --name payer           # dedicated wallet
 
 # Testnet only: fund the wallet from the faucet (Base Sepolia, once per
 # account). Prints the funding tx; mainnet wallets are funded normally.
@@ -448,7 +448,7 @@ Open an on-chain escrow payment channel once, then pay per call with a
 cumulative EIP-712 voucher (no on-chain transaction per call):
 
 ```sh
-qn rpc wallet generate --chain evm --name payer       # evm covers Tempo; fund the address
+qn wallet generate --chain evm --name payer           # evm covers Tempo; fund the address
 
 # Open a channel by depositing into the escrow (moves real funds; gated).
 qn rpc mpp open --network tempo-testnet --deposit 1000000 \
@@ -502,13 +502,25 @@ payment_asset   = "USDC"           # symbol (resolved per network), or a raw add
 qn rpc call eth_blockNumber --network base-sepolia --x402
 ```
 
-Manage stored wallets with `qn rpc wallet`:
+Manage stored wallets with the top-level `qn wallet` noun (see
+[Wallets](#wallets)).
+
+### Wallets
+
+`qn wallet` (alias `wallets`) manages the local store of payment wallets the
+paid RPC lane uses (see [Micropayments](#micropayments)). It needs no API key
+or login:
 
 ```sh
-qn rpc wallet list                                # names, chain, address (never the key)
-qn rpc wallet show payer                          # bare address to stdout; QR + key path to stderr
-qn rpc wallet rm payer                            # gated: --yes to confirm; the key is unrecoverable
+qn wallet generate --chain evm --name payer   # create + store; prints the address and a QR to fund
+qn wallet list                                # names, chain, address (never the key)
+qn wallet show payer                          # bare address to stdout; QR + key path to stderr
+qn wallet rm payer                            # gated: --yes to confirm; the key is unrecoverable
 ```
+
+Keys are stored unencrypted at `0600` under `~/.config/qn/wallets/`. Treat each
+wallet as a dedicated, minimally funded hot wallet: it lives only on this
+machine, and Quicknode does not hold, back up, or recover it.
 
 ### Other
 

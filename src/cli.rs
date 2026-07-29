@@ -158,6 +158,10 @@ pub enum Command {
     /// Make RPC calls.
     Rpc(commands::rpc::Args),
 
+    /// Manage local payment wallets for the paid RPC lane (`--x402`/`--mpp`).
+    #[command(visible_alias = "wallets")]
+    Wallet(commands::wallet::Args),
+
     /// Manage Tooling Access (the endpoint `qn rpc` uses).
     #[command(name = "tooling-access")]
     ToolingAccess(commands::tooling_access::Args),
@@ -256,6 +260,11 @@ impl Cli {
             // rpc builds its own Ctx (it seeds the SDK from the on-disk token
             // cache before construction), so it takes `global` directly.
             Command::Rpc(args) => commands::rpc::run(args, global).await,
+            // wallet manages local key files only — no API key, no payment
+            // lane — so it uses the keyless Ctx constructor.
+            Command::Wallet(args) => {
+                commands::wallet::run(args, Ctx::from_global_keyless(global)?).await
+            }
             Command::ToolingAccess(args) => {
                 commands::tooling_access::run(args, Ctx::from_global(global)?).await
             }

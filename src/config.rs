@@ -84,7 +84,7 @@ pub struct PaymentSection {
     /// Solana base58). Never the key itself.
     #[serde(default)]
     pub key_file: Option<PathBuf>,
-    /// Name of a stored wallet (from `qn rpc wallet generate`) to pay with, as
+    /// Name of a stored wallet (from `qn wallet generate`) to pay with, as
     /// an alternative to `key_file`. Resolved to its key file under the wallet
     /// store. Never the key itself.
     #[serde(default)]

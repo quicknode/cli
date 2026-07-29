@@ -682,45 +682,20 @@ fn resolve_key(
         return read_key_file(path);
     }
     if let Some(name) = flag_wallet {
-        return read_key_file(&wallet_key_path(name, wallets_dir)?);
+        return read_key_file(&crate::commands::wallet::key_path(name, wallets_dir)?);
     }
     if let Some(path) = config_file {
         return read_key_file(path);
     }
     if let Some(name) = config_wallet {
-        return read_key_file(&wallet_key_path(name, wallets_dir)?);
+        return read_key_file(&crate::commands::wallet::key_path(name, wallets_dir)?);
     }
     Err(CliError::Arg(
         "no payment key found. Pass --payment-key-file <PATH> (or '-' for \
-         stdin), --payment-wallet <NAME> (from 'qn rpc wallet generate'), or \
+         stdin), --payment-wallet <NAME> (from 'qn wallet generate'), or \
          set `key_file`/`wallet` under [rpc.payment]"
             .to_string(),
     ))
-}
-
-/// Resolves a stored wallet name to its key file path, validating the name and
-/// checking the file exists. Mirrors the `wallet` module's name rules so the
-/// name can never escape the store directory.
-fn wallet_key_path(name: &str, wallets_dir: Option<&Path>) -> Result<std::path::PathBuf, CliError> {
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-    {
-        return Err(CliError::Arg(format!(
-            "invalid wallet name '{name}'. Use lowercase letters, digits, '-' and '_' only"
-        )));
-    }
-    let dir = wallets_dir
-        .ok_or_else(|| CliError::Arg("could not resolve the wallet store directory".to_string()))?;
-    let path = dir.join(name);
-    if !path.exists() {
-        return Err(CliError::Arg(format!(
-            "no wallet named '{name}'. Run 'qn rpc wallet list' to see stored wallets, \
-             or create one with 'qn rpc wallet generate'"
-        )));
-    }
-    Ok(path)
 }
 
 /// Reads and validates a key file, plus an ssh-style permissions warning when

@@ -164,15 +164,8 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   whose `reference` is the settlement tx hash; `null` on x402); without it the
   paid output shape is identical to an unpaid call.
   Mutually exclusive with `--endpoint-url`.
-  **Wallets**: `qn rpc wallet generate --chain <evm|svm> --name <NAME>` creates
-  and stores a dedicated payment wallet (raw key at 0600 under
-  `<config-dir>/qn/wallets/`, `evm` also covers MPP/Tempo), printing its
-  address (and a QR to fund it on a terminal); `qn rpc wallet list`/`show
-  <NAME>` display stored wallets (address only, never the key) and the key
-  file path; `qn rpc wallet rm <NAME>` deletes one (gated: `--yes`, or exit 5
-  in scripts). Reference a wallet on a paid call with `--payment-wallet
-  <NAME>`. These wallets live only on this machine — Quicknode does not hold,
-  back up, or recover them; backing up the key file is the user's job.
+  **Wallets**: stored payment wallets are managed by the top-level `qn wallet`
+  noun (see below); reference one on a paid call with `--payment-wallet <NAME>`.
   **Discovery**: `qn rpc pay-networks` (alias `pay-nets`) lists the networks
   payable via the paid lane, from the gateways' public discovery endpoints
   (no API key). A listed slug is a valid `--network`; the x402 asset column is
@@ -215,6 +208,16 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   network). `--mpp-session` requires an open channel, is mutually exclusive with
   `--x402`/`--mpp`/`--x402-drawdown`/`--endpoint-url`, and points at
   `qn rpc mpp top-up` when the channel deposit is exhausted.
+- `wallet` — the local store of payment wallets for the paid RPC lane; no API
+  key or login required. `qn wallet generate --chain <evm|svm> --name <NAME>`
+  creates and stores a dedicated payment wallet (raw key at 0600 under
+  `<config-dir>/qn/wallets/`, `evm` also covers MPP/Tempo), printing its
+  address (and a QR to fund it on a terminal); `qn wallet list`/`show <NAME>`
+  display stored wallets (address only, never the key) and the key file path;
+  `qn wallet rm <NAME>` deletes one (gated: `--yes`, or exit 5 in scripts).
+  Reference a wallet on a paid call with `--payment-wallet <NAME>`. These
+  wallets live only on this machine — Quicknode does not hold, back up, or
+  recover them; backing up the key file is the user's job.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -292,7 +295,7 @@ refused with HTTP 400/402 before anything settles.
 
 ```sh
 qn rpc pay-networks                                  # which networks are payable, and the x402 asset
-qn rpc wallet generate --chain evm --name payer      # dedicated wallet; prints its address + a QR to fund
+qn wallet generate --chain evm --name payer          # dedicated wallet; prints its address + a QR to fund
 # → fund THAT address, then pick a lane:
 
 # x402 on EVM (Base Sepolia testnet, USDC):
@@ -306,7 +309,7 @@ qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \
     --payment-asset USDC --max-amount 1000
 
 # x402 on Solana (devnet); needs an SVM wallet:
-qn rpc wallet generate --chain svm --name sol-payer
+qn wallet generate --chain svm --name sol-payer
 qn rpc call getSlot --network solana-devnet --x402 \
     --payment-wallet sol-payer --payment-network solana-devnet \
     --payment-asset USDC --max-amount 1000

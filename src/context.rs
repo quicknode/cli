@@ -235,7 +235,7 @@ impl Ctx {
     }
 
     /// Keyless construction for local-only commands that make no network calls
-    /// (e.g. `qn rpc wallet` key management). Resolves no API key and builds no
+    /// (e.g. `qn wallet` key management). Resolves no API key and builds no
     /// payment lane, so it works on a machine that has never run `qn auth
     /// login`. The SDK is present only to satisfy the [`Ctx`] shape; every
     /// sub-client would 401 if called.

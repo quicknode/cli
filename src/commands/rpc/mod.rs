@@ -29,7 +29,6 @@ mod pay_asset;
 mod pay_network;
 mod pay_networks;
 mod payment;
-mod wallet;
 mod x402;
 
 use std::io::Read;
@@ -78,15 +77,12 @@ pub enum RpcCmd {
         qn rpc call eth_blockNumber --network tempo-testnet --mpp-session --payment-wallet payer\n\n\
         See payable networks and manage wallets:\n  \
         qn rpc pay-networks\n  \
-        qn rpc wallet generate --chain evm --name payer")]
+        qn wallet generate --chain evm --name payer")]
     Call(Box<CallArgs>),
 
     /// List the endpoint's available network keys (no RPC call).
     #[command(visible_alias = "ls")]
     ListNetworks,
-
-    /// Manage local payment wallets for the paid lane (`--x402`/`--mpp`).
-    Wallet(wallet::Args),
 
     /// List the networks payable via the paid lane (`--x402`/`--mpp`), from the
     /// gateways' public discovery endpoints. No API key required.
@@ -177,7 +173,7 @@ pub struct CallArgs {
     )]
     pub payment_key_file: Option<PathBuf>,
 
-    /// Name of a stored wallet (from `qn rpc wallet generate`) to pay with. Its
+    /// Name of a stored wallet (from `qn wallet generate`) to pay with. Its
     /// key file under `<config-dir>/qn/wallets/` is used. Mutually exclusive
     /// with --payment-key-file.
     #[arg(
@@ -243,10 +239,6 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     match args.cmd {
         RpcCmd::Call(call) => run_call(*call, global).await,
         RpcCmd::ListNetworks => run_list_networks(global).await,
-        RpcCmd::Wallet(wallet_args) => {
-            let ctx = Ctx::from_global_keyless(global)?;
-            wallet::run(wallet_args, ctx).await
-        }
         RpcCmd::PayNetworks => pay_networks::run(global).await,
         RpcCmd::X402(x402_args) => x402::run(x402_args, global).await,
         RpcCmd::Mpp(mpp_args) => mpp::run(mpp_args, global).await,

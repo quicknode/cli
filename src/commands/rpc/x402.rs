@@ -70,7 +70,7 @@ pub struct PaymentArgs {
     #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
     pub payment_key_file: Option<std::path::PathBuf>,
 
-    /// Name of a stored wallet (from `qn rpc wallet generate`) to pay with.
+    /// Name of a stored wallet (from `qn wallet generate`) to pay with.
     #[arg(long, value_name = "NAME")]
     pub payment_wallet: Option<String>,
 
@@ -124,7 +124,7 @@ pub struct SessionArgs {
     #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
     pub payment_key_file: Option<std::path::PathBuf>,
 
-    /// Name of a stored wallet (from `qn rpc wallet generate`) to authenticate with.
+    /// Name of a stored wallet (from `qn wallet generate`) to authenticate with.
     #[arg(long, value_name = "NAME")]
     pub payment_wallet: Option<String>,
 
