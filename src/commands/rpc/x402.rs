@@ -25,7 +25,10 @@ use crate::config::{self, PaymentSection};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
 
-use super::payment::{ensure_gateway_session, resolve_payment_params, PaymentParams};
+use super::payment::{
+    ensure_gateway_session, resolve_payment_params, resolve_session_params, PaymentParams,
+    SessionParams,
+};
 
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
@@ -46,10 +49,10 @@ pub enum X402Cmd {
     /// Show the account's current credit balance (prints the bare number;
     /// --format json for the full envelope).
     #[command(visible_alias = "credits")]
-    Balance(PaymentArgs),
+    Balance(SessionArgs),
 
     /// Request testnet credits from the faucet (Base Sepolia, once per account).
-    Drip(PaymentArgs),
+    Drip(SessionArgs),
 }
 
 /// The shared payment parameter stack every x402 verb accepts, with the same
@@ -106,6 +109,48 @@ impl PaymentArgs {
     }
 }
 
+/// The flags a keyless gateway session accepts (`balance`, `drip`). These verbs
+/// present a Bearer JWT and sign nothing, so they take only the wallet key and
+/// the SIWX pay network — no `--payment-asset`, no `--max-amount`.
+#[derive(Debug, ClapArgs)]
+pub struct SessionArgs {
+    /// The gateway query chain, as its path slug (e.g. `base-sepolia`).
+    /// Defaults to the `--payment-network` name when it is a slug.
+    #[arg(long, value_name = "NETWORK")]
+    pub network: Option<String>,
+
+    /// File containing the raw payment private key (EVM hex); `-` reads stdin.
+    /// Precedence: this > --payment-wallet > `key_file` > `wallet` in config.
+    #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
+    pub payment_key_file: Option<std::path::PathBuf>,
+
+    /// Name of a stored wallet (from `qn rpc wallet generate`) to authenticate with.
+    #[arg(long, value_name = "NAME")]
+    pub payment_wallet: Option<String>,
+
+    /// Chain the SIWX session authenticates on: a network name (e.g.
+    /// `base-sepolia`) or CAIP-2 id (e.g. `eip155:84532`). Falls back to
+    /// `payment_network` in [rpc.payment].
+    #[arg(long, value_name = "NETWORK")]
+    pub payment_network: Option<String>,
+
+    /// Explicit Solana RPC URL for x402/Solana session auth. Falls back to
+    /// `svm_rpc_url` in [rpc.payment], then a public Solana RPC.
+    #[arg(long, value_name = "URL")]
+    pub svm_rpc_url: Option<String>,
+}
+
+impl SessionArgs {
+    fn params(&self) -> SessionParams<'_> {
+        SessionParams {
+            key_file: self.payment_key_file.as_deref(),
+            wallet: self.payment_wallet.as_deref(),
+            payment_network: self.payment_network.as_deref(),
+            svm_rpc_url: self.svm_rpc_url.as_deref(),
+        }
+    }
+}
+
 pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     match args.cmd {
         X402Cmd::BuyCredits(a) => run_buy_credits(a, global).await,
@@ -114,9 +159,9 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     }
 }
 
-// Resolve the payment config from the verb's args + [rpc.payment], build the
-// keyless-payment Ctx, and print any key-file permissions warning once output
-// exists. Shared setup for all three verbs — no network I/O yet.
+// Resolve the full payment config (buy-credits) from the verb's args +
+// [rpc.payment], build the keyless-payment Ctx, and print any key-file
+// permissions warning once output exists. No network I/O yet.
 fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PaymentConfig), CliError> {
     let section = load_payment_section(&global)?;
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
@@ -133,6 +178,26 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PaymentConfig),
         ctx.out.warn(&w);
     }
     Ok((ctx, payment))
+}
+
+// Setup for the session-only verbs (balance, drip): resolve the minimal
+// wallet + pay-network config, build the keyless Ctx, warn on a loose key file.
+// Signs nothing, so it needs no asset or spend ceiling.
+fn session_setup(args: &SessionArgs, global: GlobalArgs) -> Result<Ctx, CliError> {
+    let section = load_payment_section(&global)?;
+    let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
+    let (payment, key_file_warning) = resolve_session_params(
+        &args.params(),
+        &section,
+        wallets_dir.as_deref(),
+        global.base_url.clone(),
+    )?;
+
+    let ctx = Ctx::from_global_keyless_payment(global, payment)?;
+    if let Some(w) = key_file_warning {
+        ctx.out.warn(&w);
+    }
+    Ok(ctx)
 }
 
 // The gateway query chain (path slug) for a credit purchase: the explicit
@@ -213,15 +278,15 @@ fn drawdown_call_hint(args: &PaymentArgs, network: &str) -> String {
     cmd
 }
 
-async fn run_balance(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let (ctx, _payment) = setup(&args, global.clone())?;
+async fn run_balance(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError> {
+    let ctx = session_setup(&args, global.clone())?;
     let session = ensure_gateway_session(&ctx, &global).await?;
     let balance = ctx.sdk.rpc.gateway_credits(&session).await?;
     emit_balance(&ctx, &balance)
 }
 
-async fn run_drip(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let (ctx, _payment) = setup(&args, global.clone())?;
+async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError> {
+    let ctx = session_setup(&args, global.clone())?;
     let session = ensure_gateway_session(&ctx, &global).await?;
     let receipt = ctx.sdk.rpc.gateway_drip(&session).await?;
 
@@ -233,13 +298,14 @@ async fn run_drip(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError>
     ));
     // Point at buy-credits with the flags the user already supplied.
     let net = args.network.as_deref().or(args.payment_network.as_deref());
+    // buy-credits signs, so the hint carries the asset + ceiling placeholders
+    // the user fills in for the purchase (drip itself collects neither).
     ctx.out.note(&format!(
         "  Next: qn rpc x402 buy-credits --network {} --payment-wallet {} \
-         --payment-network {} --payment-asset {} --max-amount 1000000",
+         --payment-network {} --payment-asset <ASSET> --max-amount 1000000",
         net.unwrap_or("<SLUG>"),
         args.payment_wallet.as_deref().unwrap_or("<NAME>"),
         args.payment_network.as_deref().unwrap_or("<NET>"),
-        args.payment_asset.as_deref().unwrap_or("<ASSET>"),
     ));
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
         let v = serde_json::json!({

@@ -1168,6 +1168,22 @@ fn x402_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str>
     ]
 }
 
+// The session verbs (balance, drip) sign nothing, so they take only the wallet
+// key + pay network — no --payment-asset, no --max-amount.
+fn x402_session_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
+    vec![
+        "--config-file",
+        cfg,
+        "rpc",
+        "x402",
+        verb,
+        "--payment-key-file",
+        key_path,
+        "--payment-network",
+        "eip155:84532",
+    ]
+}
+
 #[tokio::test]
 async fn x402_buy_credits_happy_path() {
     let server = MockServer::start().await;
@@ -1248,7 +1264,11 @@ async fn x402_balance_prints_credits() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "balance")).await;
+    let out = run_qn(
+        &server.uri(),
+        &x402_session_args(&cfg, &key_path, "balance"),
+    )
+    .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
@@ -1268,7 +1288,11 @@ async fn x402_balance_error_maps_to_exit_2() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "balance")).await;
+    let out = run_qn(
+        &server.uri(),
+        &x402_session_args(&cfg, &key_path, "balance"),
+    )
+    .await;
     // A gateway 4xx that settled nothing maps to exit 2 (SDK Api error).
     assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
 }
@@ -1293,8 +1317,24 @@ async fn x402_drip_reports_funding_tx() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    let out = run_qn(&server.uri(), &x402_args(&cfg, &key_path, "drip")).await;
+    let out = run_qn(&server.uri(), &x402_session_args(&cfg, &key_path, "drip")).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_balance_rejects_spend_flags() {
+    // balance signs nothing, so --max-amount (and --payment-asset) are not part
+    // of its surface: clap rejects the unknown flag before any I/O.
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let mut args = x402_session_args(&cfg, &key_path, "balance");
+    args.extend_from_slice(&["--max-amount", "10000000"]);
+    let out = run_qn(&server.uri(), &args).await;
+    // Unknown flag: clap usage error, exit 1.
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
 }
 
 // ── qn rpc call --x402-drawdown ──────────────────────────────────────────────

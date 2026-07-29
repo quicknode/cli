@@ -180,9 +180,12 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
   gateway credits instead of paying per request, and `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
-  response). All take the same payment parameter stack as the paid lane
-  (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
-  `--max-amount`, `--svm-rpc-url`) with the same `[rpc.payment]` fallback.
+  response). `buy-credits` signs a payment, so it takes the full paid-lane
+  stack (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
+  `--max-amount`, `--svm-rpc-url`); `balance` and `drip` only present a Bearer
+  session JWT and sign nothing, so they take just the wallet +
+  `--payment-network` (+ `--svm-rpc-url` for Solana) and do NOT accept
+  `--payment-asset`/`--max-amount`. All fall back to `[rpc.payment]`.
   `--x402-drawdown` requires `--network` (the query chain) and a wallet only —
   it signs nothing per call, so `--payment-asset`/`--max-amount` aren't needed
   and the pay network defaults to `--network`; mutually exclusive with

@@ -180,7 +180,7 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
     // A drew-a-credit confirmation with the balance-check next step (stderr, so
     // stdout stays exactly the RPC result).
     ctx.out
-        .note("  Next: qn rpc x402 balance --payment-wallet <NAME> --payment-network <NET> --payment-asset <ASSET>");
+        .note("  Next: qn rpc x402 balance --payment-wallet <NAME> --payment-network <NET>");
     super::emit_result(&ctx, &result)
 }
 
@@ -377,6 +377,17 @@ pub(super) struct PaymentParams<'a> {
     pub svm_rpc_url: Option<&'a str>,
 }
 
+/// The subset of the payment stack a keyless session needs: a wallet key and a
+/// SIWX pay network, plus an optional SVM RPC URL for Solana auth. The gateway
+/// `balance`/`drip` verbs present a Bearer JWT and sign nothing, so they read
+/// this rather than [`PaymentParams`] — no asset, no spend ceiling.
+pub(super) struct SessionParams<'a> {
+    pub key_file: Option<&'a Path>,
+    pub wallet: Option<&'a str>,
+    pub payment_network: Option<&'a str>,
+    pub svm_rpc_url: Option<&'a str>,
+}
+
 impl CallArgs {
     fn payment_params(&self) -> PaymentParams<'_> {
         PaymentParams {
@@ -473,6 +484,73 @@ fn resolve_drawdown_config(
             pay_network: payment_network,
             // asset + max_amount are unused by the Bearer drawdown call (nothing
             // is signed per request); placeholders keep the SDK config total.
+            asset: String::new(),
+            max_amount: "0".to_string(),
+            svm_rpc_url,
+            base_url_override,
+        },
+        key_file_warning,
+    ))
+}
+
+/// Resolves the minimal config a keyless gateway session needs (`x402 balance`,
+/// `x402 drip`). These verbs authenticate a SIWX session and present a Bearer
+/// JWT — they sign nothing per request — so only the wallet key and the SIWX
+/// pay network matter. `asset`/`max_amount` are supplied as placeholders (the
+/// same construction as [`resolve_drawdown_config`]); the CLI does not accept
+/// `--payment-asset`/`--max-amount` for these verbs.
+pub(super) fn resolve_session_params(
+    params: &SessionParams<'_>,
+    section: &PaymentSection,
+    wallets_dir: Option<&Path>,
+    base_url_override: Option<String>,
+) -> Result<(PaymentConfig, Option<String>), CliError> {
+    if section.key.is_some() {
+        return Err(CliError::Arg(
+            "[rpc.payment] does not accept an inline `key`; store the key in a \
+             file and set `key_file = \"<path>\"` instead"
+                .to_string(),
+        ));
+    }
+
+    let (key, key_file_warning) = resolve_key(
+        params.key_file,
+        params.wallet,
+        section.key_file.as_deref(),
+        section.wallet.as_deref(),
+        wallets_dir,
+    )?;
+
+    let payment_network = params
+        .payment_network
+        .map(str::to_string)
+        .or_else(|| section.payment_network.clone())
+        .ok_or_else(|| {
+            CliError::Arg(
+                "no payment network set. Pass --payment-network <NETWORK> (a \
+                 network name like base-sepolia, or a CAIP-2 id like \
+                 eip155:84532) or set `payment_network` under [rpc.payment]"
+                    .to_string(),
+            )
+        })?;
+    let payment_network = super::pay_network::resolve(&payment_network)?;
+
+    let svm_rpc_url = match params
+        .svm_rpc_url
+        .map(str::to_string)
+        .or_else(|| section.svm_rpc_url.clone())
+    {
+        Some(u) => Some(crate::context::validate_endpoint_url(&u)?),
+        None => None,
+    };
+
+    Ok((
+        PaymentConfig {
+            scheme: "x402".to_string(),
+            key,
+            pay_network: payment_network,
+            // asset + max_amount are unused by the Bearer session (nothing is
+            // signed per request); placeholders keep the SDK config total.
             asset: String::new(),
             max_amount: "0".to_string(),
             svm_rpc_url,
