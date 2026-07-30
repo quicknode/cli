@@ -166,10 +166,12 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   Mutually exclusive with `--endpoint-url`.
   **Wallets**: stored payment wallets are managed by the top-level `qn wallet`
   noun (see below); reference one on a paid call with `--payment-wallet <NAME>`.
-  **Discovery**: `qn rpc pay-networks` (alias `pay-nets`) lists the networks
-  payable via the paid lane, from the gateways' public discovery endpoints
-  (no API key). A listed slug is a valid `--network`; the x402 asset column is
-  a ready `--payment-asset` value.
+  **Discovery**: `qn rpc x402 supported-networks` and `qn rpc mpp
+  supported-networks` (alias `networks`) each show one gateway's catalog in
+  two sections, from its public discovery surfaces (no API key): the callable
+  networks (each slug is a valid `--network` for a paid call) and the accepted
+  currencies (each row's network/address pair is a ready
+  `--payment-network`/`--payment-asset`).
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
   gateway credits instead of paying per request, and `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
@@ -290,21 +292,23 @@ is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 **Pay per call with a crypto micropayment (no API key, no login):**
 
 `--payment-asset`/`--max-amount` must match a real offer for the network (see
-`qn rpc pay-networks`); an unfunded wallet or a mismatched asset/amount is
-refused with HTTP 400/402 before anything settles.
+`qn rpc x402 supported-networks` / `qn rpc mpp supported-networks`); an
+unfunded wallet or a mismatched asset/amount is refused with HTTP 400/402
+before anything settles.
 
 ```sh
-qn rpc pay-networks                                  # which networks are payable, and the x402 asset
+qn rpc x402 supported-networks                       # callable networks + accepted currencies (mpp: qn rpc mpp supported-networks)
 qn wallet generate --vm evm --name payer             # dedicated wallet; prints its address + a QR to fund
 # → fund THAT address, then pick a lane:
 
-# x402 on EVM (Base Sepolia testnet, USDC):
-qn rpc call eth_blockNumber --network base-sepolia --x402 \
+# x402 on EVM (pays Base Sepolia USDC; --network, the chain you query, is
+# independent of the chain you pay on):
+qn rpc call eth_blockNumber --network ethereum-mainnet --x402 \
     --payment-wallet payer --payment-network base-sepolia \
     --payment-asset USDC --max-amount 1000
 
-# MPP on Tempo (testnet); same EVM wallet, --receipt adds the settlement ref:
-qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \
+# MPP (pays Tempo testnet USDC); same EVM wallet, --receipt adds the settlement ref:
+qn rpc call eth_blockNumber --network ethereum-mainnet --mpp --receipt \
     --payment-wallet payer --payment-network tempo-testnet \
     --payment-asset USDC --max-amount 1000
 
@@ -322,7 +326,7 @@ max_amount      = "1000"                          # spend ceiling per call, base
 payment_network = "base-sepolia"                  # settlement chain: network name or CAIP-2 id
 payment_asset   = "USDC"                          # symbol (resolved per network), or a raw address/mint
 EOF
-qn rpc call eth_blockNumber --network base-sepolia --x402   # params now come from config
+qn rpc call eth_blockNumber --network ethereum-mainnet --x402   # params now come from config
 ```
 
 This moves real funds (even testnet tokens are real transfers) — use a

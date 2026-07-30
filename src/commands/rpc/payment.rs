@@ -24,6 +24,7 @@ use quicknode_sdk::{GatewaySession, PaymentConfig};
 use crate::config::{self, PaymentSection};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
+use crate::output::{style, Style};
 
 use super::CallArgs;
 
@@ -168,19 +169,19 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
         Ok(v) => v,
         Err(e) if is_token_expired(&e) => {
             let fresh = reauthenticate(&ctx, &global).await?;
-            ctx.sdk
+            match ctx
+                .sdk
                 .rpc
                 .gateway_drawdown_call(&args.method, params, &network, &fresh)
                 .await
-                .map_err(map_drawdown_error)?
+            {
+                Ok(v) => v,
+                Err(e) => return Err(drawdown_failure(&ctx, &args, &network, e)),
+            }
         }
-        Err(e) => return Err(map_drawdown_error(e)),
+        Err(e) => return Err(drawdown_failure(&ctx, &args, &network, e)),
     };
 
-    // A drew-a-credit confirmation with the balance-check next step (stderr, so
-    // stdout stays exactly the RPC result).
-    ctx.out
-        .note("  Next: qn rpc x402 balance --payment-wallet <NAME> --payment-network <NET>");
     super::emit_result(&ctx, &result)
 }
 
@@ -230,20 +231,54 @@ fn is_token_expired(e: &SdkError) -> bool {
     )
 }
 
+/// The gateway refused because the credit balance is empty (nothing settled).
+fn is_out_of_credits(e: &SdkError) -> bool {
+    matches!(
+        e,
+        SdkError::Api { status, body }
+            if status.as_u16() == 402
+                || body.contains("insufficient_credits")
+                || body.contains("no_credits")
+    )
+}
+
+/// Handles a drawdown-call failure: when the refusal is an empty credit
+/// balance, first print the balance-check command (stderr) in the same bold
+/// multi-line format as the other chained hints, then map to the CLI error.
+fn drawdown_failure(ctx: &Ctx, args: &CallArgs, network: &str, e: SdkError) -> CliError {
+    if is_out_of_credits(&e) {
+        let wallet = args.payment_wallet.as_deref().unwrap_or("<NAME>");
+        let pay_net = args.payment_network.as_deref().unwrap_or(network);
+        ctx.out.note(&format!(
+            "{}\n\n{}\n",
+            style("Check balance:", Style::Bold, ctx.out.color),
+            style(
+                &format!(
+                    "  qn rpc x402 balance \\\n    \
+                       --payment-wallet {wallet} \\\n    \
+                       --payment-network {pay_net}"
+                ),
+                Style::Bold,
+                ctx.out.color,
+            ),
+        ));
+    }
+    map_drawdown_error(e)
+}
+
 /// Maps a drawdown-call failure onto an actionable CLI error. An empty-credits
 /// or monthly-limit gateway refusal points forward at the fixing verb; because
 /// nothing settled, both map to exit 2 (`PaymentRefused`), not the generic
 /// arg-error bucket. Every other SDK error keeps its normal exit-code mapping.
 fn map_drawdown_error(e: SdkError) -> CliError {
-    if let SdkError::Api { status, body } = &e {
-        let s = status.as_u16();
-        if s == 402 || body.contains("insufficient_credits") || body.contains("no_credits") {
-            return CliError::PaymentRefused(
-                "out of x402 credits. Buy more with 'qn rpc x402 buy-credits', \
-                 then retry this call."
-                    .to_string(),
-            );
-        }
+    if is_out_of_credits(&e) {
+        return CliError::PaymentRefused(
+            "out of x402 credits. Buy more with 'qn rpc x402 buy-credits', \
+             then retry this call."
+                .to_string(),
+        );
+    }
+    if let SdkError::Api { body, .. } = &e {
         if body.contains("monthly_limit_reached") {
             return CliError::PaymentRefused(
                 "the account's monthly x402 limit was reached; no credits were \

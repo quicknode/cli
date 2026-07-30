@@ -20,20 +20,31 @@ use crate::errors::CliError;
 /// (CAIP-2 network, lowercase symbol) → token address. Sorted by the
 /// `(network, symbol)` tuple (binary searched); a unit test enforces order and
 /// uniqueness. Addresses are taken from a public source — the payment
-/// gateways' discovery catalog (`qn rpc pay-networks`) or, for Tempo, the MPP
-/// spec / Tempo payment docs.
+/// gateways' discovery catalog (`qn rpc x402 supported-networks`) or, for
+/// Tempo, the MPP spec / Tempo payment docs.
 const PAY_ASSETS: &[(&str, &str, &str)] = &[
     (
         "eip155:196",
         "usdc",
         "0x4ae46a509F6b1D9056937BA4500cb143933D2dc8",
     ),
-    // Tempo USDC (mainnet) and pathUSD (testnet USDC), from the MPP spec /
-    // Tempo payment docs rather than the x402 discovery catalog.
+    // Tempo pathUSD and USDC.e (bridged USDC, mapped from the `usdc` symbol),
+    // from the MPP spec / Tempo payment docs and the MPP gateway's own 402
+    // challenge. Testnet `usdc` resolves to pathUSD (the testnet stand-in).
+    (
+        "eip155:4217",
+        "pathusd",
+        "0x20c0000000000000000000000000000000000000",
+    ),
     (
         "eip155:4217",
         "usdc",
         "0x20c000000000000000000000b9537d11c60e8b50",
+    ),
+    (
+        "eip155:42431",
+        "pathusd",
+        "0x20c0000000000000000000000000000000000000",
     ),
     (
         "eip155:42431",
@@ -66,7 +77,7 @@ const PAY_ASSETS: &[(&str, &str, &str)] = &[
 /// these (case-insensitively) is rewritten to an address for the given
 /// network, or errors if that network has no mapping. Anything else passes
 /// through verbatim as an address.
-const KNOWN_SYMBOLS: &[&str] = &["usdc"];
+const KNOWN_SYMBOLS: &[&str] = &["pathusd", "usdc"];
 
 /// Resolves a `--payment-asset` / config `payment_asset` value to a token
 /// address, given the already-resolved CAIP-2 `network`. A recognized symbol
@@ -83,9 +94,30 @@ pub(super) fn resolve(input: &str, network: &str) -> Result<String, CliError> {
         Err(_) => Err(CliError::Arg(format!(
             "no known {} address for network '{network}'. Pass the token \
              contract address (EVM) or mint (Solana) directly to \
-             --payment-asset — run 'qn rpc pay-networks' to find it",
+             --payment-asset — run 'qn rpc x402 supported-networks' or \
+             'qn rpc mpp supported-networks' to find it",
             input.to_ascii_uppercase()
         ))),
+    }
+}
+
+/// Reverse lookup: a resolved token address on `network` → its known symbol,
+/// in display casing. Used to name the asset in funds-moving prompts and the
+/// supported-networks tables instead of echoing the raw contract address. EVM
+/// hex compares case-insensitively (checksum casing varies); a miss just means
+/// the caller shows the address.
+pub(super) fn symbol_for(network: &str, address: &str) -> Option<String> {
+    PAY_ASSETS
+        .iter()
+        .find(|(net, _, addr)| *net == network && addr.eq_ignore_ascii_case(address))
+        .map(|(_, sym, _)| display_symbol(sym))
+}
+
+/// Display casing for a lowercase table symbol (`pathusd` → `pathUSD`).
+fn display_symbol(sym: &str) -> String {
+    match sym {
+        "pathusd" => "pathUSD".to_string(),
+        other => other.to_ascii_uppercase(),
     }
 }
 
@@ -140,6 +172,25 @@ mod tests {
         assert_eq!(
             resolve(mint, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp").unwrap(),
             mint
+        );
+    }
+
+    #[test]
+    fn symbol_for_reverses_known_addresses() {
+        assert_eq!(
+            symbol_for("eip155:84532", "0x036CbD53842c5426634e7929541eC2318f3dCF7e").as_deref(),
+            Some("USDC")
+        );
+        // Checksum casing differences still match.
+        assert_eq!(
+            symbol_for("eip155:84532", "0x036cbd53842c5426634e7929541ec2318f3dcf7e").as_deref(),
+            Some("USDC")
+        );
+        // Unknown address, or a known address on the wrong network, is a miss.
+        assert_eq!(symbol_for("eip155:84532", "0xabc"), None);
+        assert_eq!(
+            symbol_for("eip155:1", "0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
+            None
         );
     }
 

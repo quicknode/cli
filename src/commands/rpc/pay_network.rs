@@ -136,9 +136,9 @@ pub(super) fn resolve(input: &str) -> Result<String, CliError> {
 }
 
 /// Reverse lookup: a CAIP-2 id → the first Quicknode network name mapped to it,
-/// if any. Used to attach discovery-catalog assets (keyed by CAIP-2) to the
-/// slug rows in `qn rpc pay-networks`. Linear scan — the table is small and
-/// sorted by name, not id.
+/// if any. Used to name the discovery-catalog payment networks (keyed by
+/// CAIP-2) in the `supported-networks` tables. Linear scan — the table is
+/// small and sorted by name, not id.
 pub(super) fn slug_for_caip2(caip2: &str) -> Option<String> {
     PAY_NETWORKS
         .iter()

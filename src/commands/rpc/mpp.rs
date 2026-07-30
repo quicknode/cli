@@ -36,7 +36,8 @@ pub enum MppCmd {
     /// deposit before signing.
     #[command(after_help = "Examples:\n  \
         qn rpc mpp open --network tempo-testnet --deposit 1000000 \\\n      \
-        --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC")]
+        --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC \\\n      \
+        --max-amount 1000000")]
     Open(OpenArgs),
 
     /// Add deposit to the open channel. Gated.
@@ -49,6 +50,11 @@ pub enum MppCmd {
 
     /// Show the gateway's view of the channel (also the state-recovery path).
     Status(ChannelArgs),
+
+    /// List the networks callable via MPP and the currencies the gateway
+    /// accepts as payment. No API key required.
+    #[command(visible_alias = "networks")]
+    SupportedNetworks,
 }
 
 /// The payment parameter stack + query network shared by the MPP verbs.
@@ -135,6 +141,9 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
         MppCmd::TopUp(a) => run_top_up(a, global).await,
         MppCmd::Close(a) => run_close(a.payment, global).await,
         MppCmd::Status(a) => run_status(a.payment, global).await,
+        MppCmd::SupportedNetworks => {
+            super::supported_networks::run(super::supported_networks::Scheme::Mpp, global).await
+        }
     }
 }
 

@@ -189,8 +189,8 @@ fn rm(a: RmArgs, ctx: Ctx) -> Result<(), CliError> {
     let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
         true => true,
         false => prompt_yes_no(&format!(
-            "Delete wallet '{name}'? The private key is destroyed and any funds sent to it \
-             become unrecoverable."
+            "Delete wallet '{name}'? The private key is destroyed locally; without a backup \
+             of the key, funds at its address are unrecoverable."
         ))?,
     };
     if !proceed {
@@ -261,7 +261,7 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
             "This wallet can be used to pay for RPC calls via micropayments (x402/MPP).\n\
              Fund it on the network you'll pay from. Testnet funding:\n\n",
         );
-        block.push_str(&format!("{}\n\n", funding_hint(&meta.vm, &meta.name)));
+        block.push_str(&format!("{}\n\n", funding_hint(&meta.vm, &meta.name, c)));
         block.push_str("Then use it:\n\n");
         block.push_str(&format!(
             "{}\n",
@@ -308,45 +308,59 @@ fn config_example(vm: &str, name: &str) -> String {
 
 /// Testnet funding routes for a fresh wallet, per VM family. EVM gets the
 /// gateway's built-in Base Sepolia faucet (`qn rpc x402 drip`, pre-filled with
-/// this wallet's name), the Circle faucet for the USDC testnets, and the
-/// XLayer USDG note; SVM gets the Circle faucet on Solana Devnet.
-fn funding_hint(vm: &str, name: &str) -> String {
+/// this wallet's name), the Circle faucet for the USDC testnets, the Tempo
+/// testnet faucet (pathUSD, for MPP), and the XLayer USDG note; SVM gets the
+/// Circle faucet on Solana Devnet.
+fn funding_hint(vm: &str, name: &str, color: bool) -> String {
     match vm {
         "svm" => "  Circle faucet:  https://faucet.circle.com (USDC on Solana Devnet)".to_string(),
-        _ => format!(
-            "  Base Sepolia:   qn rpc x402 drip --payment-wallet {name} --payment-network base-sepolia\n  \
-               Circle faucet:  https://faucet.circle.com (USDC on Base Sepolia, Polygon Amoy, Arc)\n  \
-               XLayer Testnet: send USDG to the address above"
-        ),
+        _ => {
+            let drip = style(
+                &format!("qn rpc x402 drip --payment-wallet {name} --payment-network base-sepolia"),
+                Style::Bold,
+                color,
+            );
+            format!(
+                "  Base Sepolia:   {drip}\n  \
+                   Circle faucet:  https://faucet.circle.com (USDC on Base Sepolia, Polygon Amoy, Arc)\n  \
+                   Tempo Testnet:  https://tempo.xyz/developers/docs/quickstart/faucet (pathUSD, for MPP)\n  \
+                   XLayer Testnet: send USDG to the address above"
+            )
+        }
     }
 }
 
 /// A complete, runnable paid-lane `qn rpc call` for a freshly funded wallet,
 /// matching the documented examples in the README. SVM gets one x402/Solana
-/// example; EVM gets both an x402 (Base Sepolia USDC) and an MPP (Tempo
-/// testnet) example, since the same secp256k1 key works for both.
+/// example; EVM gets both an x402 (pays Base Sepolia USDC) and an MPP (pays
+/// Tempo testnet USDC) example, since the same secp256k1 key works for both.
+/// The EVM examples query a chain the wallet is not funded on — the payment
+/// chain is independent of the chain a call queries.
 /// `--max-amount 1000` selects the per-request offer (0.001 USDC).
 fn example_call(vm: &str, name: &str) -> String {
     match vm {
         "svm" => format!(
             "qn rpc call getSlot \\\n  \
-             --network solana-devnet --x402 \\\n  \
+             --network solana-devnet \\\n  \
+             --x402 \\\n  \
              --payment-wallet {name} \\\n  \
              --payment-network solana-devnet \\\n  \
              --payment-asset USDC \\\n  \
              --max-amount 1000"
         ),
         _ => format!(
-            "# x402 (Base Sepolia USDC):\n\
+            "# x402 (pays Base Sepolia USDC):\n\
              qn rpc call eth_blockNumber \\\n  \
-             --network base-sepolia --x402 \\\n  \
+             --network ethereum-mainnet \\\n  \
+             --x402 \\\n  \
              --payment-wallet {name} \\\n  \
              --payment-network base-sepolia \\\n  \
              --payment-asset USDC \\\n  \
              --max-amount 1000\n\n\
-             # MPP (Tempo testnet):\n\
+             # MPP (pays Tempo testnet USDC):\n\
              qn rpc call eth_blockNumber \\\n  \
-             --network tempo-testnet --mpp \\\n  \
+             --network ethereum-mainnet \\\n  \
+             --mpp \\\n  \
              --payment-wallet {name} \\\n  \
              --payment-network tempo-testnet \\\n  \
              --payment-asset USDC \\\n  \

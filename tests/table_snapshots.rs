@@ -464,33 +464,9 @@ async fn sql_schema_table_renders_nested_table_blocks() {
     insta::assert_snapshot!(out);
 }
 
-#[tokio::test]
-async fn pay_networks_table_merges_schemes_and_asset() {
-    // Both gateways share the mock host (--base-url points both at it). The
-    // /discovery/resources asset lands on the base-sepolia row.
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/networks"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "networks": ["base-sepolia", "ethereum-mainnet", "solana-devnet"]
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/discovery/resources"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "x402Version": 2,
-            "items": [{
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "eip155:84532",
-                    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-                }]
-            }]
-        })))
-        .mount(&server)
-        .await;
-
+/// Runs `qn --format table rpc <scheme> supported-networks` against `server`
+/// and returns stdout. Panics (with stderr) on non-zero exit.
+async fn supported_networks_stdout(server: &MockServer, scheme: &str) -> String {
     let output = assert_cmd::Command::cargo_bin("qn")
         .unwrap()
         .env_remove("HOME")
@@ -503,7 +479,8 @@ async fn pay_networks_table_merges_schemes_and_asset() {
             "--format",
             "table",
             "rpc",
-            "pay-networks",
+            scheme,
+            "supported-networks",
         ])
         .output()
         .unwrap();
@@ -512,5 +489,67 @@ async fn pay_networks_table_merges_schemes_and_asset() {
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
-    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn x402_supported_networks_table_shows_two_sections() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/networks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "networks": ["base-sepolia", "ethereum-mainnet", "solana-devnet"]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/supported"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "x402Version": 2,
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:84532",
+                "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                "extra": {"name": "USDC", "version": "2"}
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    insta::assert_snapshot!(supported_networks_stdout(&server, "x402").await);
+}
+
+#[tokio::test]
+async fn mpp_supported_networks_table_shows_two_sections() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/networks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "networks": ["base-sepolia", "tempo-testnet"]
+        })))
+        .mount(&server)
+        .await;
+    let tempo = URL_SAFE_NO_PAD.encode(
+        serde_json::json!({
+            "amount": "1000",
+            "currency": "0x20c0000000000000000000000000000000000000",
+            "methodDetails": {"chainId": 42431},
+            "recipient": "0x0000000000000000000000000000000000000002"
+        })
+        .to_string(),
+    );
+    let header = format!(
+        "Payment id=\"a\", realm=\"mock\", method=\"tempo\", intent=\"charge\", \
+         request=\"{tempo}\", description=\"Quicknode RPC request\""
+    );
+    Mock::given(method("POST"))
+        .and(path("/base-sepolia"))
+        .respond_with(ResponseTemplate::new(402).insert_header("www-authenticate", header.as_str()))
+        .mount(&server)
+        .await;
+
+    insta::assert_snapshot!(supported_networks_stdout(&server, "mpp").await);
 }

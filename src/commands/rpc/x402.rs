@@ -31,6 +31,11 @@ use super::payment::{
     SessionParams,
 };
 
+/// Query network used in the printed paid-lane examples. Payments and credits
+/// are independent of the chain a call queries, so the examples query a chain
+/// the user did not pay on to make that clear.
+const EXAMPLE_QUERY_NETWORK: &str = "ethereum-mainnet";
+
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Args {
@@ -43,7 +48,7 @@ pub enum X402Cmd {
     /// Buy a block of prepaid credits, paying the gateway's offer with the
     /// configured wallet. Gated: names the spend ceiling before signing.
     #[command(after_help = "Examples:\n  \
-        qn rpc x402 buy-credits --network base-sepolia --payment-wallet payer \\\n      \
+        qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000")]
     BuyCredits(PaymentArgs),
 
@@ -54,6 +59,11 @@ pub enum X402Cmd {
 
     /// Request testnet credits from the faucet (Base Sepolia, once per account).
     Drip(SessionArgs),
+
+    /// List the networks callable via x402 and the currencies the gateway
+    /// accepts as payment. No API key required.
+    #[command(visible_alias = "networks")]
+    SupportedNetworks,
 }
 
 /// The shared payment parameter stack every x402 verb accepts, with the same
@@ -157,6 +167,9 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
         X402Cmd::BuyCredits(a) => run_buy_credits(a, global).await,
         X402Cmd::Balance(a) => run_balance(a, global).await,
         X402Cmd::Drip(a) => run_drip(a, global).await,
+        X402Cmd::SupportedNetworks => {
+            super::supported_networks::run(super::supported_networks::Scheme::X402, global).await
+        }
     }
 }
 
@@ -238,9 +251,16 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
     // Gate Mild BEFORE any network I/O: name the spend ceiling and blast radius.
     // The exact charge is the gateway's offer, bounded by this ceiling; we name
     // the ceiling since a single-attempt purchase can't safely probe first.
+    // Prompt in the user's vocabulary (symbol, network slug) where the tables
+    // know it; fall back to the raw resolved values otherwise.
+    let asset = super::pay_asset::symbol_for(&payment.pay_network, &payment.asset)
+        .unwrap_or_else(|| payment.asset.clone());
+    let pay_network = super::pay_network::slug_for_caip2(&payment.pay_network)
+        .unwrap_or_else(|| payment.pay_network.clone());
     let msg = format!(
-        "Buy credits for up to {} base units of {} on {}? This moves real funds.",
-        payment.max_amount, payment.asset, payment.pay_network
+        "Buy credits for up to {} base units of {asset} on {pay_network}? \
+         This moves real funds.",
+        group_digits(&payment.max_amount)
     );
     crate::confirm::confirm_mild(&ctx, &msg)?;
 
@@ -260,32 +280,40 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
     ctx.out.note(&format!(
         "\n{}\n\n{}",
         style(
-            "Spend the credits on calls (signs nothing per request):",
+            "Spend the credits on calls (1 credit per call, no per-call payment):",
             Style::Bold,
             ctx.out.color,
         ),
-        drawdown_call_hint(&args, &network)
+        drawdown_call_hint(&args, ctx.out.color)
     ));
-    emit_balance(&ctx, &balance)
+    // Bare balance to stdout for pipelines; on a TTY the ✓ line above already
+    // shows it, so skip the duplicate.
+    if matches!(ctx.global.format, Some(f) if f.is_structured()) || !ctx.out.stdout_is_tty {
+        return emit_balance(&ctx, &balance);
+    }
+    Ok(())
 }
 
-// A copy-pasteable, multi-line `--x402-drawdown` call reflecting the flags the
-// user just used, so the chained next step runs as-is.
-fn drawdown_call_hint(args: &PaymentArgs, network: &str) -> String {
+// A copy-pasteable, multi-line `--x402-drawdown` call with the wallet the user
+// just paid with. Credits are not network-scoped, so the example deliberately
+// queries a different chain than the one just bought against — it makes clear
+// the credits spend on any supported network.
+fn drawdown_call_hint(args: &PaymentArgs, color: bool) -> String {
     let mut cmd = format!(
         "  qn rpc call eth_blockNumber \\\n    \
-           --network {network} --x402-drawdown \\\n    \
+           --network {EXAMPLE_QUERY_NETWORK} \\\n    \
+           --x402-drawdown \\\n    \
            --payment-wallet {}",
         args.payment_wallet.as_deref().unwrap_or("<NAME>")
     );
-    // The drawdown call defaults its pay network to --network, so only append
-    // --payment-network when the user set an explicit one that differs.
+    // The drawdown call defaults its pay network to --network, so keep the
+    // SIWX auth chain on the network the user actually pays on when it differs.
     if let Some(pn) = &args.payment_network {
-        if pn != network {
+        if pn != EXAMPLE_QUERY_NETWORK {
             cmd.push_str(&format!(" \\\n    --payment-network {pn}"));
         }
     }
-    cmd
+    style(&cmd, Style::Bold, color)
 }
 
 async fn run_balance(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError> {
@@ -307,12 +335,8 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
         receipt.account_id, receipt.transaction_hash
     ));
     // Point at the two paid lanes with the flags the user already supplied;
-    // USDC is the asset the faucet just funded.
-    let query_net = args
-        .network
-        .as_deref()
-        .or(args.payment_network.as_deref())
-        .unwrap_or("<SLUG>");
+    // USDC is the asset the faucet just funded. The examples query a chain the
+    // faucet did not fund — payment is independent of the chain a call queries.
     let wallet = args.payment_wallet.as_deref().unwrap_or("<NAME>");
     let pay_net = args.payment_network.as_deref().unwrap_or("<NET>");
     let c = ctx.out.color;
@@ -328,13 +352,20 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
         c,
     ));
     block.push_str(&format!(
-        "\n\n  \
-         qn rpc call eth_blockNumber \\\n    \
-           --network {query_net} --x402 \\\n    \
-           --payment-wallet {wallet} \\\n    \
-           --payment-network {pay_net} \\\n    \
-           --payment-asset USDC \\\n    \
-           --max-amount 1000\n\n"
+        "\n\n{}\n\n",
+        style(
+            &format!(
+                "  qn rpc call eth_blockNumber \\\n    \
+                   --network {EXAMPLE_QUERY_NETWORK} \\\n    \
+                   --x402 \\\n    \
+                   --payment-wallet {wallet} \\\n    \
+                   --payment-network {pay_net} \\\n    \
+                   --payment-asset USDC \\\n    \
+                   --max-amount 1000"
+            ),
+            Style::Bold,
+            c,
+        )
     ));
     block.push_str(&style(
         "Credit drawdown (buy prepaid credits once, then spend them):",
@@ -342,16 +373,32 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
         c,
     ));
     block.push_str(&format!(
-        "\n\n  \
-         qn rpc x402 buy-credits \\\n    \
-           --network {query_net} \\\n    \
-           --payment-wallet {wallet} \\\n    \
-           --payment-network {pay_net} \\\n    \
-           --payment-asset USDC \\\n    \
-           --max-amount 1000000\n\n  \
-         qn rpc call eth_blockNumber \\\n    \
-           --network {query_net} --x402-drawdown \\\n    \
-           --payment-wallet {wallet}"
+        "\n\n{}\n\n{}",
+        style(
+            &format!(
+                "  qn rpc x402 buy-credits \\\n    \
+                   --network {EXAMPLE_QUERY_NETWORK} \\\n    \
+                   --payment-wallet {wallet} \\\n    \
+                   --payment-network {pay_net} \\\n    \
+                   --payment-asset USDC \\\n    \
+                   --max-amount 1000000"
+            ),
+            Style::Bold,
+            c,
+        ),
+        // The explicit --payment-network keeps SIWX auth on the chain the
+        // faucet funded, since a drawdown call defaults it to --network.
+        style(
+            &format!(
+                "  qn rpc call eth_blockNumber \\\n    \
+                   --network {EXAMPLE_QUERY_NETWORK} \\\n    \
+                   --x402-drawdown \\\n    \
+                   --payment-wallet {wallet} \\\n    \
+                   --payment-network {pay_net}"
+            ),
+            Style::Bold,
+            c,
+        )
     ));
     ctx.out.note(&block);
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
@@ -361,8 +408,11 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
         });
         return super::emit_result(&ctx, &v);
     }
-    // Bare tx hash to stdout for pipelines.
-    println!("{}", receipt.transaction_hash);
+    // Bare tx hash to stdout for pipelines; on a TTY the ✓ line above already
+    // shows it, so skip the duplicate.
+    if !ctx.out.stdout_is_tty {
+        println!("{}", receipt.transaction_hash);
+    }
     Ok(())
 }
 
@@ -383,8 +433,16 @@ fn emit_balance(ctx: &Ctx, balance: &CreditBalance) -> Result<(), CliError> {
 // Group digits for the human-facing note (1000000 -> 1,000,000). The bare
 // stdout number is never grouped, so pipelines get a clean integer.
 fn fmt_credits(n: u64) -> String {
-    let s = n.to_string();
+    group_digits(&n.to_string())
+}
+
+// Digit-group a decimal string (1000000 -> 1,000,000). Anything that is not
+// pure ASCII digits passes through unchanged rather than being mangled.
+fn group_digits(s: &str) -> String {
     let bytes = s.as_bytes();
+    if s.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return s.to_string();
+    }
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, b) in bytes.iter().enumerate() {
         if i > 0 && (bytes.len() - i) % 3 == 0 {
@@ -405,5 +463,13 @@ mod tests {
         assert_eq!(fmt_credits(95), "95");
         assert_eq!(fmt_credits(1_000), "1,000");
         assert_eq!(fmt_credits(1_000_095), "1,000,095");
+    }
+
+    #[test]
+    fn group_digits_leaves_non_digit_strings_alone() {
+        assert_eq!(group_digits("1000000"), "1,000,000");
+        assert_eq!(group_digits(""), "");
+        assert_eq!(group_digits("+5000"), "+5000");
+        assert_eq!(group_digits("0xabc"), "0xabc");
     }
 }

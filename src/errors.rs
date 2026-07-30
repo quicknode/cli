@@ -132,7 +132,7 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
             msg.push_str(
                 " The signed payment was not accepted, so nothing should have settled. \
                  Common causes: the wallet is unfunded, or --payment-network/--payment-asset/--max-amount \
-                 don't match an offer (see 'qn rpc pay-networks').",
+                 don't match an offer (see 'qn rpc x402 supported-networks' / 'qn rpc mpp supported-networks').",
             );
             // When the reason wasn't a clean one-liner, append the raw body under
             // --verbose for the full detail.
@@ -626,7 +626,7 @@ mod tests {
             !msg.contains(&body),
             "long body must not leak by default: {msg}"
         );
-        assert!(msg.contains("qn rpc pay-networks"), "got: {msg}");
+        assert!(msg.contains("supported-networks"), "got: {msg}");
         let verbose = render(&err, true);
         assert!(verbose.contains("accepts"), "got: {verbose}");
     }
