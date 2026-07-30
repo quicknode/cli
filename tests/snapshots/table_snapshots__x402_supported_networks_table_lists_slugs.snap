@@ -1,0 +1,8 @@
+---
+source: tests/table_snapshots.rs
+expression: "discovery_stdout(&server, \"x402\", \"supported-networks\").await"
+---
+NETWORK           
+base-sepolia      
+ethereum-mainnet  
+solana-devnet

@@ -166,12 +166,12 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   Mutually exclusive with `--endpoint-url`.
   **Wallets**: stored payment wallets are managed by the top-level `qn wallet`
   noun (see below); reference one on a paid call with `--payment-wallet <NAME>`.
-  **Discovery**: `qn rpc x402 supported-networks` and `qn rpc mpp
-  supported-networks` (alias `networks`) each show one gateway's catalog in
-  two sections, from its public discovery surfaces (no API key): the callable
-  networks (each slug is a valid `--network` for a paid call) and the accepted
-  currencies (each row's network/address pair is a ready
-  `--payment-network`/`--payment-asset`).
+  **Discovery** (per gateway, no API key): `qn rpc {x402,mpp}
+  supported-networks` (alias `networks`) lists the networks you can make paid
+  calls to — each slug is a valid `--network`. `qn rpc {x402,mpp}
+  supported-payments` (alias `payments`) lists the payment options the gateway
+  accepts — each row's network/address pair is a ready
+  `--payment-network`/`--payment-asset`.
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
   gateway credits instead of paying per request, and `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
@@ -205,9 +205,10 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   `top-up --deposit <BASE_UNITS>` move real funds on-chain (gated Mild); `close`
   cooperatively settles + refunds (gated Mild; its prompt warns further
   `--mpp-session` calls fail until re-open); `status` shows the gateway's view
-  and is the recovery path for lost local channel state. Channel state is cached
+  and re-syncs the accepted spend into the local record. Channel state is cached
   under `<config-dir>/qn/channels.toml` (0600, keyed by wallet address +
-  network). `--mpp-session` requires an open channel, is mutually exclusive with
+  network); every channel verb needs that record — a lost one means opening a
+  new channel. `--mpp-session` requires an open channel, is mutually exclusive with
   `--x402`/`--mpp`/`--x402-drawdown`/`--endpoint-url`, and points at
   `qn rpc mpp top-up` when the channel deposit is exhausted.
 - `wallet` — the local store of payment wallets for the paid RPC lane; no API
@@ -292,12 +293,13 @@ is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 **Pay per call with a crypto micropayment (no API key, no login):**
 
 `--payment-asset`/`--max-amount` must match a real offer for the network (see
-`qn rpc x402 supported-networks` / `qn rpc mpp supported-networks`); an
+`qn rpc x402 supported-payments` / `qn rpc mpp supported-payments`); an
 unfunded wallet or a mismatched asset/amount is refused with HTTP 400/402
 before anything settles.
 
 ```sh
-qn rpc x402 supported-networks                       # callable networks + accepted currencies (mpp: qn rpc mpp supported-networks)
+qn rpc x402 supported-networks                       # networks you can call (mpp: qn rpc mpp supported-networks)
+qn rpc x402 supported-payments                       # payment options: network, token, address (mpp: qn rpc mpp supported-payments)
 qn wallet generate --vm evm --name payer             # dedicated wallet; prints its address + a QR to fund
 # → fund THAT address, then pick a lane:
 

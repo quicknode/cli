@@ -6,8 +6,8 @@
 //! - `top-up`  — add deposit to the open channel. Gated Mild.
 //! - `close`   — cooperatively close (settle on-chain + refund). Gated Mild;
 //!   the prompt warns that further `--mpp-session` calls fail until re-open.
-//! - `status`  — the gateway's view of the channel (also the recovery path
-//!   when local channel state is lost).
+//! - `status`  — the gateway's view of the channel (re-syncs the accepted
+//!   spend high-water mark into the local record).
 //!
 //! Channel state (channelId, deposit, cumulative spend) is persisted under the
 //! config dir (`channels.toml`, 0600, keyed by wallet address + network) and
@@ -20,11 +20,28 @@ use quicknode_sdk::ChannelState;
 use crate::config::{self, PaymentSection};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
+use crate::output::{style, Style};
 
 use super::payment::{resolve_payment_params, PaymentParams};
 
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
+#[command(after_help = "Examples:\n  \
+    qn rpc mpp open --network tempo-testnet --deposit 1000000 \\\n      \
+    --payment-wallet payer --payment-network tempo-testnet \\\n      \
+    --payment-asset USDC --max-amount 1000000\n  \
+    qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \\\n      \
+    --payment-wallet payer --payment-network tempo-testnet \\\n      \
+    --payment-asset USDC --max-amount 1000000\n  \
+    qn rpc mpp status --network tempo-testnet \\\n      \
+    --payment-wallet payer --payment-network tempo-testnet \\\n      \
+    --payment-asset USDC --max-amount 1000000\n  \
+    qn rpc mpp top-up --network tempo-testnet --deposit 500000 \\\n      \
+    --payment-wallet payer --payment-network tempo-testnet \\\n      \
+    --payment-asset USDC --max-amount 500000\n  \
+    qn rpc mpp close --network tempo-testnet \\\n      \
+    --payment-wallet payer --payment-network tempo-testnet \\\n      \
+    --payment-asset USDC --max-amount 1000000")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: MppCmd,
@@ -42,19 +59,43 @@ pub enum MppCmd {
 
     /// Add deposit to the open channel. Gated.
     #[command(name = "top-up")]
+    #[command(after_help = "Examples:\n  \
+        qn rpc mpp top-up --network tempo-testnet --deposit 500000 \\\n      \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset USDC --max-amount 500000")]
     TopUp(TopUpArgs),
 
     /// Cooperatively close the channel (settle on-chain + refund unused
     /// deposit). Gated.
+    #[command(after_help = "Examples:\n  \
+        qn rpc mpp close --network tempo-testnet \\\n      \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset USDC --max-amount 1000000")]
     Close(ChannelArgs),
 
-    /// Show the gateway's view of the channel (also the state-recovery path).
+    /// Show the gateway's view of the channel (re-syncs the accepted spend).
+    #[command(after_help = "Examples:\n  \
+        qn rpc mpp status --network tempo-testnet \\\n      \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset USDC --max-amount 1000000")]
     Status(ChannelArgs),
 
-    /// List the networks callable via MPP and the currencies the gateway
-    /// accepts as payment. No API key required.
+    /// List the networks you can make MPP-paid RPC calls to. Each slug is a
+    /// valid --network for a paid call. No API key required.
     #[command(visible_alias = "networks")]
+    #[command(after_help = "Examples:\n  \
+        qn rpc mpp networks\n  \
+        qn rpc mpp supported-networks --format json")]
     SupportedNetworks,
+
+    /// List the payment options the MPP gateway accepts: the network you pay
+    /// on, the token, and its contract address — ready --payment-network and
+    /// --payment-asset values. No API key required.
+    #[command(visible_alias = "payments")]
+    #[command(after_help = "Examples:\n  \
+        qn rpc mpp payments\n  \
+        qn rpc mpp supported-payments --format json")]
+    SupportedPayments,
 }
 
 /// The payment parameter stack + query network shared by the MPP verbs.
@@ -142,7 +183,12 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
         MppCmd::Close(a) => run_close(a.payment, global).await,
         MppCmd::Status(a) => run_status(a.payment, global).await,
         MppCmd::SupportedNetworks => {
-            super::supported_networks::run(super::supported_networks::Scheme::Mpp, global).await
+            super::supported_networks::run_networks(super::supported_networks::Scheme::Mpp, global)
+                .await
+        }
+        MppCmd::SupportedPayments => {
+            super::supported_networks::run_payments(super::supported_networks::Scheme::Mpp, global)
+                .await
         }
     }
 }
@@ -184,6 +230,40 @@ fn parse_base_units(s: &str, flag: &str) -> Result<u128, CliError> {
     })
 }
 
+// Prints a bold, ready-to-run next-command hint (stderr): the base command
+// plus the payment flags this invocation passed, so the suggestion works
+// verbatim. Values resolved from [rpc.payment] config need no flags and are
+// not echoed. Wrapped two flags per continuation line.
+fn note_next(ctx: &Ctx, base: &str, payment: &PaymentArgs) {
+    let mut flags: Vec<String> = Vec::new();
+    if let Some(f) = &payment.payment_key_file {
+        flags.push(format!("--payment-key-file {}", f.display()));
+    }
+    if let Some(w) = &payment.payment_wallet {
+        flags.push(format!("--payment-wallet {w}"));
+    }
+    if let Some(n) = &payment.payment_network {
+        flags.push(format!("--payment-network {n}"));
+    }
+    if let Some(a) = &payment.payment_asset {
+        flags.push(format!("--payment-asset {a}"));
+    }
+    if let Some(m) = &payment.max_amount {
+        flags.push(format!("--max-amount {m}"));
+    }
+
+    let mut lines = vec![format!("  {base}")];
+    for chunk in flags.chunks(2) {
+        lines.push(format!("    {}", chunk.join(" ")));
+    }
+    let cmd = lines.join(" \\\n");
+    ctx.out.note(&format!(
+        "\n{}\n\n{}\n",
+        style("Example", Style::Bold, ctx.out.color),
+        style(&cmd, Style::Bold, ctx.out.color),
+    ));
+}
+
 async fn run_open(args: OpenArgs, global: GlobalArgs) -> Result<(), CliError> {
     let deposit = parse_base_units(&args.deposit, "deposit")?;
     let (ctx, network) = setup(&args.payment, global.clone())?;
@@ -208,9 +288,11 @@ async fn run_open(args: OpenArgs, global: GlobalArgs) -> Result<(), CliError> {
         "✓ Opened channel {} (deposit: {})",
         channel.channel_id, channel.deposit
     ));
-    ctx.out.note(&format!(
-        "  Next: qn rpc call eth_blockNumber --network {network} --mpp-session"
-    ));
+    note_next(
+        &ctx,
+        &format!("qn rpc call eth_blockNumber --network {network} --mpp-session"),
+        &args.payment,
+    );
     emit_channel(&ctx, &channel)
 }
 
@@ -240,8 +322,11 @@ async fn run_top_up(args: TopUpArgs, global: GlobalArgs) -> Result<(), CliError>
         "✓ Topped up channel {} (deposit: {})",
         updated.channel_id, updated.deposit
     ));
-    ctx.out
-        .note(&format!("  Next: qn rpc mpp status --network {network}"));
+    note_next(
+        &ctx,
+        &format!("qn rpc mpp status --network {network}"),
+        &args.payment,
+    );
     emit_channel(&ctx, &updated)
 }
 
@@ -274,9 +359,11 @@ async fn run_close(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError
 
     ctx.out
         .note(&format!("✓ Closed channel {}", channel.channel_id));
-    ctx.out.note(&format!(
-        "  Next: qn rpc mpp open --network {network} --deposit <BASE_UNITS>"
-    ));
+    note_next(
+        &ctx,
+        &format!("qn rpc mpp open --network {network} --deposit <BASE_UNITS>"),
+        &args,
+    );
     Ok(())
 }
 
@@ -284,34 +371,32 @@ async fn run_status(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliErro
     let (ctx, network) = setup(&args, global.clone())?;
     let channel = require_channel(&ctx, &global, &network)?;
 
-    let status = ctx
-        .sdk
-        .rpc
-        .mpp_status(&network, &channel.channel_id)
-        .await?;
+    let status = ctx.sdk.rpc.mpp_status(&network, &channel).await?;
 
-    // Re-seed local state from the gateway's high-water mark (the recovery
-    // path): the gateway is authoritative for deposit + accepted cumulative.
+    // Re-seed the local spend high-water mark from the gateway (it is
+    // authoritative for what it has accepted). The deposit is tracked locally:
+    // the gateway exposes no read-only channel endpoint.
     let mut synced = channel.clone();
-    synced.deposit = status.deposit;
-    synced.cumulative_spent = status.accepted_cumulative;
+    synced.cumulative_spent = synced.cumulative_spent.max(status.accepted_cumulative);
     persist_channel(&ctx, &global, &network, &synced);
 
+    let deposit = synced.deposit;
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
         let v = serde_json::json!({
             "channel_id": status.channel_id,
-            "deposit": status.deposit,
+            "deposit": deposit,
             "accepted_cumulative": status.accepted_cumulative,
-            "remaining": status.deposit.saturating_sub(status.accepted_cumulative),
+            "spent": status.spent,
+            "remaining": deposit.saturating_sub(status.accepted_cumulative),
         });
         return super::emit_result(&ctx, &v);
     }
     ctx.out.note(&format!(
-        "channel {}: deposit {}, spent {}, remaining {}",
+        "channel {}: deposit {}, accepted {}, remaining {}",
         status.channel_id,
-        status.deposit,
+        deposit,
         status.accepted_cumulative,
-        status.deposit.saturating_sub(status.accepted_cumulative),
+        deposit.saturating_sub(status.accepted_cumulative),
     ));
     Ok(())
 }
@@ -331,8 +416,8 @@ fn persist_channel(ctx: &Ctx, global: &GlobalArgs, network: &str, channel: &Chan
 }
 
 // Load the open channel for this wallet+network, or an actionable error
-// pointing at `mpp open`. A lost local record is recovered by re-opening or,
-// if the channel is known, by `mpp status` (which re-seeds it).
+// pointing at `mpp open`. Every channel verb (including `status`) needs the
+// local record; a lost one means opening a new channel.
 fn require_channel(
     ctx: &Ctx,
     global: &GlobalArgs,

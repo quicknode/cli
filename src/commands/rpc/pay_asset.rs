@@ -20,7 +20,7 @@ use crate::errors::CliError;
 /// (CAIP-2 network, lowercase symbol) → token address. Sorted by the
 /// `(network, symbol)` tuple (binary searched); a unit test enforces order and
 /// uniqueness. Addresses are taken from a public source — the payment
-/// gateways' discovery catalog (`qn rpc x402 supported-networks`) or, for
+/// gateways' discovery catalog (`qn rpc x402 supported-payments`) or, for
 /// Tempo, the MPP spec / Tempo payment docs.
 const PAY_ASSETS: &[(&str, &str, &str)] = &[
     (
@@ -94,8 +94,8 @@ pub(super) fn resolve(input: &str, network: &str) -> Result<String, CliError> {
         Err(_) => Err(CliError::Arg(format!(
             "no known {} address for network '{network}'. Pass the token \
              contract address (EVM) or mint (Solana) directly to \
-             --payment-asset — run 'qn rpc x402 supported-networks' or \
-             'qn rpc mpp supported-networks' to find it",
+             --payment-asset — run 'qn rpc x402 supported-payments' or \
+             'qn rpc mpp supported-payments' to find it",
             input.to_ascii_uppercase()
         ))),
     }
@@ -103,7 +103,7 @@ pub(super) fn resolve(input: &str, network: &str) -> Result<String, CliError> {
 
 /// Reverse lookup: a resolved token address on `network` → its known symbol,
 /// in display casing. Used to name the asset in funds-moving prompts and the
-/// supported-networks tables instead of echoing the raw contract address. EVM
+/// supported-payments table instead of echoing the raw contract address. EVM
 /// hex compares case-insensitively (checksum casing varies); a miss just means
 /// the caller shows the address.
 pub(super) fn symbol_for(network: &str, address: &str) -> Option<String> {

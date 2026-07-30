@@ -38,6 +38,14 @@ const EXAMPLE_QUERY_NETWORK: &str = "ethereum-mainnet";
 
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
+#[command(after_help = "Examples:\n  \
+    qn rpc x402 drip --payment-wallet payer\n  \
+    qn rpc x402 balance --payment-wallet payer\n  \
+    qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
+    --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
+    qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n  \
+    qn rpc x402 supported-networks\n  \
+    qn rpc x402 supported-payments")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: X402Cmd,
@@ -55,15 +63,32 @@ pub enum X402Cmd {
     /// Show the account's current credit balance (prints the bare number;
     /// --format json for the full envelope).
     #[command(visible_alias = "credits")]
+    #[command(after_help = "Examples:\n  \
+        qn rpc x402 balance --payment-wallet payer\n  \
+        qn rpc x402 balance --payment-wallet payer --format json")]
     Balance(SessionArgs),
 
     /// Request testnet credits from the faucet (Base Sepolia, once per account).
+    #[command(after_help = "Examples:\n  \
+        qn rpc x402 drip --payment-wallet payer")]
     Drip(SessionArgs),
 
-    /// List the networks callable via x402 and the currencies the gateway
-    /// accepts as payment. No API key required.
+    /// List the networks you can make x402-paid RPC calls to. Each slug is a
+    /// valid --network for a paid call. No API key required.
     #[command(visible_alias = "networks")]
+    #[command(after_help = "Examples:\n  \
+        qn rpc x402 networks\n  \
+        qn rpc x402 supported-networks --format json")]
     SupportedNetworks,
+
+    /// List the payment options the x402 gateway accepts: the network you pay
+    /// on, the token, and its contract address — ready --payment-network and
+    /// --payment-asset values. No API key required.
+    #[command(visible_alias = "payments")]
+    #[command(after_help = "Examples:\n  \
+        qn rpc x402 payments\n  \
+        qn rpc x402 supported-payments --format json")]
+    SupportedPayments,
 }
 
 /// The shared payment parameter stack every x402 verb accepts, with the same
@@ -168,7 +193,12 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
         X402Cmd::Balance(a) => run_balance(a, global).await,
         X402Cmd::Drip(a) => run_drip(a, global).await,
         X402Cmd::SupportedNetworks => {
-            super::supported_networks::run(super::supported_networks::Scheme::X402, global).await
+            super::supported_networks::run_networks(super::supported_networks::Scheme::X402, global)
+                .await
+        }
+        X402Cmd::SupportedPayments => {
+            super::supported_networks::run_payments(super::supported_networks::Scheme::X402, global)
+                .await
         }
     }
 }

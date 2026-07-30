@@ -62,24 +62,28 @@ pub enum RpcCmd {
         qn rpc call eth_call --params-file params.json\n  \
         echo '[...]' | qn rpc call eth_call -\n  \
         cat params.json | qn rpc call eth_call -f -\n\n\
-        Paid (crypto micropayment, no API key; params from [rpc.payment] in config;\n  \
+        Paid (crypto micropayment, no API key;\n  \
         the payment chain is independent of the chain you query):\n  \
-        qn rpc call eth_blockNumber --network ethereum-mainnet --x402\n  \
         qn rpc call eth_blockNumber --network ethereum-mainnet --x402 \\\n      \
         --payment-wallet payer --payment-network base-sepolia \\\n      \
         --payment-asset USDC --max-amount 10000\n  \
-        qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt\n\n\
+        qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \\\n      \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset USDC --max-amount 10000\n\n\
         Prepaid x402 credits (drawdown — buy once, then spend on any supported network):\n  \
         qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
         qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n\n\
         MPP payment channel (open once, then pay per call with a voucher):\n  \
         qn rpc mpp open --network tempo-testnet --deposit 1000000 \\\n      \
-        --payment-wallet payer --max-amount 1000000\n  \
-        qn rpc call eth_blockNumber --network tempo-testnet --mpp-session --payment-wallet payer\n\n\
-        See callable networks, accepted currencies, and manage wallets:\n  \
-        qn rpc x402 supported-networks\n  \
-        qn rpc mpp supported-networks\n  \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset USDC --max-amount 1000000\n  \
+        qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \\\n      \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset USDC --max-amount 1000000\n\n\
+        Discover networks and payment options, and manage wallets:\n  \
+        qn rpc x402 supported-networks    (mpp: qn rpc mpp supported-networks)\n  \
+        qn rpc x402 supported-payments    (mpp: qn rpc mpp supported-payments)\n  \
         qn wallet generate --vm evm --name payer")]
     Call(Box<CallArgs>),
 

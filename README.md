@@ -368,11 +368,12 @@ Every path needs a payment wallet. Two options:
    never an environment variable, never a flag value, never inline in config,
    never printed.
 
-`qn rpc x402 supported-networks` and `qn rpc mpp supported-networks` (alias
-`networks`) each show one gateway's catalog in two sections (no API key
-needed): the callable networks (each slug is a valid `--network` for a paid
-call) and the accepted currencies (each row's network/address pair is a ready
-`--payment-network`/`--payment-asset`). Cached at
+Each gateway exposes two discovery lists, no API key needed. `qn rpc
+{x402,mpp} supported-networks` (alias `networks`) shows the networks you can
+make paid calls to — each slug is a valid `--network`. `qn rpc {x402,mpp}
+supported-payments` (alias `payments`) shows the payment options the gateway
+accepts — each row's network/address pair is a ready
+`--payment-network`/`--payment-asset`. Both are cached at
 `~/.config/qn/pay-networks.toml` (24h).
 
 ##### Path 1 — x402 per-request
@@ -461,15 +462,19 @@ qn rpc mpp open --network tempo-testnet --deposit 1000000 --max-amount 1000000 \
 
 # Pay for calls from the channel — one cumulative voucher per call.
 qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \
-    --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC
+    --payment-wallet payer --payment-network tempo-testnet \
+    --payment-asset USDC --max-amount 1000000
 
-# Inspect the channel (also recovers local state from the gateway).
+# Inspect the channel (re-syncs the accepted spend from the gateway).
 qn rpc mpp status --network tempo-testnet --payment-wallet payer \
-    --payment-network tempo-testnet --payment-asset USDC
+    --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
 
 # Add more deposit, or close to settle on-chain and refund the unused balance.
-qn rpc mpp top-up --network tempo-testnet --deposit 1000000 --payment-wallet payer ...
-qn rpc mpp close  --network tempo-testnet --payment-wallet payer ...
+qn rpc mpp top-up --network tempo-testnet --deposit 1000000 \
+    --payment-wallet payer --payment-network tempo-testnet \
+    --payment-asset USDC --max-amount 1000000
+qn rpc mpp close --network tempo-testnet --payment-wallet payer \
+    --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
 ```
 
 Channel state is cached (0600) under the config dir, keyed by wallet + network.

@@ -464,9 +464,9 @@ async fn sql_schema_table_renders_nested_table_blocks() {
     insta::assert_snapshot!(out);
 }
 
-/// Runs `qn --format table rpc <scheme> supported-networks` against `server`
-/// and returns stdout. Panics (with stderr) on non-zero exit.
-async fn supported_networks_stdout(server: &MockServer, scheme: &str) -> String {
+/// Runs `qn --format table rpc <scheme> <verb>` against `server` and returns
+/// stdout. Panics (with stderr) on non-zero exit.
+async fn discovery_stdout(server: &MockServer, scheme: &str, verb: &str) -> String {
     let output = assert_cmd::Command::cargo_bin("qn")
         .unwrap()
         .env_remove("HOME")
@@ -480,7 +480,7 @@ async fn supported_networks_stdout(server: &MockServer, scheme: &str) -> String 
             "table",
             "rpc",
             scheme,
-            "supported-networks",
+            verb,
         ])
         .output()
         .unwrap();
@@ -493,7 +493,7 @@ async fn supported_networks_stdout(server: &MockServer, scheme: &str) -> String 
 }
 
 #[tokio::test]
-async fn x402_supported_networks_table_shows_two_sections() {
+async fn x402_supported_networks_table_lists_slugs() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/networks"))
@@ -502,9 +502,17 @@ async fn x402_supported_networks_table_shows_two_sections() {
         })))
         .mount(&server)
         .await;
+
+    insta::assert_snapshot!(discovery_stdout(&server, "x402", "supported-networks").await);
+}
+
+#[tokio::test]
+async fn x402_supported_payments_table_lists_options() {
+    let server = MockServer::start().await;
+    // Served with HTTP 402, like the real gateway.
     Mock::given(method("GET"))
         .and(path("/supported"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .respond_with(ResponseTemplate::new(402).set_body_json(serde_json::json!({
             "x402Version": 2,
             "accepts": [{
                 "scheme": "exact",
@@ -516,11 +524,11 @@ async fn x402_supported_networks_table_shows_two_sections() {
         .mount(&server)
         .await;
 
-    insta::assert_snapshot!(supported_networks_stdout(&server, "x402").await);
+    insta::assert_snapshot!(discovery_stdout(&server, "x402", "supported-payments").await);
 }
 
 #[tokio::test]
-async fn mpp_supported_networks_table_shows_two_sections() {
+async fn mpp_supported_payments_table_lists_options() {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
 
@@ -551,5 +559,5 @@ async fn mpp_supported_networks_table_shows_two_sections() {
         .mount(&server)
         .await;
 
-    insta::assert_snapshot!(supported_networks_stdout(&server, "mpp").await);
+    insta::assert_snapshot!(discovery_stdout(&server, "mpp", "supported-payments").await);
 }

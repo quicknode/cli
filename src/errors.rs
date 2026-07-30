@@ -132,7 +132,7 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
             msg.push_str(
                 " The signed payment was not accepted, so nothing should have settled. \
                  Common causes: the wallet is unfunded, or --payment-network/--payment-asset/--max-amount \
-                 don't match an offer (see 'qn rpc x402 supported-networks' / 'qn rpc mpp supported-networks').",
+                 don't match an offer (see 'qn rpc x402 supported-payments' / 'qn rpc mpp supported-payments').",
             );
             // When the reason wasn't a clean one-liner, append the raw body under
             // --verbose for the full detail.
@@ -268,8 +268,13 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
     if verbose && !body.is_empty() {
         out.push('\n');
         out.push_str(body);
-    } else if matches!(code, 400 | 422) && !parsed.bullets.is_empty() && !body.is_empty() {
-        out.push_str("\nRe-run with --verbose for the full response body.");
+    } else if !body.is_empty() {
+        // 400/422 with nothing parseable already surfaced the raw body above;
+        // everywhere else, point at the flag that reveals it.
+        let raw_body_shown = matches!(code, 400 | 422) && parsed.bullets.is_empty();
+        if !raw_body_shown {
+            out.push_str("\nRe-run with --verbose for the full response body.");
+        }
     }
 
     out
@@ -626,7 +631,7 @@ mod tests {
             !msg.contains(&body),
             "long body must not leak by default: {msg}"
         );
-        assert!(msg.contains("supported-networks"), "got: {msg}");
+        assert!(msg.contains("supported-payments"), "got: {msg}");
         let verbose = render(&err, true);
         assert!(verbose.contains("accepts"), "got: {verbose}");
     }
@@ -676,6 +681,19 @@ mod tests {
     fn non_verbose_404_omits_body() {
         let msg = render(&api_err(404), false);
         assert!(!msg.contains("boom"), "got: {msg}");
+    }
+
+    #[test]
+    fn non_verbose_402_hints_at_verbose() {
+        // A gateway 402 carries an actionable problem+json body; without
+        // --verbose the message must say how to see it.
+        let body = r#"{"title":"Insufficient Balance","status":402,"detail":"Insufficient balance: requested 10, available 0."}"#;
+        let msg = render(&api_err_with(402, body), false);
+        assert!(msg.contains("402"), "got: {msg}");
+        assert!(msg.contains("--verbose"), "got: {msg}");
+        assert!(!msg.contains("Insufficient balance"), "got: {msg}");
+        let verbose = render(&api_err_with(402, body), true);
+        assert!(verbose.contains("Insufficient balance"), "got: {verbose}");
     }
 
     // ---- body parsing ----

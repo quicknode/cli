@@ -1,12 +1,10 @@
-//! Integration tests for `qn rpc x402 supported-networks` and
-//! `qn rpc mpp supported-networks` — the keyless per-gateway discovery
-//! catalogs (callable networks + accepted currencies).
+//! Integration tests for `qn rpc {x402,mpp} supported-networks` and
+//! `supported-payments` — the keyless per-gateway discovery lists.
 //!
 //! `--base-url` points the gateway fetches at one wiremock host and bypasses
 //! the on-disk cache, so the mock server stands in for the gateway. The
 //! in-process harness can't capture stdout, so rendered output (tables, JSON
-//! shape, the best-effort warning) is asserted via a subprocess; the
-//! in-process tests cover exit codes.
+//! shape) is asserted via a subprocess; the in-process tests cover exit codes.
 
 mod common;
 
@@ -17,8 +15,8 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Mounts the two x402 discovery endpoints (`/networks` + `/supported`).
-async fn mount_x402(server: &MockServer) {
+/// Mounts the x402 `/networks` list.
+async fn mount_x402_networks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/networks"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -26,9 +24,14 @@ async fn mount_x402(server: &MockServer) {
         })))
         .mount(server)
         .await;
+}
+
+/// Mounts the x402 `/supported` payment catalog. Served with HTTP 402, like
+/// the real gateway (the payment-requirements shape arrives on a 402 status).
+async fn mount_x402_supported(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/supported"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
             "x402Version": 2,
             "accepts": [
                 // Two offers for the same (network, asset): a plain token
@@ -94,7 +97,7 @@ fn mpp_challenge_header() -> String {
 }
 
 /// Mounts the MPP discovery surface: `/networks` plus the keyless 402 probe
-/// against the first listed network.
+/// against the first listed network (the payments verb needs both).
 async fn mount_mpp(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/networks"))
@@ -113,22 +116,50 @@ async fn mount_mpp(server: &MockServer) {
         .await;
 }
 
-#[tokio::test]
-async fn x402_supported_networks_fetches_and_exits_zero() {
-    let server = MockServer::start().await;
-    mount_x402(&server).await;
-
-    let out = run_qn(&server.uri(), &["rpc", "x402", "supported-networks"]).await;
-    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+/// Runs the binary with `--format <fmt>` and returns (stdout, stderr, ok).
+async fn run_qn_bin(server: &MockServer, fmt: &str, args: &[&str]) -> (String, String, bool) {
+    let uri = server.uri();
+    let mut argv = vec![
+        "--base-url",
+        uri.as_str(),
+        "--no-input",
+        "--no-color",
+        "--format",
+        fmt,
+    ];
+    argv.extend(args);
+    let output = assert_cmd::Command::cargo_bin("qn")
+        .unwrap()
+        .args(&argv)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.success(),
+    )
 }
 
 #[tokio::test]
-async fn x402_supported_networks_alias_works() {
+async fn x402_supported_networks_fetches_and_exits_zero() {
     let server = MockServer::start().await;
-    mount_x402(&server).await;
+    mount_x402_networks(&server).await;
 
-    let out = run_qn(&server.uri(), &["rpc", "x402", "networks"]).await;
+    let out = run_qn(&server.uri(), &["rpc", "x402", "supported-networks"]).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    let out = run_qn(&server.uri(), &["rpc", "x402", "networks"]).await;
+    assert_eq!(out.exit_code, 0, "alias failed: stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_supported_payments_fetches_and_exits_zero() {
+    let server = MockServer::start().await;
+    mount_x402_supported(&server).await;
+
+    let out = run_qn(&server.uri(), &["rpc", "x402", "supported-payments"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    let out = run_qn(&server.uri(), &["rpc", "x402", "payments"]).await;
+    assert_eq!(out.exit_code, 0, "alias failed: stderr={}", out.stderr);
 }
 
 #[tokio::test]
@@ -141,9 +172,17 @@ async fn mpp_supported_networks_fetches_and_exits_zero() {
 }
 
 #[tokio::test]
-async fn supported_networks_surfaces_callable_fetch_failure() {
+async fn mpp_supported_payments_fetches_and_exits_zero() {
     let server = MockServer::start().await;
-    // /networks returns 500 — the command should fail with an actionable error.
+    mount_mpp(&server).await;
+
+    let out = run_qn(&server.uri(), &["rpc", "mpp", "supported-payments"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn supported_networks_surfaces_fetch_failure() {
+    let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/networks"))
         .respond_with(ResponseTemplate::new(500))
@@ -159,127 +198,53 @@ async fn supported_networks_surfaces_callable_fetch_failure() {
     );
 }
 
-/// A currencies fetch failure is best-effort: exit 0, callable table renders,
-/// a warning lands on stderr, and the JSON payments field is null.
 #[tokio::test]
-async fn x402_currencies_failure_is_best_effort() {
+async fn supported_payments_surfaces_fetch_failure() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/networks"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "networks": ["base-sepolia"]
-        })))
-        .mount(&server)
-        .await;
     Mock::given(method("GET"))
         .and(path("/supported"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
 
-    let output = assert_cmd::Command::cargo_bin("qn")
-        .unwrap()
-        .args([
-            "--base-url",
-            &server.uri(),
-            "--no-input",
-            "--no-color",
-            "--format",
-            "json",
-            "rpc",
-            "x402",
-            "supported-networks",
-        ])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "stderr={stderr}");
+    let out = run_qn(&server.uri(), &["rpc", "x402", "supported-payments"]).await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
     assert!(
-        stderr.contains("could not fetch accepted currencies"),
-        "stderr={stderr}"
+        out.stderr.contains("discovery") || out.stderr.contains("gateway catalog"),
+        "stderr={}",
+        out.stderr
     );
-    let v: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
-    assert_eq!(v["callable"], json!(["base-sepolia"]));
-    assert!(v["payments"].is_null(), "{v}");
 }
 
-// Subprocess: assert the two-section x402 render and the JSON shape.
+// Subprocess: JSON is a bare array of slugs.
 #[tokio::test]
-async fn x402_supported_networks_renders_two_sections() {
+async fn x402_supported_networks_json_is_a_slug_array() {
     let server = MockServer::start().await;
-    mount_x402(&server).await;
+    mount_x402_networks(&server).await;
 
-    let output = assert_cmd::Command::cargo_bin("qn")
-        .unwrap()
-        .args([
-            "--base-url",
-            &server.uri(),
-            "--no-input",
-            "--no-color",
-            "--format",
-            "table",
-            "rpc",
-            "x402",
-            "supported-networks",
-        ])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    assert!(stdout.contains("Callable networks"), "{stdout}");
-    assert!(stdout.contains("Accepted currencies"), "{stdout}");
-    assert!(stdout.contains("ethereum-mainnet"), "{stdout}");
-    // The payment network maps to its slug, the two offers dedupe to one row,
-    // and the known address resolves to its symbol.
-    assert_eq!(stdout.matches("base-sepolia").count(), 2, "{stdout}");
-    assert!(
-        stdout.contains("USDC") && !stdout.contains("GatewayWalletBatched"),
-        "{stdout}"
-    );
-    // The unknown payment network falls back to its raw CAIP-2 id with the
-    // offer's token name.
-    assert!(stdout.contains("eip155:999999"), "{stdout}");
-    assert!(stdout.contains("Fake Dollar"), "{stdout}");
-}
-
-#[tokio::test]
-async fn x402_supported_networks_json_shape() {
-    let server = MockServer::start().await;
-    mount_x402(&server).await;
-
-    let output = assert_cmd::Command::cargo_bin("qn")
-        .unwrap()
-        .args([
-            "--base-url",
-            &server.uri(),
-            "--no-input",
-            "--format",
-            "json",
-            "rpc",
-            "x402",
-            "supported-networks",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let v: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    let (stdout, stderr, ok) =
+        run_qn_bin(&server, "json", &["rpc", "x402", "supported-networks"]).await;
+    assert!(ok, "stderr={stderr}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert_eq!(
-        v["callable"],
+        v,
         json!(["base-sepolia", "ethereum-mainnet", "solana-devnet"])
     );
+}
+
+// Subprocess: JSON is a bare array of payment options; offers dedupe, slugs
+// resolve, and unknown networks stay raw CAIP-2.
+#[tokio::test]
+async fn x402_supported_payments_json_is_an_options_array() {
+    let server = MockServer::start().await;
+    mount_x402_supported(&server).await;
+
+    let (stdout, stderr, ok) =
+        run_qn_bin(&server, "json", &["rpc", "x402", "supported-payments"]).await;
+    assert!(ok, "stderr={stderr}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert_eq!(
-        v["payments"],
+        v,
         json!([
             {
                 "network": "base-sepolia",
@@ -295,36 +260,17 @@ async fn x402_supported_networks_json_shape() {
     );
 }
 
-// Subprocess: assert the MPP challenge-derived currencies render.
+// Subprocess: the MPP challenge-derived payment options render with resolved
+// slugs and symbols.
 #[tokio::test]
-async fn mpp_supported_networks_renders_challenge_currencies() {
+async fn mpp_supported_payments_renders_challenge_options() {
     let server = MockServer::start().await;
     mount_mpp(&server).await;
 
-    let output = assert_cmd::Command::cargo_bin("qn")
-        .unwrap()
-        .args([
-            "--base-url",
-            &server.uri(),
-            "--no-input",
-            "--no-color",
-            "--format",
-            "table",
-            "rpc",
-            "mpp",
-            "supported-networks",
-        ])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let (stdout, stderr, ok) =
+        run_qn_bin(&server, "table", &["rpc", "mpp", "supported-payments"]).await;
+    assert!(ok, "stderr={stderr}");
 
-    // Tempo testnet resolves to its slug and the enshrined token to pathUSD;
-    // the Solana challenge maps to solana-mainnet USDC.
     assert!(stdout.contains("tempo-testnet"), "{stdout}");
     assert!(stdout.contains("pathUSD"), "{stdout}");
     assert!(stdout.contains("solana-mainnet"), "{stdout}");

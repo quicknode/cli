@@ -1,25 +1,26 @@
-//! `qn rpc x402 supported-networks` / `qn rpc mpp supported-networks` — one
-//! payment gateway's discovery catalog, in two sections: the networks you can
-//! make paid RPC calls **to** (callable), and the currencies the gateway
-//! accepts as payment.
+//! `qn rpc {x402,mpp} supported-networks` and `supported-payments` — one
+//! payment gateway's discovery lists, one per verb: the networks you can make
+//! paid RPC calls **to**, and the payment options the gateway accepts (the
+//! network, token, and contract address you pay **with**).
 //!
 //! Keyless and public: this reads the gateway's own discovery surfaces, not
-//! the account API. Callable networks come from `{gateway}/networks`. Accepted
-//! currencies come from `x402.quicknode.com/supported` for x402; the MPP
-//! gateway publishes them in the `WWW-Authenticate: Payment` challenge of a
-//! keyless 402 response, so the command probes one callable network without
-//! paying. Results are cached per scheme in `pay-networks.toml` next to the
+//! the account API. Callable networks come from `{gateway}/networks`. Payment
+//! options come from `x402.quicknode.com/supported` for x402; the MPP gateway
+//! publishes them in the `WWW-Authenticate: Payment` challenge of a keyless
+//! 402 response, so `supported-payments` probes one callable network without
+//! paying. Each list is cached per scheme in `pay-networks.toml` next to the
 //! config with a 24h TTL, mirroring the multichain URL cache. A callable
-//! network is a valid `--network` for a paid call; an accepted currency's
+//! network is a valid `--network` for a paid call; a payment option's
 //! network/address pair is a ready `--payment-network`/`--payment-asset`.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::Deserialize;
 
-use crate::config::{self, PayAssetEntry, SupportedNetworks};
+use crate::config::{self, PayAssetEntry};
 use crate::context::{Ctx, GlobalArgs};
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, write_table, OutputCtx, Render};
@@ -50,64 +51,94 @@ impl Scheme {
     }
 }
 
-pub(super) async fn run(scheme: Scheme, global: GlobalArgs) -> Result<(), CliError> {
-    // A `--base-url` override points the gateway fetches at one host (used by
-    // tests to serve the discovery endpoints from a mock). It also bypasses
-    // the cache, since a test host's data isn't the real catalog.
-    let base_override = global.base_url.clone();
-    let ctx = Ctx::from_global_keyless(global)?;
-    let cache_path = config::pay_networks_cache_path(ctx.global.resolve_config_path().as_deref());
+/// Cache/override plumbing shared by both verbs. A `--base-url` override
+/// points the gateway fetches at one host (used by tests to serve the
+/// discovery endpoints from a mock) and bypasses the cache, since a test
+/// host's data isn't the real catalog.
+struct Discovery {
+    ctx: Ctx,
+    scheme: Scheme,
+    base: String,
+    cache_path: Option<std::path::PathBuf>,
+    use_cache: bool,
+}
 
-    // Fresh cache hit? (Skipped when a --base-url override is active.)
-    let cached = if base_override.is_none() {
-        cache_path
-            .as_deref()
-            .and_then(|p| config::load_pay_networks(p, scheme.as_str(), now_unix()))
-    } else {
-        None
-    };
+impl Discovery {
+    fn new(scheme: Scheme, global: GlobalArgs) -> Result<Self, CliError> {
+        let base_override = global.base_url.clone();
+        let ctx = Ctx::from_global_keyless(global)?;
+        let cache_path =
+            config::pay_networks_cache_path(ctx.global.resolve_config_path().as_deref());
+        let use_cache = base_override.is_none();
+        let base = base_override.unwrap_or_else(|| scheme.gateway_base().to_string());
+        Ok(Self {
+            ctx,
+            scheme,
+            base,
+            cache_path,
+            use_cache,
+        })
+    }
 
-    let (callable, payments) = match cached {
-        Some(c) => (c.callable, Some(c.payments)),
-        None => {
-            let base = base_override.as_deref().unwrap_or(scheme.gateway_base());
-            let client = reqwest::Client::new();
-            let callable = fetch_networks(&client, base).await?;
-            let fetched = match scheme {
-                Scheme::X402 => fetch_x402_payments(&client, base).await,
-                Scheme::Mpp => fetch_mpp_payments(&client, base, callable.first()).await,
-            };
-            match fetched {
-                Ok(payments) => {
-                    let catalog = SupportedNetworks { callable, payments };
-                    if base_override.is_none() {
-                        if let Some(p) = cache_path.as_deref() {
-                            let _ =
-                                config::save_pay_networks(p, scheme.as_str(), now_unix(), &catalog);
-                        }
-                    }
-                    (catalog.callable, Some(catalog.payments))
-                }
-                Err(e) => {
-                    // Best-effort: the callable list still renders; the
-                    // currencies section reports the miss and nothing is
-                    // cached, so the next run retries.
-                    ctx.out
-                        .warn(&format!("could not fetch accepted currencies: {e}"));
-                    (callable, None)
-                }
-            }
+    fn cache_path(&self) -> Option<&Path> {
+        self.use_cache
+            .then_some(self.cache_path.as_deref())
+            .flatten()
+    }
+
+    /// The callable-networks list: fresh cache hit, or fetch + cache.
+    async fn ensure_networks(&self, client: &reqwest::Client) -> Result<Vec<String>, CliError> {
+        if let Some(cached) = self
+            .cache_path()
+            .and_then(|p| config::load_pay_networks(p, self.scheme.as_str(), now_unix()))
+        {
+            return Ok(cached);
         }
-    };
+        let networks = fetch_networks(client, &self.base).await?;
+        if let Some(p) = self.cache_path() {
+            let _ = config::save_pay_networks(p, self.scheme.as_str(), now_unix(), &networks);
+        }
+        Ok(networks)
+    }
 
-    crate::output::emit(
-        &ctx.out,
-        &SupportedNetworksView {
-            scheme: scheme.as_str(),
-            callable,
-            payments,
-        },
-    )
+    /// The payment-options list: fresh cache hit, or fetch + cache. The MPP
+    /// probe needs a callable network, which reuses the networks cache.
+    async fn ensure_payments(
+        &self,
+        client: &reqwest::Client,
+    ) -> Result<Vec<PayAssetEntry>, CliError> {
+        if let Some(cached) = self
+            .cache_path()
+            .and_then(|p| config::load_pay_payments(p, self.scheme.as_str(), now_unix()))
+        {
+            return Ok(cached);
+        }
+        let payments = match self.scheme {
+            Scheme::X402 => fetch_x402_payments(client, &self.base).await?,
+            Scheme::Mpp => {
+                let networks = self.ensure_networks(client).await?;
+                fetch_mpp_payments(client, &self.base, networks.first()).await?
+            }
+        };
+        if let Some(p) = self.cache_path() {
+            let _ = config::save_pay_payments(p, self.scheme.as_str(), now_unix(), &payments);
+        }
+        Ok(payments)
+    }
+}
+
+/// `qn rpc {x402,mpp} supported-networks`.
+pub(super) async fn run_networks(scheme: Scheme, global: GlobalArgs) -> Result<(), CliError> {
+    let d = Discovery::new(scheme, global)?;
+    let networks = d.ensure_networks(&reqwest::Client::new()).await?;
+    crate::output::emit(&d.ctx.out, &NetworksView(networks))
+}
+
+/// `qn rpc {x402,mpp} supported-payments`.
+pub(super) async fn run_payments(scheme: Scheme, global: GlobalArgs) -> Result<(), CliError> {
+    let d = Discovery::new(scheme, global)?;
+    let payments = d.ensure_payments(&reqwest::Client::new()).await?;
+    crate::output::emit(&d.ctx.out, &PaymentsView(payments))
 }
 
 /// GET `{base}/networks` → the `networks` slug array.
@@ -132,7 +163,7 @@ async fn fetch_networks(client: &reqwest::Client, base: &str) -> Result<Vec<Stri
     Ok(body.networks)
 }
 
-/// GET x402 `/supported` → the accepted payment currencies, deduplicated by
+/// GET x402 `/supported` → the accepted payment options, deduplicated by
 /// (network, token address). The display name prefers our known symbol table;
 /// otherwise the offer's `extra.name`, but only from offers without a
 /// `verifyingContract` (those are Circle Gateway variants whose `name` is an
@@ -211,9 +242,9 @@ async fn fetch_x402_payments(
     Ok(out)
 }
 
-/// The MPP gateway lists its accepted currencies only in the 402 challenge, so
-/// probe one callable network with a keyless request (no payment is taken) and
-/// parse the `WWW-Authenticate: Payment` header.
+/// The MPP gateway lists its accepted payment options only in the 402
+/// challenge, so probe one callable network with a keyless request (no payment
+/// is taken) and parse the `WWW-Authenticate: Payment` header.
 async fn fetch_mpp_payments(
     client: &reqwest::Client,
     base: &str,
@@ -372,51 +403,47 @@ fn decode_challenge(method: Option<String>, request: Option<String>) -> Option<C
     })
 }
 
+/// `supported-networks` output: a bare array in JSON, one NETWORK column as a
+/// table.
 #[derive(serde::Serialize)]
-struct SupportedNetworksView {
-    #[serde(skip)]
-    scheme: &'static str,
-    callable: Vec<String>,
-    /// `None` when the currencies fetch failed: rendered as unavailable in the
-    /// table, serialized as `null` in JSON.
-    payments: Option<Vec<PayAssetEntry>>,
+#[serde(transparent)]
+struct NetworksView(Vec<String>);
+
+impl Render for NetworksView {
+    fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
+        if self.0.is_empty() {
+            return writeln!(w, "(none listed)");
+        }
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["NETWORK"]);
+        for n in &self.0 {
+            t.add_row(vec![comfy_table::Cell::new(n)]);
+        }
+        write_table(w, &t)
+    }
 }
 
-impl Render for SupportedNetworksView {
+/// `supported-payments` output: a bare array in JSON, NETWORK/ASSET/ADDRESS
+/// columns as a table.
+#[derive(serde::Serialize)]
+#[serde(transparent)]
+struct PaymentsView(Vec<PayAssetEntry>);
+
+impl Render for PaymentsView {
     fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
-        writeln!(
-            w,
-            "Callable networks (make {}-paid RPC calls to these):",
-            self.scheme
-        )?;
-        if self.callable.is_empty() {
-            writeln!(w, "(no callable networks)")?;
-        } else {
-            let mut t = new_table(ctx);
-            set_header_bold(&mut t, ctx, vec!["NETWORK"]);
-            for n in &self.callable {
-                t.add_row(vec![comfy_table::Cell::new(n)]);
-            }
-            write_table(w, &t)?;
+        if self.0.is_empty() {
+            return writeln!(w, "(none listed)");
         }
-        writeln!(w)?;
-        writeln!(w, "Accepted currencies (pay for calls with one of these):")?;
-        match &self.payments {
-            None => writeln!(w, "(could not fetch accepted currencies)"),
-            Some(p) if p.is_empty() => writeln!(w, "(none listed)"),
-            Some(p) => {
-                let mut t = new_table(ctx);
-                set_header_bold(&mut t, ctx, vec!["NETWORK", "ASSET", "ADDRESS"]);
-                for e in p {
-                    t.add_row(vec![
-                        comfy_table::Cell::new(&e.network),
-                        crate::output::opt_cell(&e.asset),
-                        comfy_table::Cell::new(&e.address),
-                    ]);
-                }
-                write_table(w, &t)
-            }
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["NETWORK", "ASSET", "ADDRESS"]);
+        for e in &self.0 {
+            t.add_row(vec![
+                comfy_table::Cell::new(&e.network),
+                crate::output::opt_cell(&e.asset),
+                comfy_table::Cell::new(&e.address),
+            ]);
         }
+        write_table(w, &t)
     }
 }
 

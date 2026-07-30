@@ -1576,18 +1576,22 @@ async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
 //
 // The MPP session lane opens an escrow channel (an on-chain Tempo tx, signed
 // offline against the mock), then pays with cumulative vouchers. The mock
-// gateway serves a tempo/session 402 challenge on probes and 2xx on credential
-// POSTs; channel status is a GET under /session/:network/channels/:id.
+// gateway serves a tempo/session 402 challenge on probes and 2xx (with a
+// Payment-Receipt header, like the real gateway) on credential POSTs
+// (open/topUp/voucher/close).
 
 use base64::Engine as _;
 
-// A base64url tempo/session request body (currency, recipient, amount, chainId).
+const SESSION_ESCROW: &str = "0x33b901018174ddabe4841042ab76ba85d4e24f25";
+
+// A base64url tempo/session request body: currency, recipient, amount, and
+// the escrow contract the gateway expects deposits in.
 fn session_request_b64() -> String {
     let json = json!({
         "amount": "500",
         "currency": "0x20c0000000000000000000000000000000000000",
         "recipient": "0xfd24114c3981aba78ae2441991b1bdb89329c556",
-        "methodDetails": { "chainId": 42431 }
+        "methodDetails": { "chainId": 42431, "escrowContract": SESSION_ESCROW }
     });
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json).unwrap())
 }
@@ -1599,17 +1603,41 @@ fn session_www_authenticate() -> String {
     )
 }
 
+// A base64url Payment-Receipt header value, the shape the gateway attaches to
+// every accepted session response.
+fn session_receipt_b64(accepted: &str, spent: &str) -> String {
+    let json = json!({
+        "method": "tempo",
+        "intent": "session",
+        "status": "success",
+        "timestamp": "2099-01-01T00:00:00Z",
+        "reference": format!("0x{}", "ab".repeat(32)),
+        "challengeId": "c1",
+        "channelId": format!("0x{}", "ab".repeat(32)),
+        "acceptedCumulative": accepted,
+        "spent": spent,
+    });
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json).unwrap())
+}
+
 // Mount the session endpoint: a 402 session challenge on an unauthorized POST
-// (the probe), and 200 on any POST carrying an Authorization: Payment header
-// (credential submissions: open/topUp/voucher/close).
+// (the probe), and 200 + Payment-Receipt on any POST carrying an
+// Authorization: Payment header (credential submissions).
 async fn mount_session(server: &MockServer, network: &str) {
     let path_str = format!("/session/{network}");
     Mock::given(method("POST"))
         .and(path(path_str.clone()))
         .and(wiremock::matchers::header_exists("authorization"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "jsonrpc": "2.0", "id": 1, "result": "0xok"
-        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(
+                    "Payment-Receipt",
+                    session_receipt_b64("500", "500").as_str(),
+                )
+                .set_body_json(json!({
+                    "jsonrpc": "2.0", "id": 1, "result": "0xok"
+                })),
+        )
         .mount(server)
         .await;
     Mock::given(method("POST"))
@@ -1621,6 +1649,25 @@ async fn mount_session(server: &MockServer, network: &str) {
         )
         .mount(server)
         .await;
+}
+
+// Decodes the `Authorization: Payment <base64url>` credential a request
+// carried and returns its `payload` object.
+fn credential_payload(req: &wiremock::Request) -> serde_json::Value {
+    let header = req
+        .headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .expect("credential POST must carry Authorization");
+    let b64 = header
+        .strip_prefix("Payment ")
+        .expect("Authorization must be a Payment credential");
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(b64)
+        .expect("credential must be base64url");
+    let credential: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("credential must be JSON");
+    credential["payload"].clone()
 }
 
 fn mpp_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
@@ -1661,6 +1708,60 @@ async fn mpp_open_happy_path_and_caches_channel() {
         dir.path().join("channels.toml").exists(),
         "open must cache the channel state"
     );
+
+    // The credential POST must carry the legacy contract-backed open payload:
+    // a transaction plus the opening voucher, no descriptor.
+    let requests = server.received_requests().await.unwrap();
+    let payload = requests
+        .iter()
+        .find(|r| r.headers.contains_key("authorization"))
+        .map(credential_payload)
+        .expect("an open credential must have been POSTed");
+    assert_eq!(payload["action"], "open");
+    assert_eq!(payload["type"], "transaction");
+    assert_eq!(payload["cumulativeAmount"], "500");
+    assert!(payload.get("descriptor").is_none(), "got: {payload}");
+    for key in ["channelId", "transaction", "signature", "authorizedSigner"] {
+        assert!(
+            payload[key].as_str().is_some_and(|s| s.starts_with("0x")),
+            "payload must carry hex {key}: {payload}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mpp_status_replays_voucher_and_reads_the_receipt() {
+    let server = MockServer::start().await;
+    mount_session(&server, "tempo-testnet").await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    // Open first so a channel is cached, then ask for its status.
+    let mut open_args = mpp_args(&cfg, &key_path, "open");
+    open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
+    let out = run_qn(&server.uri(), &open_args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    // Exit 0 requires the Payment-Receipt header to have decoded: a missing
+    // or malformed receipt fails the command. (The harness can't capture the
+    // in-process stderr note; see run_qn.)
+    let out = run_qn(&server.uri(), &mpp_args(&cfg, &key_path, "status")).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    // The status POST is an idempotent replay of the current high-water
+    // voucher: cumulativeAmount stays at the opening amount.
+    let requests = server.received_requests().await.unwrap();
+    let voucher = requests
+        .iter()
+        .filter(|r| r.headers.contains_key("authorization"))
+        .map(credential_payload)
+        .find(|p| p["action"] == "voucher")
+        .expect("status must POST a voucher credential");
+    assert_eq!(voucher["cumulativeAmount"], "500");
+    assert!(voucher.get("descriptor").is_none(), "got: {voucher}");
 }
 
 #[tokio::test]

@@ -550,7 +550,8 @@ pub fn save_gateway_session(
 // cumulative spend) reused across `qn rpc` processes. We persist it in
 // `channels.toml` alongside the config, keyed by payer address + query network
 // so one wallet can hold a channel per network. The gateway is the source of
-// truth for the high-water mark; `qn rpc mpp status` re-derives a lost entry.
+// truth for the accepted high-water mark; `qn rpc mpp status` re-syncs it into
+// this record. A lost or unparseable record reads as "no channel".
 
 /// On-disk shape of `~/.config/qn/channels.toml`. Amounts are stored as
 /// strings because TOML has no unsigned-128-bit integer type; they round-trip
@@ -568,10 +569,9 @@ pub struct ChannelEntry {
     pub channel_id: String,
     pub token: String,
     pub payee: String,
-    pub operator: String,
     pub salt: String,
     pub authorized_signer: String,
-    pub expiring_nonce_hash: String,
+    pub escrow_contract: String,
     pub deposit: String,
     pub cumulative_spent: String,
     pub per_call: String,
@@ -584,10 +584,9 @@ impl ChannelEntry {
             channel_id: s.channel_id.clone(),
             token: s.token.clone(),
             payee: s.payee.clone(),
-            operator: s.operator.clone(),
             salt: s.salt.clone(),
             authorized_signer: s.authorized_signer.clone(),
-            expiring_nonce_hash: s.expiring_nonce_hash.clone(),
+            escrow_contract: s.escrow_contract.clone(),
             deposit: s.deposit.to_string(),
             cumulative_spent: s.cumulative_spent.to_string(),
             per_call: s.per_call.to_string(),
@@ -600,10 +599,9 @@ impl ChannelEntry {
             channel_id: self.channel_id.clone(),
             token: self.token.clone(),
             payee: self.payee.clone(),
-            operator: self.operator.clone(),
             salt: self.salt.clone(),
             authorized_signer: self.authorized_signer.clone(),
-            expiring_nonce_hash: self.expiring_nonce_hash.clone(),
+            escrow_contract: self.escrow_contract.clone(),
             deposit: self.deposit.parse().ok()?,
             cumulative_spent: self.cumulative_spent.parse().ok()?,
             per_call: self.per_call.parse().ok()?,
@@ -728,18 +726,19 @@ pub fn save_networks(
     write_atomic_0600(path, text.as_bytes(), ".qn-networks-")
 }
 
-// ── Supported-networks discovery cache ───────────────────────────────────────
+// ── Payment-gateway discovery cache ──────────────────────────────────────────
 //
-// The networks callable via a payment gateway and the currencies it accepts as
-// payment are stable public metadata fetched from the gateways' discovery
+// The networks callable via a payment gateway and the payment options it
+// accepts are stable public metadata fetched from the gateways' discovery
 // surfaces. Cached per scheme (x402 / mpp) in `pay-networks.toml` next to the
-// config file with a 24-hour TTL, mirroring the multichain URL cache. Not
-// account-scoped (the data is public and the same for everyone).
+// config file, each section with its own 24-hour TTL (the two lists back
+// separate commands and are fetched independently). Not account-scoped (the
+// data is public and the same for everyone).
 
-/// Seconds a cached supported-networks catalog is considered fresh (24h).
+/// Seconds a cached discovery list is considered fresh (24h).
 pub const PAY_NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// One accepted payment currency: the network the payment moves on, a display
+/// One accepted payment option: the network the payment moves on, a display
 /// symbol when one is known, and the token contract address (EVM) / mint
 /// (Solana).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -750,31 +749,38 @@ pub struct PayAssetEntry {
     pub address: String,
 }
 
-/// One gateway's discovery catalog: the networks it can proxy paid calls to,
-/// and the currencies it accepts as payment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SupportedNetworks {
-    pub callable: Vec<String>,
-    pub payments: Vec<PayAssetEntry>,
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PayNetworksCacheFile {
     #[serde(default)]
-    pub x402: Option<PayNetworksCacheEntry>,
+    pub x402: SchemeCacheEntry,
     #[serde(default)]
-    pub mpp: Option<PayNetworksCacheEntry>,
+    pub mpp: SchemeCacheEntry,
+}
+
+/// One gateway's cached discovery lists, each independently timestamped.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchemeCacheEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub networks: Option<NetworksCacheSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payments: Option<PaymentsCacheSection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PayNetworksCacheEntry {
-    /// Unix seconds the catalog was fetched, for the TTL check.
+pub struct NetworksCacheSection {
+    /// Unix seconds the list was fetched, for the TTL check.
     pub fetched_at_unix: i64,
-    pub callable: Vec<String>,
+    pub networks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentsCacheSection {
+    /// Unix seconds the list was fetched, for the TTL check.
+    pub fetched_at_unix: i64,
     pub payments: Vec<PayAssetEntry>,
 }
 
-/// The supported-networks cache path: `pay-networks.toml` alongside the config.
+/// The discovery cache path: `pay-networks.toml` alongside the config.
 pub fn pay_networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
         Some(p) => p.parent().map(|d| d.join("pay-networks.toml")),
@@ -782,59 +788,96 @@ pub fn pay_networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// Loads the cached catalog for `scheme` ("x402" or "mpp") from `path`, if
-/// present and fetched within the TTL (relative to `now_unix`). Returns `None`
-/// on any miss, including a cache file in an older format.
-pub fn load_pay_networks(path: &Path, scheme: &str, now_unix: i64) -> Option<SupportedNetworks> {
-    let text = fs::read_to_string(path).ok()?;
-    let cache: PayNetworksCacheFile = toml::from_str(&text).ok()?;
-    let entry = match scheme {
-        "x402" => cache.x402?,
-        "mpp" => cache.mpp?,
-        _ => return None,
-    };
-    if now_unix.saturating_sub(entry.fetched_at_unix) >= PAY_NETWORKS_TTL_SECS {
-        return None;
-    }
-    Some(SupportedNetworks {
-        callable: entry.callable,
-        payments: entry.payments,
-    })
-}
-
-/// Saves the catalog for `scheme` to `path` atomically, stamping
-/// `fetched_at_unix` for the TTL check. The other scheme's entry is kept when
-/// the existing file parses; an older-format file is replaced wholesale.
-pub fn save_pay_networks(
-    path: &Path,
-    scheme: &str,
-    fetched_at_unix: i64,
-    catalog: &SupportedNetworks,
-) -> Result<(), CliError> {
-    let mut cache: PayNetworksCacheFile = fs::read_to_string(path)
+/// Reads and parses the cache file, or an empty default when it is missing,
+/// unreadable, or in an older format.
+fn load_pay_cache_file(path: &Path) -> PayNetworksCacheFile {
+    fs::read_to_string(path)
         .ok()
         .and_then(|text| toml::from_str(&text).ok())
-        .unwrap_or_default();
-    let entry = Some(PayNetworksCacheEntry {
-        fetched_at_unix,
-        callable: catalog.callable.clone(),
-        payments: catalog.payments.clone(),
-    });
+        .unwrap_or_default()
+}
+
+fn scheme_entry<'a>(
+    cache: &'a mut PayNetworksCacheFile,
+    scheme: &str,
+) -> Option<&'a mut SchemeCacheEntry> {
     match scheme {
-        "x402" => cache.x402 = entry,
-        "mpp" => cache.mpp = entry,
-        _ => {
-            return Err(CliError::ConfigWrite {
-                path: path.to_path_buf(),
-                source: std::io::Error::other(format!("unknown payment scheme '{scheme}'")),
-            })
-        }
+        "x402" => Some(&mut cache.x402),
+        "mpp" => Some(&mut cache.mpp),
+        _ => None,
     }
-    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+}
+
+fn write_pay_cache_file(path: &Path, cache: &PayNetworksCacheFile) -> Result<(), CliError> {
+    let text = toml::to_string_pretty(cache).map_err(|e| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other(e),
     })?;
     write_atomic_0600(path, text.as_bytes(), ".qn-pay-networks-")
+}
+
+/// Loads the cached callable-networks list for `scheme` ("x402" or "mpp") from
+/// `path`, if present and fetched within the TTL (relative to `now_unix`).
+/// Returns `None` on any miss, including a cache file in an older format.
+pub fn load_pay_networks(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec<String>> {
+    let mut cache = load_pay_cache_file(path);
+    let section = scheme_entry(&mut cache, scheme)?.networks.take()?;
+    if now_unix.saturating_sub(section.fetched_at_unix) >= PAY_NETWORKS_TTL_SECS {
+        return None;
+    }
+    Some(section.networks)
+}
+
+/// Loads the cached payment-options list for `scheme`, with the same TTL and
+/// miss semantics as [`load_pay_networks`].
+pub fn load_pay_payments(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec<PayAssetEntry>> {
+    let mut cache = load_pay_cache_file(path);
+    let section = scheme_entry(&mut cache, scheme)?.payments.take()?;
+    if now_unix.saturating_sub(section.fetched_at_unix) >= PAY_NETWORKS_TTL_SECS {
+        return None;
+    }
+    Some(section.payments)
+}
+
+/// Saves the callable-networks list for `scheme` to `path` atomically,
+/// stamping `fetched_at_unix` for the TTL check. Every other section is kept
+/// when the existing file parses; an older-format file is replaced wholesale.
+pub fn save_pay_networks(
+    path: &Path,
+    scheme: &str,
+    fetched_at_unix: i64,
+    networks: &[String],
+) -> Result<(), CliError> {
+    let mut cache = load_pay_cache_file(path);
+    let entry = scheme_entry(&mut cache, scheme).ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(format!("unknown payment scheme '{scheme}'")),
+    })?;
+    entry.networks = Some(NetworksCacheSection {
+        fetched_at_unix,
+        networks: networks.to_vec(),
+    });
+    write_pay_cache_file(path, &cache)
+}
+
+/// Saves the payment-options list for `scheme`, with the same merge semantics
+/// as [`save_pay_networks`].
+pub fn save_pay_payments(
+    path: &Path,
+    scheme: &str,
+    fetched_at_unix: i64,
+    payments: &[PayAssetEntry],
+) -> Result<(), CliError> {
+    let mut cache = load_pay_cache_file(path);
+    let entry = scheme_entry(&mut cache, scheme).ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(format!("unknown payment scheme '{scheme}'")),
+    })?;
+    entry.payments = Some(PaymentsCacheSection {
+        fetched_at_unix,
+        payments: payments.to_vec(),
+    });
+    write_pay_cache_file(path, &cache)
 }
 
 /// Atomically writes `bytes` to `path` with 0600 perms via a temp file in the
@@ -963,50 +1006,55 @@ mod tests {
     }
 
     #[test]
-    fn pay_networks_cache_roundtrips_per_scheme() {
+    fn pay_cache_sections_roundtrip_independently() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("pay-networks.toml");
-        let x402 = SupportedNetworks {
-            callable: vec!["base-sepolia".to_string()],
-            payments: vec![PayAssetEntry {
-                network: "base-sepolia".to_string(),
-                asset: Some("USDC".to_string()),
-                address: "0xabc".to_string(),
-            }],
-        };
-        let mpp = SupportedNetworks {
-            callable: vec!["tempo-testnet".to_string()],
-            payments: vec![],
-        };
-        save_pay_networks(&path, "x402", 100, &x402).unwrap();
-        save_pay_networks(&path, "mpp", 100, &mpp).unwrap();
+        let payments = vec![PayAssetEntry {
+            network: "base-sepolia".to_string(),
+            asset: Some("USDC".to_string()),
+            address: "0xabc".to_string(),
+        }];
+        save_pay_networks(&path, "x402", 100, &["base-sepolia".to_string()]).unwrap();
+        save_pay_payments(&path, "x402", 200, &payments).unwrap();
+        save_pay_networks(&path, "mpp", 100, &["tempo-testnet".to_string()]).unwrap();
 
-        // Each scheme loads its own entry; saving one kept the other.
-        let got = load_pay_networks(&path, "x402", 100).unwrap();
-        assert_eq!(got.callable, vec!["base-sepolia"]);
-        assert_eq!(got.payments.len(), 1);
-        assert_eq!(got.payments[0].asset.as_deref(), Some("USDC"));
-        let got = load_pay_networks(&path, "mpp", 100).unwrap();
-        assert_eq!(got.callable, vec!["tempo-testnet"]);
-        assert!(got.payments.is_empty());
+        // Each save kept the other sections.
+        assert_eq!(
+            load_pay_networks(&path, "x402", 100).unwrap(),
+            vec!["base-sepolia"]
+        );
+        let got = load_pay_payments(&path, "x402", 200).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].asset.as_deref(), Some("USDC"));
+        assert_eq!(
+            load_pay_networks(&path, "mpp", 100).unwrap(),
+            vec!["tempo-testnet"]
+        );
 
-        // TTL expiry is a miss.
+        // An unfetched section and a TTL-expired section are both misses.
+        assert!(load_pay_payments(&path, "mpp", 100).is_none());
         assert!(load_pay_networks(&path, "x402", 100 + PAY_NETWORKS_TTL_SECS).is_none());
     }
 
     #[test]
-    fn pay_networks_cache_old_format_is_a_miss() {
+    fn pay_cache_old_formats_are_a_miss() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("pay-networks.toml");
-        // The pre-split cache shape: one `entry` with merged network rows.
+        // A pre-split cache shape: a per-scheme entry with merged lists.
         fs::write(
             &path,
-            "[entry]\nfetched_at_unix = 100\n\n\
-             [[entry.networks]]\nnetwork = \"base-sepolia\"\nschemes = [\"x402\"]\n",
+            "[x402]\nfetched_at_unix = 100\ncallable = [\"base-sepolia\"]\npayments = []\n",
         )
         .unwrap();
         assert!(load_pay_networks(&path, "x402", 100).is_none());
-        assert!(load_pay_networks(&path, "mpp", 100).is_none());
+        assert!(load_pay_payments(&path, "x402", 100).is_none());
+
+        // A save on top of the old format replaces it wholesale.
+        save_pay_networks(&path, "mpp", 100, &["tempo-testnet".to_string()]).unwrap();
+        assert_eq!(
+            load_pay_networks(&path, "mpp", 100).unwrap(),
+            vec!["tempo-testnet"]
+        );
     }
 
     #[test]
