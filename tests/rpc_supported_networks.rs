@@ -1,10 +1,4 @@
-//! Integration tests for `qn rpc {x402,mpp} supported-networks` and
-//! `supported-payments` — the keyless per-gateway discovery lists.
-//!
-//! `--base-url` points the gateway fetches at one wiremock host and bypasses
-//! the on-disk cache, so the mock server stands in for the gateway. The
-//! in-process harness can't capture stdout, so rendered output (tables, JSON
-//! shape) is asserted via a subprocess; the in-process tests cover exit codes.
+//! Integration tests for keyless payment-gateway discovery commands.
 
 mod common;
 
@@ -15,7 +9,7 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Mounts the x402 `/networks` list.
+/// Mount the x402 network list.
 async fn mount_x402_networks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/networks"))
@@ -26,17 +20,13 @@ async fn mount_x402_networks(server: &MockServer) {
         .await;
 }
 
-/// Mounts the x402 `/supported` payment catalog. Served with HTTP 402, like
-/// the real gateway (the payment-requirements shape arrives on a 402 status).
+/// Mount the x402 payment catalog.
 async fn mount_x402_supported(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/supported"))
         .respond_with(ResponseTemplate::new(402).set_body_json(json!({
             "x402Version": 2,
             "accepts": [
-                // Two offers for the same (network, asset): a plain token
-                // offer and a Circle Gateway variant (verifyingContract) whose
-                // name is an EIP-712 domain — must dedupe to one USDC row.
                 {
                     "scheme": "exact",
                     "network": "eip155:84532",
@@ -53,8 +43,6 @@ async fn mount_x402_supported(server: &MockServer) {
                         "verifyingContract": "0x0000000000000000000000000000000000000001"
                     }
                 },
-                // A network outside the slug table renders as its raw CAIP-2
-                // id, with the offer's token name.
                 {
                     "scheme": "exact",
                     "network": "eip155:999999",
@@ -67,8 +55,7 @@ async fn mount_x402_supported(server: &MockServer) {
         .await;
 }
 
-/// Builds an MPP `WWW-Authenticate` header with one Tempo-testnet pathUSD
-/// challenge and one Solana-mainnet USDC challenge.
+/// Build an MPP discovery challenge header.
 fn mpp_challenge_header() -> String {
     let tempo = URL_SAFE_NO_PAD.encode(
         json!({
@@ -96,8 +83,7 @@ fn mpp_challenge_header() -> String {
     )
 }
 
-/// Mounts the MPP discovery surface: `/networks` plus the keyless 402 probe
-/// against the first listed network (the payments verb needs both).
+/// Mount the MPP discovery endpoints.
 async fn mount_mpp(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/networks"))
@@ -116,7 +102,7 @@ async fn mount_mpp(server: &MockServer) {
         .await;
 }
 
-/// Runs the binary with `--format <fmt>` and returns (stdout, stderr, ok).
+/// Run the binary with a selected output format.
 async fn run_qn_bin(server: &MockServer, fmt: &str, args: &[&str]) -> (String, String, bool) {
     let uri = server.uri();
     let mut argv = vec![
@@ -216,7 +202,6 @@ async fn supported_payments_surfaces_fetch_failure() {
     );
 }
 
-// Subprocess: JSON is a bare array of slugs.
 #[tokio::test]
 async fn x402_supported_networks_json_is_a_slug_array() {
     let server = MockServer::start().await;
@@ -232,8 +217,6 @@ async fn x402_supported_networks_json_is_a_slug_array() {
     );
 }
 
-// Subprocess: JSON is a bare array of payment options; offers dedupe, slugs
-// resolve, and unknown networks stay raw CAIP-2.
 #[tokio::test]
 async fn x402_supported_payments_json_is_an_options_array() {
     let server = MockServer::start().await;
@@ -260,8 +243,6 @@ async fn x402_supported_payments_json_is_an_options_array() {
     );
 }
 
-// Subprocess: the MPP challenge-derived payment options render with resolved
-// slugs and symbols.
 #[tokio::test]
 async fn mpp_supported_payments_renders_challenge_options() {
     let server = MockServer::start().await;

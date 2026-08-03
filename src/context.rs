@@ -194,17 +194,7 @@ impl Ctx {
         Self::build(global, seed, config_endpoint_url)
     }
 
-    /// Keyless construction for the crypto-micropayment lane of `qn rpc call`
-    /// (`--x402`/`--mpp`): no API key is resolved or required, so it works on
-    /// a machine that has never run `qn auth login`. Only the RPC payment lane
-    /// is usable — every keyed sub-client would 401.
-    ///
-    /// Deliberately NOT applied here:
-    /// - the token cache seed and `[rpc] endpoint_url` (either would conflict
-    ///   with the payment lane — the SDK rejects a custom URL + payment);
-    /// - `--base-url` sub-client overrides (the paid lane's test hook rides in
-    ///   `PaymentConfig.base_url_override`, set by the caller; no control-plane
-    ///   sub-client is used).
+    /// Build a keyless SDK context for paid RPC calls.
     pub fn from_global_keyless_payment(
         global: GlobalArgs,
         payment: quicknode_sdk::PaymentConfig,
@@ -234,11 +224,7 @@ impl Ctx {
         Ok(Self { sdk, out, global })
     }
 
-    /// Keyless construction for local-only commands that make no network calls
-    /// (e.g. `qn wallet` key management). Resolves no API key and builds no
-    /// payment lane, so it works on a machine that has never run `qn auth
-    /// login`. The SDK is present only to satisfy the [`Ctx`] shape; every
-    /// sub-client would 401 if called.
+    /// Build a keyless SDK context for local-only commands.
     pub fn from_global_keyless(global: GlobalArgs) -> Result<Self, CliError> {
         let stdout_is_tty = std::io::stdout().is_terminal();
         let (format, wide) = global.resolve_output(stdout_is_tty);
@@ -279,11 +265,7 @@ impl Ctx {
 
         let mut full = sdk_config(api_key.clone());
 
-        // The `[rpc] endpoint_url` config default becomes the client-wide custom
-        // URL (a per-call `--endpoint-url` overrides it in the call itself). We
-        // validate it here so a malformed config value fails with a clear error
-        // rather than at call time. `seed` and `endpoint_url` coexist harmlessly:
-        // the SDK ignores the seed when a custom URL is set.
+        // Validate the config URL before building the SDK.
         let rpc_endpoint_url = match rpc_endpoint_url {
             Some(u) => Some(validate_endpoint_url(&u)?),
             None => None,
@@ -296,20 +278,12 @@ impl Ctx {
             });
         }
 
-        // --base-prefix only makes sense when overriding the host. Composing it
-        // against the default prod host isn't supported, so fail loudly rather
-        // than silently ignore it.
         if global.base_prefix.is_some() && global.base_url.is_none() {
             return Err(CliError::Arg(
                 "--base-prefix requires --base-url".to_string(),
             ));
         }
 
-        // --base-url applies to every sub-client. Useful for wiremock tests and
-        // on-prem mirrors. Each sub-client has its own fixed suffix; an optional
-        // --base-prefix is inserted between the host and that suffix for
-        // reverse-proxy / gateway environments. Tooling Access / RPC minting
-        // lives on the admin `v0` base, so no separate RPC base is needed here.
         if let Some(base) = &global.base_url {
             let host = validate_base_url(base)?;
             let prefix = match &global.base_prefix {
@@ -404,7 +378,6 @@ fn validate_base_prefix(prefix: &str) -> Result<String, CliError> {
     }
     let inner = trimmed.trim_matches('/');
     if inner.is_empty() {
-        // Bare "/" (or "///") carries no prefix.
         return Ok(String::new());
     }
     let normalized = format!("/{inner}");
@@ -575,7 +548,6 @@ mod tests {
             http.headers.as_ref().and_then(|h| h.get("User-Agent")),
             Some(&user_agent())
         );
-        // SDK defaults (timeout, pooling) must stay untouched.
         assert_eq!(http.timeout_secs, None);
         assert_eq!(http.pool_max_idle_per_host, None);
     }

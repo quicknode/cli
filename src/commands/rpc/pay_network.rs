@@ -1,24 +1,8 @@
-//! Human-readable names for `--pay-network`.
-//!
-//! The SDK's `PaymentConfig.pay_network` is a canonical CAIP-2 id — that is
-//! the form the x402/MPP offers are matched against. This module is the CLI's
-//! presentation layer on top: it accepts the same Quicknode network-name
-//! vocabulary as `--network` (e.g. `base-sepolia`) and resolves it to CAIP-2
-//! before the value reaches the SDK. Anything containing a `:` is treated as
-//! an already-canonical CAIP-2 id and passed through verbatim, so every chain
-//! is reachable even when it has no entry in the table.
-//!
-//! EVM chain ids are verified against the public EVM chain registry
-//! (chainid.network, the dataset behind chainlist.org). Solana ids are the
-//! standard CAIP-2 genesis-hash prefixes. Names whose chain id could not be
-//! confirmed against a public source are deliberately absent — a wrong id
-//! could match a payment offer on the wrong chain, while a missing name just
-//! errors with the CAIP-2 escape hatch.
+//! Resolve Quicknode payment-network names to CAIP-2 IDs.
 
 use crate::errors::CliError;
 
-/// Quicknode network name → CAIP-2 pay-network id. Sorted by name (binary
-/// searched); a unit test enforces order and uniqueness.
+/// Sorted Quicknode-name to CAIP-2 mappings.
 const PAY_NETWORKS: &[(&str, &str)] = &[
     ("0g-galileo", "eip155:16601"),
     ("0g-mainnet", "eip155:16661"),
@@ -54,8 +38,6 @@ const PAY_NETWORKS: &[(&str, &str)] = &[
     ("hedera-testnet", "eip155:296"),
     ("hemi-mainnet", "eip155:43111"),
     ("hemi-testnet", "eip155:743111"),
-    // 999 is HyperEVM per Hyperliquid's docs; the chain registry still lists
-    // it under a stale earlier registration.
     ("hype-mainnet", "eip155:999"),
     ("hype-testnet", "eip155:998"),
     ("injective-mainnet", "eip155:1776"),
@@ -116,9 +98,7 @@ const PAY_NETWORKS: &[(&str, &str)] = &[
     ("zora-mainnet", "eip155:7777777"),
 ];
 
-/// Resolves a `--pay-network` / config `pay_network` value to CAIP-2. Values
-/// containing `:` pass through verbatim (Solana genesis-hash references are
-/// case-sensitive, so no normalization is applied to them).
+/// Resolve a network name or pass through a CAIP-2 ID.
 pub(super) fn resolve(input: &str) -> Result<String, CliError> {
     if input.contains(':') {
         return Ok(input.to_string());
@@ -135,10 +115,7 @@ pub(super) fn resolve(input: &str) -> Result<String, CliError> {
     }
 }
 
-/// Reverse lookup: a CAIP-2 id → the first Quicknode network name mapped to it,
-/// if any. Used to name the discovery-catalog payment networks (keyed by
-/// CAIP-2) in the `supported-networks` tables. Linear scan — the table is
-/// small and sorted by name, not id.
+/// Return the first Quicknode name mapped to a CAIP-2 ID.
 pub(super) fn slug_for_caip2(caip2: &str) -> Option<String> {
     PAY_NETWORKS
         .iter()
@@ -180,7 +157,6 @@ mod tests {
     #[test]
     fn caip2_passes_through_verbatim() {
         assert_eq!(resolve("eip155:84532").unwrap(), "eip155:84532");
-        // Unknown-to-the-table but well-formed ids still work, unchanged.
         assert_eq!(
             resolve("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1").unwrap(),
             "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"

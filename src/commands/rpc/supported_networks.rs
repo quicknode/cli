@@ -1,17 +1,5 @@
-//! `qn rpc {x402,mpp} supported-networks` and `supported-payments` — one
-//! payment gateway's discovery lists, one per verb: the networks you can make
-//! paid RPC calls **to**, and the payment options the gateway accepts (the
-//! network, token, and contract address you pay **with**).
-//!
-//! Keyless and public: this reads the gateway's own discovery surfaces, not
-//! the account API. Callable networks come from `{gateway}/networks`. Payment
-//! options come from `x402.quicknode.com/supported` for x402; the MPP gateway
-//! publishes them in the `WWW-Authenticate: Payment` challenge of a keyless
-//! 402 response, so `supported-payments` probes one callable network without
-//! paying. Each list is cached per scheme in `pay-networks.toml` next to the
-//! config with a 24h TTL, mirroring the multichain URL cache. A callable
-//! network is a valid `--network` for a paid call; a payment option's
-//! network/address pair is a ready `--payment-network`/`--payment-asset`.
+//! Keyless discovery lists for the x402 and MPP gateways. Results are cached
+//! per scheme for 24 hours.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -28,7 +16,7 @@ use crate::output::{new_table, set_header_bold, write_table, OutputCtx, Render};
 const X402_BASE: &str = "https://x402.quicknode.com";
 const MPP_BASE: &str = "https://mpp.quicknode.com";
 
-/// Which payment gateway the command reads.
+// Which payment gateway to query.
 #[derive(Clone, Copy)]
 pub(super) enum Scheme {
     X402,
@@ -51,10 +39,7 @@ impl Scheme {
     }
 }
 
-/// Cache/override plumbing shared by both verbs. A `--base-url` override
-/// points the gateway fetches at one host (used by tests to serve the
-/// discovery endpoints from a mock) and bypasses the cache, since a test
-/// host's data isn't the real catalog.
+// Shared gateway and cache state. Test base URLs bypass the cache.
 struct Discovery {
     ctx: Ctx,
     scheme: Scheme,
@@ -86,7 +71,7 @@ impl Discovery {
             .flatten()
     }
 
-    /// The callable-networks list: fresh cache hit, or fetch + cache.
+    /// Get callable networks from cache or the gateway.
     async fn ensure_networks(&self, client: &reqwest::Client) -> Result<Vec<String>, CliError> {
         if let Some(cached) = self
             .cache_path()
@@ -101,8 +86,7 @@ impl Discovery {
         Ok(networks)
     }
 
-    /// The payment-options list: fresh cache hit, or fetch + cache. The MPP
-    /// probe needs a callable network, which reuses the networks cache.
+    /// Get payment options from cache or the gateway.
     async fn ensure_payments(
         &self,
         client: &reqwest::Client,
@@ -127,21 +111,18 @@ impl Discovery {
     }
 }
 
-/// `qn rpc {x402,mpp} supported-networks`.
 pub(super) async fn run_networks(scheme: Scheme, global: GlobalArgs) -> Result<(), CliError> {
     let d = Discovery::new(scheme, global)?;
     let networks = d.ensure_networks(&reqwest::Client::new()).await?;
     crate::output::emit(&d.ctx.out, &NetworksView(networks))
 }
 
-/// `qn rpc {x402,mpp} supported-payments`.
 pub(super) async fn run_payments(scheme: Scheme, global: GlobalArgs) -> Result<(), CliError> {
     let d = Discovery::new(scheme, global)?;
     let payments = d.ensure_payments(&reqwest::Client::new()).await?;
     crate::output::emit(&d.ctx.out, &PaymentsView(payments))
 }
 
-/// GET `{base}/networks` → the `networks` slug array.
 async fn fetch_networks(client: &reqwest::Client, base: &str) -> Result<Vec<String>, CliError> {
     #[derive(Deserialize)]
     struct NetworksResp {
@@ -163,11 +144,7 @@ async fn fetch_networks(client: &reqwest::Client, base: &str) -> Result<Vec<Stri
     Ok(body.networks)
 }
 
-/// GET x402 `/supported` → the accepted payment options, deduplicated by
-/// (network, token address). The display name prefers our known symbol table;
-/// otherwise the offer's `extra.name`, but only from offers without a
-/// `verifyingContract` (those are Circle Gateway variants whose `name` is an
-/// EIP-712 domain, not a token).
+// Parse x402's catalog and deduplicate by network and asset address.
 async fn fetch_x402_payments(
     client: &reqwest::Client,
     base: &str,
@@ -199,8 +176,7 @@ async fn fetch_x402_payments(
         .send()
         .await
         .map_err(|e| fetch_err(&url, e))?;
-    // The gateway serves this catalog x402-style: the payment-requirements
-    // JSON arrives with HTTP 402, not 200. Both carry the same shape.
+    // The catalog uses an x402 402 response.
     let status = resp.status();
     if !status.is_success() && status.as_u16() != 402 {
         return Err(CliError::Arg(format!(
@@ -210,7 +186,6 @@ async fn fetch_x402_payments(
     }
     let body: Supported = resp.json().await.map_err(|e| fetch_err(&url, e))?;
 
-    // (CAIP-2 network, address) → best-known display name.
     let mut merged: BTreeMap<(String, String), Option<String>> = BTreeMap::new();
     for accept in body.accepts {
         let Some(address) = accept.asset else {
@@ -242,9 +217,7 @@ async fn fetch_x402_payments(
     Ok(out)
 }
 
-/// The MPP gateway lists its accepted payment options only in the 402
-/// challenge, so probe one callable network with a keyless request (no payment
-/// is taken) and parse the `WWW-Authenticate: Payment` header.
+// MPP exposes payment options in a keyless 402 challenge.
 async fn fetch_mpp_payments(
     client: &reqwest::Client,
     base: &str,
@@ -281,7 +254,6 @@ async fn fetch_mpp_payments(
         )));
     }
 
-    // (network slug, address) → best-known display name.
     let mut merged: BTreeMap<(String, String), Option<String>> = BTreeMap::new();
     for ch in challenges {
         let Some(address) = ch.request.get("currency").and_then(|v| v.as_str()) else {
@@ -331,17 +303,12 @@ async fn fetch_mpp_payments(
         .collect())
 }
 
-/// One parsed `Payment` challenge: its `method` and decoded `request` JSON.
 struct Challenge {
     method: String,
     request: serde_json::Value,
 }
 
-/// Parses a `WWW-Authenticate` header carrying one or more `Payment`
-/// challenges (`Payment k="v", k="v", ..., Payment k="v", ...`). Pragmatic,
-/// not a full RFC 7235 grammar: a `Payment ` prefix on a comma-separated part
-/// starts a new challenge, and only `method` and `request` are read. Malformed
-/// entries are skipped.
+/// Parse the `Payment` challenges needed for discovery.
 fn parse_payment_challenges(header: &str) -> Vec<Challenge> {
     let mut out = Vec::new();
     let mut method: Option<String> = None;
@@ -366,8 +333,7 @@ fn parse_payment_challenges(header: &str) -> Vec<Challenge> {
     out
 }
 
-/// Splits on `delim` occurrences outside double-quoted spans — quoted header
-/// values may themselves contain commas.
+/// Split on a delimiter outside quoted values.
 fn split_outside_quotes(s: &str, delim: char) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -390,8 +356,7 @@ fn unquote(s: &str) -> Option<String> {
     s.strip_prefix('"')?.strip_suffix('"').map(str::to_string)
 }
 
-/// Base64url-decodes a challenge's `request` value into JSON. `None` on any
-/// decode failure, so one malformed challenge never sinks the others.
+/// Decode one base64url-encoded challenge request.
 fn decode_challenge(method: Option<String>, request: Option<String>) -> Option<Challenge> {
     let method = method?;
     let request = request?;
@@ -403,8 +368,6 @@ fn decode_challenge(method: Option<String>, request: Option<String>) -> Option<C
     })
 }
 
-/// `supported-networks` output: a bare array in JSON, one NETWORK column as a
-/// table.
 #[derive(serde::Serialize)]
 #[serde(transparent)]
 struct NetworksView(Vec<String>);
@@ -423,8 +386,6 @@ impl Render for NetworksView {
     }
 }
 
-/// `supported-payments` output: a bare array in JSON, NETWORK/ASSET/ADDRESS
-/// columns as a table.
 #[derive(serde::Serialize)]
 #[serde(transparent)]
 struct PaymentsView(Vec<PayAssetEntry>);
@@ -475,8 +436,6 @@ mod tests {
         let solana = b64(
             r#"{"amount":"0.001","currency":"Mint111","methodDetails":{"network":"mainnet-beta"}}"#,
         );
-        // The description stresses the splitter: a quoted comma and the word
-        // "Payment" inside a value must not start a new challenge.
         let header = format!(
             "Payment id=\"a\", realm=\"r\", method=\"tempo\", intent=\"charge\", \
              request=\"{tempo}\", description=\"Payment, per request\", \
@@ -493,7 +452,6 @@ mod tests {
     #[test]
     fn skips_malformed_entries() {
         let good = b64(r#"{"currency":"0xabc","methodDetails":{"chainId":4217}}"#);
-        // First challenge has an undecodable request; second is fine.
         let header = format!(
             "Payment method=\"tempo\", request=\"!!!not-base64!!!\", \
              Payment method=\"tempo\", request=\"{good}\""

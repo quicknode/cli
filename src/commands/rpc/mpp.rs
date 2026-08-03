@@ -1,27 +1,5 @@
-//! `qn rpc mpp …` — the MPP payment-channel (session) lifecycle.
-//!
-//! Four verbs manage an on-chain escrow payment channel, all keyless (funded by
-//! the configured Tempo wallet, not an account API key):
-//! - `open`    — deposit into the escrow, opening a channel. Gated Mild.
-//! - `top-up`  — add deposit to the open channel. Gated Mild.
-//! - `close`   — cooperatively close (settle on-chain + refund). Gated Mild;
-//!   the prompt warns that further `--mpp-session` calls fail until re-open.
-//! - `status`  — the channel's deposit and remaining balance from the local
-//!   record. `--verify` asks the gateway instead and re-syncs the accepted
-//!   spend high-water mark; that costs one request unit, because the gateway
-//!   prices every session POST as a chargeable request.
-//!
-//! Channel state (channelId, deposit, cumulative spend) is persisted under the
-//! config dir (`channels.toml`, 0600, keyed by wallet address + pay network +
-//! pay asset) and re-seeded next run. The key is the pay scope, not the queried
-//! network: the deposit lives on the pay chain, so one open channel funds paid
-//! calls to every supported query network. Every lifecycle verb ends with a ready-to-run next
-//! command. Paid verbs are single-attempt.
-//!
-//! None of the four verbs takes `--network`. They act on the channel, which the
-//! pay network and asset identify on their own; the gateway path segment they
-//! route on is fixed in the SDK. Only `rpc call --mpp-session` names a query
-//! network, because only it queries a chain.
+//! MPP payment-channel lifecycle. Channel state is cached by payer, pay network,
+//! and asset. Lifecycle operations are keyless and single-attempt.
 
 use clap::{Args as ClapArgs, Subcommand};
 use quicknode_sdk::ChannelState;
@@ -217,13 +195,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     }
 }
 
-// Shared setup: resolve the MPP payment config (scheme "mpp"), build the
-// keyless-payment Ctx, and surface any key-file warning. No network I/O.
-//
-// Returns the resolved pay scope: what the channel record is keyed on. The
-// lifecycle verbs take no query network, so there is nothing else to carry —
-// conflating the two is what once made a channel opened for one query network
-// invisible to a call against another.
+// Resolve payment config and the channel's pay scope before network I/O.
 fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PayScope), CliError> {
     let section = load_payment_section(&global)?;
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
@@ -234,7 +206,6 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PayScope), CliE
         wallets_dir.as_deref(),
         global.base_url.clone(),
     )?;
-    // Capture the resolved pay network/asset before `payment` moves into the Ctx.
     let scope = PayScope::from_config(&payment);
     let ctx = Ctx::from_global_keyless_payment(global, payment)?;
     if let Some(w) = key_file_warning {
@@ -243,9 +214,7 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PayScope), CliE
     Ok((ctx, scope))
 }
 
-// The resolved pay network + asset, carried from payment resolution to the point
-// where the channel record is keyed. The payer address is added later (it is
-// derived from the SDK's signer, which only exists once the Ctx is built).
+// Pay scope carried to channel-cache keying; the payer address is added later.
 pub(super) struct PayScope {
     pay_network: String,
     pay_asset: String,
@@ -259,9 +228,6 @@ impl PayScope {
         }
     }
 
-    // Completes the cache scope with the payer address. `None` when the address
-    // cannot be derived, which is also the only case where there is nothing to
-    // key a record by.
     pub(super) fn with_address(&self, address: String) -> config::ChannelScope {
         config::ChannelScope {
             address,
@@ -270,8 +236,6 @@ impl PayScope {
         }
     }
 
-    // Human-readable form for error messages: the asset and chain the channel is
-    // funded on.
     pub(super) fn describe(&self) -> String {
         format!("{} on {}", self.pay_asset, self.pay_network)
     }
@@ -294,10 +258,7 @@ fn parse_base_units(s: &str, flag: &str) -> Result<u128, CliError> {
     })
 }
 
-// Prints a bold, ready-to-run next-command hint (stderr): the base command
-// plus the payment flags this invocation passed, so the suggestion works
-// verbatim. Values resolved from [rpc.payment] config need no flags and are
-// not echoed. Wrapped two flags per continuation line.
+// Print a ready-to-run next-command hint using explicit payment flags.
 fn note_next(ctx: &Ctx, base: &str, payment: &PaymentArgs) {
     let mut flags: Vec<String> = Vec::new();
     if let Some(f) = &payment.payment_key_file {
@@ -353,9 +314,6 @@ async fn run_open(args: OpenArgs, global: GlobalArgs) -> Result<(), CliError> {
         "✓ Opened channel {} (deposit: {})",
         channel.channel_id, channel.deposit
     ));
-    // Suggest a mainnet query to show what the channel actually buys: the
-    // deposit is denominated on the pay chain, and it funds calls to any
-    // supported network, not just the one this channel was opened against.
     note_next(
         &ctx,
         "qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session",
@@ -415,8 +373,7 @@ async fn run_close(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError
         .mpp_close(&channel)
         .await
         .map_err(super::payment::map_paid_error)?;
-    // The channel is settled: drop the local record so a stale one can't be
-    // reused. Best-effort — a failed delete must not fail the completed close.
+    // Do not reuse a channel after settlement.
     if let Some(address) = wallet_address(&ctx) {
         if let Some(path) = config::channels_cache_path(global.resolve_config_path().as_deref()) {
             let _ = config::delete_channel(&path, &scope.with_address(address));
@@ -429,12 +386,7 @@ async fn run_close(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError
     Ok(())
 }
 
-// Reads the local channel record. `--verify` instead asks the gateway, which
-// costs one request unit: the gateway prices every session POST as a chargeable
-// request and computes the available balance from the NEW spend a voucher
-// authorizes, so there is no free way to ask it. The local record is exact
-// unless a call settled without the CLI recording it (an interrupted call), so
-// the free path is the right default and --verify is the reconciliation tool.
+// Read local state by default; verification spends one request unit and syncs it.
 async fn run_status(args: StatusArgs, global: GlobalArgs) -> Result<(), CliError> {
     let (ctx, scope) = setup(&args.payment, global.clone())?;
     let channel = require_channel(&ctx, &global, &scope)?;
@@ -445,9 +397,7 @@ async fn run_status(args: StatusArgs, global: GlobalArgs) -> Result<(), CliError
 
     let status = ctx.sdk.rpc.mpp_status(&channel).await?;
 
-    // The probe voucher itself spends one unit, and the gateway is
-    // authoritative for what it has accepted. Persist before rendering so an
-    // interrupted render cannot lose the advance and desync the next voucher.
+    // Persist the gateway's accepted high-water mark before rendering.
     let mut synced = channel.clone();
     synced.cumulative_spent = synced
         .cumulative_spent
@@ -463,7 +413,6 @@ async fn run_status(args: StatusArgs, global: GlobalArgs) -> Result<(), CliError
     )
 }
 
-// Render a channel view. `spent` is present only when the gateway was asked.
 fn emit_status(
     ctx: &Ctx,
     channel: &ChannelState,
@@ -500,12 +449,10 @@ fn emit_status(
     Ok(())
 }
 
-// The wallet's on-chain address (derived offline), used to key channel state.
 fn wallet_address(ctx: &Ctx) -> Option<String> {
     ctx.sdk.rpc.payment_address().ok()
 }
 
-// Persist channel state, keyed by the pay scope. Best-effort.
 fn persist_channel(ctx: &Ctx, global: &GlobalArgs, scope: &PayScope, channel: &ChannelState) {
     if let Some(address) = wallet_address(ctx) {
         if let Some(path) = config::channels_cache_path(global.resolve_config_path().as_deref()) {
@@ -514,9 +461,6 @@ fn persist_channel(ctx: &Ctx, global: &GlobalArgs, scope: &PayScope, channel: &C
     }
 }
 
-// Load the open channel for this pay scope, or an actionable error pointing at
-// `mpp open`. Every channel verb (including `status`) needs the local record; a
-// lost one means opening a new channel.
 fn require_channel(
     ctx: &Ctx,
     global: &GlobalArgs,

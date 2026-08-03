@@ -1,22 +1,5 @@
-//! `qn rpc x402 …` — the x402 credit-drawdown gateway lifecycle.
-//!
-//! Three verbs manage prepaid gateway credits, all keyless (paid by the
-//! configured wallet, not an account API key):
-//! - `buy-credits` — SIWX-authenticate, then settle the gateway's 402 credit
-//!   offer with the payment wallet. Gated Mild (it moves funds).
-//! - `balance`     — GET the account's current credit balance.
-//! - `drip`        — testnet faucet (Base Sepolia, once per account).
-//!
-//! The session JWT is authenticated on first use, cached under the config dir
-//! (`sessions.toml`, 0600, keyed by the payer wallet's address), and re-seeded
-//! next run — the same seed/export pattern as the Tooling Access token. A
-//! missing/expired session re-authenticates transparently: it moves no funds,
-//! so it needs no confirmation.
-//!
-//! Every verb ends its success output with a ready-to-run next command
-//! (stderr via `ctx.out.note`) so the drawdown flow chains without the user
-//! hunting for the next step. Paid verbs are single-attempt: a paid lane never
-//! blind-retries.
+//! x402 prepaid-credit lifecycle. Sessions are cached by payer address and
+//! paid operations are single-attempt.
 
 use clap::{Args as ClapArgs, Subcommand};
 use quicknode_sdk::{CreditBalance, PaymentConfig};
@@ -31,9 +14,7 @@ use super::payment::{
     SessionParams,
 };
 
-/// Query network used in the printed paid-lane examples. Payments and credits
-/// are independent of the chain a call queries, so the examples query a chain
-/// the user did not pay on to make that clear.
+// Keep examples explicit about query and payment networks being independent.
 const EXAMPLE_QUERY_NETWORK: &str = "ethereum-mainnet";
 
 #[derive(Debug, ClapArgs)]
@@ -204,9 +185,7 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     }
 }
 
-// Resolve the full payment config (buy-credits) from the verb's args +
-// [rpc.payment], build the keyless-payment Ctx, and print any key-file
-// permissions warning once output exists. No network I/O yet.
+// Resolve purchase config and build the keyless context before I/O.
 fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PaymentConfig), CliError> {
     let section = load_payment_section(&global)?;
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
@@ -225,9 +204,7 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PaymentConfig),
     Ok((ctx, payment))
 }
 
-// Setup for the session-only verbs (balance, drip): resolve the minimal
-// wallet + pay-network config, build the keyless Ctx, warn on a loose key file.
-// Signs nothing, so it needs no asset or spend ceiling.
+// Resolve the keyless session config; balance and drip do not sign payments.
 fn session_setup(args: &SessionArgs, global: GlobalArgs) -> Result<Ctx, CliError> {
     let section = load_payment_section(&global)?;
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
@@ -245,10 +222,7 @@ fn session_setup(args: &SessionArgs, global: GlobalArgs) -> Result<Ctx, CliError
     Ok(ctx)
 }
 
-// The gateway query chain (path slug) for a credit purchase: the explicit
-// --network, else the --payment-network flag when it's a name (not a CAIP-2
-// id). A resolved CAIP-2 payment network alone isn't a valid gateway slug, so
-// require --network in that case.
+// Resolve the gateway path slug for a credit purchase.
 fn resolve_query_network(args: &PaymentArgs, _payment: &PaymentConfig) -> Result<String, CliError> {
     if let Some(n) = &args.network {
         return Ok(n.clone());
@@ -265,8 +239,7 @@ fn resolve_query_network(args: &PaymentArgs, _payment: &PaymentConfig) -> Result
     ))
 }
 
-/// Loads `[rpc.payment]`. A missing file is an empty section; an unreadable or
-/// invalid file is a hard error (the user likely relies on values set there).
+// Load the payment defaults, treating a missing file as empty.
 fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError> {
     let Some(path) = global.resolve_config_path() else {
         return Ok(PaymentSection::default());
@@ -279,11 +252,7 @@ fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError>
 async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
     let (ctx, payment) = setup(&args, global.clone())?;
 
-    // Gate Mild BEFORE any network I/O: name the spend ceiling and blast radius.
-    // The exact charge is the gateway's offer, bounded by this ceiling; we name
-    // the ceiling since a single-attempt purchase can't safely probe first.
-    // Prompt in the user's vocabulary (symbol, network slug) where the tables
-    // know it; fall back to the raw resolved values otherwise.
+    // Confirm before the gateway probe because the purchase is single-attempt.
     let asset = super::pay_asset::symbol_for(&payment.pay_network, &payment.asset)
         .unwrap_or_else(|| payment.asset.clone());
     let pay_network = super::pay_network::slug_for_caip2(&payment.pay_network)
@@ -317,18 +286,13 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
         ),
         drawdown_call_hint(&args, ctx.out.color)
     ));
-    // Bare balance to stdout for pipelines; on a TTY the ✓ line above already
-    // shows it, so skip the duplicate.
     if matches!(ctx.global.format, Some(f) if f.is_structured()) || !ctx.out.stdout_is_tty {
         return emit_balance(&ctx, &balance);
     }
     Ok(())
 }
 
-// A copy-pasteable, multi-line `--x402-drawdown` call with the wallet the user
-// just paid with. Credits are not network-scoped, so the example deliberately
-// queries a different chain than the one just bought against — it makes clear
-// the credits spend on any supported network.
+// Build the next drawdown command. Credits are not network-scoped.
 fn drawdown_call_hint(args: &PaymentArgs, color: bool) -> String {
     let mut cmd = format!(
         "  qn rpc call eth_blockNumber \\\n    \
@@ -337,8 +301,6 @@ fn drawdown_call_hint(args: &PaymentArgs, color: bool) -> String {
            --payment-wallet {}",
         args.payment_wallet.as_deref().unwrap_or("<NAME>")
     );
-    // The drawdown call defaults its pay network to --network, so keep the
-    // SIWX auth chain on the network the user actually pays on when it differs.
     if let Some(pn) = &args.payment_network {
         if pn != EXAMPLE_QUERY_NETWORK {
             cmd.push_str(&format!(" \\\n    --payment-network {pn}"));
@@ -359,15 +321,10 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
     let session = ensure_gateway_session(&ctx, &global).await?;
     let receipt = ctx.sdk.rpc.gateway_drip(&session).await?;
 
-    // The faucet funds the wallet with testnet tokens (returns the funding tx),
-    // which you then spend on buy-credits — it does not grant credits directly.
     ctx.out.note(&format!(
         "✓ Faucet funded {} (tx: {})",
         receipt.account_id, receipt.transaction_hash
     ));
-    // Point at the two paid lanes with the flags the user already supplied;
-    // USDC is the asset the faucet just funded. The examples query a chain the
-    // faucet did not fund — payment is independent of the chain a call queries.
     let wallet = args.payment_wallet.as_deref().unwrap_or("<NAME>");
     let pay_net = args.payment_network.as_deref().unwrap_or("<NET>");
     let c = ctx.out.color;
@@ -417,8 +374,6 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
             Style::Bold,
             c,
         ),
-        // The explicit --payment-network keeps SIWX auth on the chain the
-        // faucet funded, since a drawdown call defaults it to --network.
         style(
             &format!(
                 "  qn rpc call eth_blockNumber \\\n    \
@@ -439,16 +394,12 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
         });
         return super::emit_result(&ctx, &v);
     }
-    // Bare tx hash to stdout for pipelines; on a TTY the ✓ line above already
-    // shows it, so skip the duplicate.
     if !ctx.out.stdout_is_tty {
         println!("{}", receipt.transaction_hash);
     }
     Ok(())
 }
 
-// Emit a credit balance: the bare number by default (friendly for scripts and
-// pipelines, TTY or piped), the full envelope only for a structured --format.
 fn emit_balance(ctx: &Ctx, balance: &CreditBalance) -> Result<(), CliError> {
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
         let v = serde_json::json!({
@@ -461,14 +412,10 @@ fn emit_balance(ctx: &Ctx, balance: &CreditBalance) -> Result<(), CliError> {
     Ok(())
 }
 
-// Group digits for the human-facing note (1000000 -> 1,000,000). The bare
-// stdout number is never grouped, so pipelines get a clean integer.
 fn fmt_credits(n: u64) -> String {
     group_digits(&n.to_string())
 }
 
-// Digit-group a decimal string (1000000 -> 1,000,000). Anything that is not
-// pure ASCII digits passes through unchanged rather than being mangled.
 fn group_digits(s: &str) -> String {
     let bytes = s.as_bytes();
     if s.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {

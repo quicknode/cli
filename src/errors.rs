@@ -40,21 +40,14 @@ pub enum CliError {
     #[error(transparent)]
     Sdk(#[from] SdkError),
 
-    /// A paid RPC call failed in a way where the payment may already have
-    /// settled (e.g. the gateway's post-payment response could not be
-    /// interpreted). Kept separate from `Sdk` so it maps to exit 3 and renders
-    /// the check-your-wallet guidance; the paid lane must never auto-retry it.
+    /// A paid call may have settled; maps to exit 3.
     #[error(
         "the paid request's outcome is unknown — the payment may have been settled; \
          check your wallet before retrying"
     )]
     PaymentMaybeCharged(#[source] SdkError),
 
-    /// The gateway refused a paid request and nothing settled (out of credits,
-    /// monthly limit, an exhausted channel). Carries an actionable message and
-    /// maps to exit 2 — the "refused, nothing settled" bucket — so scripts can
-    /// distinguish it from a generic arg error (exit 1) or an unknown outcome
-    /// (exit 3).
+    /// A paid request was refused without settlement; maps to exit 2.
     #[error("{0}")]
     PaymentRefused(String),
 
@@ -68,19 +61,7 @@ pub enum CliError {
     Format(String),
 }
 
-/// Maps a [`CliError`] to a process exit code per the plan.
-///
-/// - 0: success (never produced here)
-/// - 1: generic CLI failure (arg parse, IO, decode). clap usage errors are
-///   mapped to 1 in main.rs too, so 2 always and only means an API error.
-/// - 2: SdkError::Api (server returned a non-2xx); also a payment the gateway
-///   refused without settling (PaymentRejected 4xx / PaymentUnsupported —
-///   the paid lane wraps 5xx rejections into PaymentMaybeCharged first)
-/// - 3: SdkError::Http (network failure); also an unknown payment outcome
-///   (PaymentIndeterminate / PaymentMaybeCharged — the payment was
-///   submitted, the caller may have been charged)
-/// - 4: NoApiKey / BadConfig
-/// - 5: user cancelled or needs --yes
+/// Map a CLI error to its process exit code.
 pub fn exit_code_for(err: &CliError) -> i32 {
     match err {
         CliError::NoApiKey | CliError::BadConfig { .. } | CliError::ConfigWrite { .. } => 4,
@@ -98,9 +79,7 @@ pub fn exit_code_for(err: &CliError) -> i32 {
     }
 }
 
-// Map a payment-gateway 402 problem document (RFC 9457) to an actionable
-// headline. Returns None for problem types with no specific advice, so the
-// caller falls back to the generic HTTP rendering.
+// Map known payment problem types to actionable headlines.
 fn payment_problem_headline(body: &str) -> Option<String> {
     let problem: serde_json::Value = serde_json::from_str(body).ok()?;
     let kind = problem.get("type").and_then(|v| v.as_str())?;
@@ -129,21 +108,13 @@ pub fn render(err: &CliError, verbose: bool) -> String {
 /// Like [`render`] but uses the supplied argv values for did-you-mean lookup.
 pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> String {
     match err {
-        // The offer matched what was asked for, but its signing scheme is
-        // outside the set this lane settles. That is not a misconfiguration, so
-        // it gets its own message rather than the "check your flags" one.
         CliError::Sdk(SdkError::PaymentUnsupported { offered })
             if offered.contains("cannot sign") =>
         {
             format!("Error: {offered} Nothing was charged.")
         }
         CliError::Sdk(SdkError::PaymentUnsupported { offered }) => {
-            // The SDK names the specific lever when it can identify one (e.g.
-            // every offer sits above the ceiling, so max_amount is the fix).
-            // Don't bury that under the generic "check your flags" advice.
             if offered.contains("raise max_amount") {
-                // The full menu is long and mostly irrelevant once the lever is
-                // named; keep it for --verbose.
                 let body = match offered.split_once(" Full menu: ") {
                     Some((lever, _)) if !verbose => lever,
                     _ => offered.as_str(),
@@ -161,10 +132,6 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
             }
         }
         CliError::Sdk(SdkError::PaymentRejected { status, body }) => {
-            // Only 4xx rejections reach this arm from the paid lane (5xx are
-            // wrapped into PaymentMaybeCharged): the gateway refused the
-            // credential without settling it. The SDK has already reduced the
-            // body to the gateway's own reason when it was the JSON error shape.
             let reason = payment_rejection_reason(body);
             let mut msg = format!("Error: the gateway refused the payment (HTTP {status}).");
             if let Some(r) = &reason {
@@ -176,8 +143,6 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
                  Common causes: the wallet is unfunded, or --payment-network/--payment-asset/--max-amount \
                  don't match an offer (see 'qn rpc x402 supported-payments' / 'qn rpc mpp supported-payments').",
             );
-            // When the reason wasn't a clean one-liner, append the raw body under
-            // --verbose for the full detail.
             if verbose && reason.is_none() && !body.is_empty() {
                 format!("{msg}\n{body}")
             } else {
@@ -252,13 +217,7 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
     }
 }
 
-/// Status codes have a small set of canonical user-facing messages. Validation
-/// (400/422) gets the structured body treatment from `parse_api_body`.
-/// The gateway's own rejection reason, when the body is a clean short string
-/// (the SDK reduces its JSON `{error, message}` shape to that before this
-/// point). A long body — e.g. a full 402 payment menu — is not a reason, so it
-/// returns `None` and the caller falls back to the generic guidance (plus the
-/// raw body under `--verbose`).
+/// Return a short gateway rejection reason, if present.
 fn payment_rejection_reason(body: &str) -> Option<String> {
     let trimmed = body.trim();
     if trimmed.is_empty() || trimmed.len() > 200 || trimmed.starts_with('{') {
@@ -268,9 +227,7 @@ fn payment_rejection_reason(body: &str) -> Option<String> {
 }
 
 fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> String {
-    // A 402 from the payment gateway is an RFC 9457 problem document whose
-    // `type` names the refusal. Map the ones a user can act on; anything else
-    // falls through to the generic headline.
+    // Map actionable payment problem types before generic API errors.
     if code == 402 {
         if let Some(headline) = payment_problem_headline(body) {
             let mut out = format!("Error: {headline}");
@@ -294,8 +251,7 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
         _ => format!("API returned HTTP {code}."),
     };
 
-    // For non-validation status codes, body is mostly noise (server stack traces,
-    // HTML error pages, etc). Only mine it for validation-class errors.
+    // Parse response bodies only for validation errors.
     let parsed = if matches!(code, 400 | 422) {
         parse_api_body(body, argv)
     } else {
@@ -310,8 +266,7 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
             out.push_str(bullet);
         }
     } else if matches!(code, 400 | 422) && !body.is_empty() && !verbose {
-        // We tried to parse and got nothing useful; surface the raw body so
-        // the user isn't left with a bare "invalid request." line.
+        // Preserve an unstructured validation body.
         out.push('\n');
         out.push_str(body.trim());
     }

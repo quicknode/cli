@@ -1,15 +1,4 @@
-//! Integration tests for the crypto-micropayment lane of `qn rpc call`
-//! (`--x402`/`--mpp`).
-//!
-//! The harness's hidden `--base-url` is threaded into
-//! `PaymentConfig.base_url_override`, so the mock server doubles as the
-//! payment gateway: the paid lane POSTs to `{base}/<network>`. The 402
-//! handshake shapes mirror the SDK's own driver tests (an unpaid POST gets a
-//! 402 with a payment menu; the resend carries a `payment-signature` /
-//! `authorization` header and gets the JSON-RPC result).
-//!
-//! All key material is fake: anvil throwaway key #0 (public, never funded)
-//! and the public Base Sepolia test-USDC address.
+//! Integration tests for paid RPC calls and payment lifecycle commands.
 
 mod common;
 
@@ -19,12 +8,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-// anvil key #0 (public throwaway, never funded).
 const EVM_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-// Base Sepolia test USDC (public address).
 const USDC: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
-/// Writes the throwaway key to a tempfile and returns the (guard, path) pair.
+/// Write the test key to a temporary file.
 fn key_file() -> (tempfile::NamedTempFile, String) {
     use std::io::Write;
     let mut f = tempfile::NamedTempFile::new().unwrap();
@@ -34,7 +21,7 @@ fn key_file() -> (tempfile::NamedTempFile, String) {
     (f, path)
 }
 
-/// One entry of the x402 payment menu the mock gateway offers.
+/// Build one x402 offer.
 fn x402_accepts_entry(amount: &str) -> serde_json::Value {
     json!({
         "scheme": "exact",
@@ -47,9 +34,7 @@ fn x402_accepts_entry(amount: &str) -> serde_json::Value {
     })
 }
 
-/// Sequenced gateway responder: the first (unpaid) POST gets a 402 with a
-/// one-entry menu at `amount`; any request carrying a payment signature gets
-/// the `paid` response (the JSON-RPC result by default).
+/// Return a 402 offer, then a paid response.
 struct X402Seq {
     amount: &'static str,
     paid: ResponseTemplate,
@@ -90,8 +75,7 @@ impl Respond for X402Seq {
     }
 }
 
-/// Mounts `.expect(0)` mocks on the control-plane routes the default lane
-/// uses, proving the paid lane never touches them.
+/// Assert that the paid lane does not use control-plane routes.
 async fn mount_control_plane_expect_zero(server: &MockServer) {
     for p in ["/v0/tooling-access", "/v0/account/info"] {
         Mock::given(path(p))
@@ -119,8 +103,6 @@ async fn x402_happy_path_pays_and_bypasses_control_plane() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // The harness injects --api-key test: even with a key present, the paid
-    // lane must not mint, probe, or write the token cache.
     let out = run_qn(
         &server.uri(),
         &[
@@ -165,9 +147,6 @@ async fn x402_resolves_usdc_symbol_to_network_asset() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // The symbol resolves to base-sepolia's USDC address (matching the offer's
-    // `asset`), so signing and the paid resend succeed exactly as passing the
-    // raw address would.
     let out = run_qn(
         &server.uri(),
         &[
@@ -207,9 +186,6 @@ async fn payment_wallet_resolves_stored_key_for_paid_call() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
 
-    // Generate a wallet, then pay for a call by referencing it by name. The
-    // wallet's key is random but a valid secp256k1 key, so the x402 EIP-712
-    // signing succeeds and the resend carries a payment signature.
     let gen = run_qn(
         &server.uri(),
         &[
@@ -264,8 +240,6 @@ async fn pay_network_name_matches_caip2_offer() {
 
     let (_guard, key_path) = key_file();
 
-    // `base-sepolia` resolves to eip155:84532 before reaching the SDK, so it
-    // matches the mock gateway's CAIP-2 offer exactly.
     let out = run_qn(
         &server.uri(),
         &[
@@ -300,8 +274,6 @@ async fn paid_call_works_keyless_with_config_params() {
         .await;
     mount_control_plane_expect_zero(&server).await;
 
-    // Config supplies every parameter and has NO [api] key: the minimal
-    // invocation is method + --network + the scheme flag, with no login ever.
     let dir = tempfile::tempdir().unwrap();
     let (_guard, key_path) = key_file();
     let cfg = dir.path().join("config.toml");
@@ -336,8 +308,6 @@ async fn paid_call_works_keyless_with_config_params() {
 #[tokio::test]
 async fn over_cap_offer_is_refused_before_signing() {
     let server = MockServer::start().await;
-    // Menu offers 999999; the cap is 10000. Exactly ONE request: the unpaid
-    // probe. Nothing is signed, nothing is resent.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(X402Seq::new("999999"))
@@ -377,8 +347,6 @@ async fn over_cap_offer_is_refused_before_signing() {
 #[tokio::test]
 async fn flag_max_amount_overrides_config() {
     let server = MockServer::start().await;
-    // Config would allow the 1000 offer (cap 999999); the flag caps at 1.
-    // A resulting "unsupported" refusal proves the flag won.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(X402Seq::new("1000"))
@@ -427,9 +395,6 @@ async fn flag_max_amount_overrides_config() {
 #[tokio::test]
 async fn config_presence_does_not_auto_activate_payment() {
     let server = MockServer::start().await;
-    // Fully populated [rpc.payment] but NO scheme flag: the call must take the
-    // normal Tooling Access lane (mint attempt against the control plane) and
-    // the gateway must see zero traffic.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(200))
@@ -465,16 +430,12 @@ async fn config_presence_does_not_auto_activate_payment() {
         ],
     )
     .await;
-    // The default lane fails against the 500ing control plane — the exit code
-    // is not the point; the .expect(0) on the gateway is.
     assert_ne!(out.exit_code, 0);
 }
 
 #[tokio::test]
 async fn paid_lane_is_never_retried() {
     let server = MockServer::start().await;
-    // The gateway 500s every request. Even with --retries 5, exactly ONE
-    // request may arrive: a retried paid call risks a double charge.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
@@ -511,9 +472,6 @@ async fn paid_lane_is_never_retried() {
 #[tokio::test]
 async fn payment_rejected_on_paid_resend_exits_2_as_refused() {
     let server = MockServer::start().await;
-    // 402 menu, then the paid resend is refused with another 402: the gateway
-    // refused the credential without settling it — exit 2, "refused", and no
-    // unknown-outcome language.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(402).set_body_json(json!({
@@ -562,8 +520,6 @@ async fn payment_rejected_on_paid_resend_exits_2_as_refused() {
 #[tokio::test]
 async fn settlement_5xx_on_paid_resend_exits_3_check_wallet() {
     let server = MockServer::start().await;
-    // 402 menu, then the paid resend dies with a 500: the signed payment was
-    // submitted and the outcome is unknown — exit 3, check-your-wallet.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(X402Seq::with_paid_response(
@@ -606,9 +562,6 @@ async fn settlement_5xx_on_paid_resend_exits_3_check_wallet() {
 #[tokio::test]
 async fn unparseable_paid_response_exits_3_check_wallet() {
     let server = MockServer::start().await;
-    // The paid resend returns 200 with a body that isn't JSON: the payment
-    // was submitted (and likely settled) but the result is uninterpretable —
-    // exit 3, never a generic decode error.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(X402Seq::with_paid_response(
@@ -651,9 +604,6 @@ async fn unparseable_paid_response_exits_3_check_wallet() {
 #[tokio::test]
 async fn malformed_challenge_menu_exits_2_nothing_charged() {
     let server = MockServer::start().await;
-    // The 402 challenge body is not JSON. Nothing has been signed or paid, so
-    // this must exit 2 with "Nothing was charged" — never the exit-3
-    // check-your-wallet path — after exactly one request.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(402).set_body_string("<html>menu?</html>"))
@@ -692,8 +642,7 @@ async fn malformed_challenge_menu_exits_2_nothing_charged() {
 
 // ── pre-flight failures: fail fast, zero requests ────────────────────────────
 
-/// Runs a paid invocation expected to die in pre-flight: any request reaching
-/// the mock is a failure.
+/// Run a paid invocation that must fail before network I/O.
 async fn expect_preflight_error(extra: &[&str], needle: &str) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -761,8 +710,6 @@ async fn unknown_pay_network_name_fails_before_any_request() {
 
 #[tokio::test]
 async fn missing_key_fails_before_any_request() {
-    // No flag and a config dir with no key_file/wallet: the key must come from
-    // a file or a stored wallet, so this fails fast with actionable guidance.
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     expect_preflight_error(
@@ -945,9 +892,7 @@ fn payment_conflicts_with_endpoint_url() {
 
 // ── output shapes (subprocess: the in-process harness can't capture stdout) ──
 
-/// Runs the real binary against `server`, with HOME pointed at a tempdir so no
-/// real config leaks in. The payment key is written to a file under `home` and
-/// passed via `--payment-key-file` (the key never comes from the environment).
+/// Run the real binary with an isolated home and key file.
 fn run_qn_subprocess(
     server_uri: &str,
     home: &std::path::Path,
@@ -970,8 +915,6 @@ fn run_qn_subprocess(
 async fn receipt_flag_wraps_stdout_on_mpp() {
     let server = MockServer::start().await;
 
-    // MPP challenge (tempo, chain 42431) and a settlement receipt header, both
-    // base64url-encoded JSON — mirrors the SDK's own MPP driver test.
     fn b64url(v: serde_json::Value) -> String {
         use base64::Engine;
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&v).unwrap())
@@ -1053,7 +996,6 @@ async fn receipt_flag_wraps_stdout_on_mpp() {
         v["payment_receipt"]["reference"].as_str(),
         Some("0xdeadbeef")
     );
-    // The raw key must never appear on either stream.
     assert!(!stdout.contains(EVM_KEY) && !stderr.contains(EVM_KEY));
 }
 
@@ -1082,7 +1024,6 @@ async fn receipt_is_null_on_x402_and_bare_without_flag() {
         "10000",
     ];
 
-    // With --receipt: wrapped, and x402 has no settlement reference.
     let mut with_receipt = paid_args.to_vec();
     with_receipt.push("--receipt");
     let output = run_qn_subprocess(&server.uri(), home.path(), &with_receipt);
@@ -1096,7 +1037,6 @@ async fn receipt_is_null_on_x402_and_bare_without_flag() {
     assert_eq!(v["result"].as_str(), Some("0x1335f9a"));
     assert!(v["payment_receipt"].is_null());
 
-    // Without --receipt: the bare result, byte-identical shape to unpaid.
     let output = run_qn_subprocess(&server.uri(), home.path(), &paid_args);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(output.status.success());
@@ -1106,12 +1046,8 @@ async fn receipt_is_null_on_x402_and_bare_without_flag() {
 
 // ── qn rpc x402 (credit drawdown lifecycle) ──────────────────────────────────
 //
-// These exercise the x402 noun end-to-end against the mock gateway: SIWX auth
-// (POST /auth) mints a session JWT, buy-credits settles the 402 credit offer
-// (POST /credits), balance reads GET /credits, and drip hits POST /drip. The
-// session is cached under the config dir so a second verb skips re-auth.
 
-/// Mounts a SIWX /auth responder that returns a fixed session JWT.
+/// Mount a fixed SIWX session response.
 async fn mount_auth(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/auth"))
@@ -1142,8 +1078,6 @@ fn x402_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str>
     ]
 }
 
-// The session verbs (balance, drip) sign nothing, so they take only the wallet
-// key + pay network — no --payment-asset, no --max-amount.
 fn x402_session_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
     vec![
         "--config-file",
@@ -1162,10 +1096,6 @@ fn x402_session_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<
 async fn x402_buy_credits_refuses_the_batched_scheme_and_settles_nothing() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
-    // The gateway's real menu: per-request USDC tiers plus the credit-drawdown
-    // tier, which is the cheapest entry and uses the Circle Gateway batched
-    // scheme. That scheme needs its own signing construction, so the purchase
-    // refuses rather than settling a per-request offer for far more.
     let mut credit = x402_accepts_entry("100");
     credit["maxTimeoutSeconds"] = json!(604_900);
     credit["extra"] = json!({
@@ -1202,7 +1132,6 @@ async fn x402_buy_credits_refuses_the_batched_scheme_and_settles_nothing() {
 #[tokio::test]
 async fn x402_buy_credits_without_yes_is_needs_confirmation_and_settles_nothing() {
     let server = MockServer::start().await;
-    // The gate is checked before any network I/O: nothing must reach the gateway.
     Mock::given(method("POST"))
         .and(path("/auth"))
         .respond_with(ResponseTemplate::new(200))
@@ -1220,7 +1149,6 @@ async fn x402_buy_credits_without_yes_is_needs_confirmation_and_settles_nothing(
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // No --yes, non-TTY (the harness sets --no-input): exit 5, zero requests.
     let args = x402_args(&cfg, &key_path, "buy-credits");
     let out = run_qn(&server.uri(), &args).await;
     assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
@@ -1272,7 +1200,6 @@ async fn x402_balance_error_maps_to_exit_2() {
         &x402_session_args(&cfg, &key_path, "balance"),
     )
     .await;
-    // A gateway 4xx that settled nothing maps to exit 2 (SDK Api error).
     assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
 }
 
@@ -1280,7 +1207,6 @@ async fn x402_balance_error_maps_to_exit_2() {
 async fn x402_drip_reports_funding_tx() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
-    // The faucet returns the on-chain funding transaction, not a credit balance.
     Mock::given(method("POST"))
         .and(path("/drip"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1302,8 +1228,6 @@ async fn x402_drip_reports_funding_tx() {
 
 #[tokio::test]
 async fn x402_balance_rejects_spend_flags() {
-    // balance signs nothing, so --max-amount (and --payment-asset) are not part
-    // of its surface: clap rejects the unknown flag before any I/O.
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
@@ -1312,15 +1236,11 @@ async fn x402_balance_rejects_spend_flags() {
     let mut args = x402_session_args(&cfg, &key_path, "balance");
     args.extend_from_slice(&["--max-amount", "10000000"]);
     let out = run_qn(&server.uri(), &args).await;
-    // Unknown flag: clap usage error, exit 1.
     assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
 }
 
 // ── qn rpc call --x402-drawdown ──────────────────────────────────────────────
 //
-// The drawdown lane pays from prepaid credits: no per-call signing, Bearer JWT,
-// 1 credit per success. The session is authenticated once (POST /auth), and a
-// token_expired 401 triggers exactly one transparent re-auth + retry.
 
 fn drawdown_call_args<'a>(cfg: &'a str, key_path: &'a str) -> Vec<&'a str> {
     vec![
@@ -1347,7 +1267,6 @@ fn drawdown_call_args<'a>(cfg: &'a str, key_path: &'a str) -> Vec<&'a str> {
 async fn x402_drawdown_happy_path_uses_bearer_no_signing() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
-    // The drawdown POST carries a Bearer JWT and NO payment-signature.
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1364,15 +1283,12 @@ async fn x402_drawdown_happy_path_uses_bearer_no_signing() {
 
     let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
-    // No token cache written (keyless lane), but the gateway session is cached.
     assert!(!dir.path().join("tokens.toml").exists());
     assert!(dir.path().join("sessions.toml").exists());
 }
 
 #[tokio::test]
 async fn x402_drawdown_needs_only_wallet_and_network() {
-    // A drawdown call signs nothing per request, so it must NOT require
-    // --payment-asset or --max-amount; the pay network defaults to --network.
     let server = MockServer::start().await;
     mount_auth(&server).await;
     Mock::given(method("POST"))
@@ -1389,7 +1305,6 @@ async fn x402_drawdown_needs_only_wallet_and_network() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // Only --network + the key: no asset, no max-amount, no payment-network.
     let out = run_qn(
         &server.uri(),
         &[
@@ -1409,10 +1324,7 @@ async fn x402_drawdown_needs_only_wallet_and_network() {
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
-/// Sequenced /base-sepolia responder: the FIRST drawdown call 401s with
-/// token_expired; the SECOND (after a transparent re-auth) returns the result.
-/// `status` is the HTTP code of the expired-token response (the gateway uses
-/// 401 or 403).
+/// Return an expired-token response once, then success.
 struct ExpiredThenOk {
     status: u16,
     calls: AtomicUsize,
@@ -1435,7 +1347,6 @@ impl Respond for ExpiredThenOk {
 
 async fn assert_drawdown_reauths_on(status: u16) {
     let server = MockServer::start().await;
-    // Two /auth calls: the initial auth + the re-auth after the expired token.
     Mock::given(method("POST"))
         .and(path("/auth"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1467,20 +1378,16 @@ async fn assert_drawdown_reauths_on(status: u16) {
 
 #[tokio::test]
 async fn x402_drawdown_reauths_once_on_token_expired_401() {
-    // The gateway can surface an expired token as a 401.
     assert_drawdown_reauths_on(401).await;
 }
 
 #[tokio::test]
 async fn x402_drawdown_reauths_once_on_token_expired_403() {
-    // ...or as a 403 — both must trigger the transparent re-auth + retry.
     assert_drawdown_reauths_on(403).await;
 }
 
 #[tokio::test]
 async fn x402_drawdown_rejects_key_and_params_both_from_stdin() {
-    // Only one stdin: reading the key from it would silently drain the params.
-    // The lane must refuse up front with zero gateway I/O.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200))
@@ -1526,9 +1433,6 @@ async fn x402_drawdown_rejects_key_and_params_both_from_stdin() {
 async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
-    // 402 on the drawdown call = no credits; must NOT sign or resend (single
-    // attempt), and must surface an actionable "buy-credits" error at exit 2
-    // (the gateway refused and nothing settled).
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
         .respond_with(ResponseTemplate::new(402).set_body_json(json!({
@@ -1543,7 +1447,6 @@ async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
     let (_guard, key_path) = key_file();
 
     let out = run_qn(&server.uri(), &drawdown_call_args(&cfg, &key_path)).await;
-    // Refused, nothing settled → exit 2, with a message pointing at the fix.
     assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
     assert!(
         out.stderr.contains("buy-credits"),
@@ -1554,18 +1457,11 @@ async fn x402_drawdown_out_of_credits_points_at_buy_credits() {
 
 // ── qn rpc mpp (payment channel session) ─────────────────────────────────────
 //
-// The MPP session lane opens an escrow channel (an on-chain Tempo tx, signed
-// offline against the mock), then pays with cumulative vouchers. The mock
-// gateway serves a tempo/session 402 challenge on probes and 2xx (with a
-// Payment-Receipt header, like the real gateway) on credential POSTs
-// (open/topUp/voucher/close).
 
 use base64::Engine as _;
 
 const SESSION_ESCROW: &str = "0x33b901018174ddabe4841042ab76ba85d4e24f25";
 
-// A base64url tempo/session request body: currency, recipient, amount, and
-// the escrow contract the gateway expects deposits in.
 fn session_request_b64() -> String {
     let json = json!({
         "amount": "500",
@@ -1583,8 +1479,6 @@ fn session_www_authenticate() -> String {
     )
 }
 
-// A base64url Payment-Receipt header value, the shape the gateway attaches to
-// every accepted session response.
 fn session_receipt_b64(accepted: &str, spent: &str) -> String {
     let json = json!({
         "method": "tempo",
@@ -1600,9 +1494,6 @@ fn session_receipt_b64(accepted: &str, spent: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json).unwrap())
 }
 
-// Mount the session endpoint: a 402 session challenge on an unauthorized POST
-// (the probe), and 200 + Payment-Receipt on any POST carrying an
-// Authorization: Payment header (credential submissions).
 async fn mount_session(server: &MockServer, network: &str) {
     let path_str = format!("/session/{network}");
     Mock::given(method("POST"))
@@ -1631,8 +1522,6 @@ async fn mount_session(server: &MockServer, network: &str) {
         .await;
 }
 
-// Decodes the `Authorization: Payment <base64url>` credential a request
-// carried and returns its `payload` object.
 fn credential_payload(req: &wiremock::Request) -> serde_json::Value {
     let header = req
         .headers
@@ -1650,8 +1539,6 @@ fn credential_payload(req: &wiremock::Request) -> serde_json::Value {
     credential["payload"].clone()
 }
 
-// The lifecycle verbs take no --network: the channel is identified by the pay
-// network + asset, and the gateway route the SDK uses is fixed.
 fn mpp_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
     vec![
         "--config-file",
@@ -1689,8 +1576,6 @@ async fn mpp_open_happy_path_and_caches_channel() {
         "open must cache the channel state"
     );
 
-    // The credential POST must carry the legacy contract-backed open payload:
-    // a transaction plus the opening voucher, no descriptor.
     let requests = server.received_requests().await.unwrap();
     let payload = requests
         .iter()
@@ -1719,30 +1604,22 @@ async fn mpp_status_replays_voucher_and_reads_the_receipt() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // Open first so a channel is cached, then ask for its status.
     let mut open_args = mpp_args(&cfg, &key_path, "open");
     open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
     let out = run_qn(&server.uri(), &open_args).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
-    // Plain `status` reads the local record: no gateway I/O at all.
     let before = server.received_requests().await.unwrap().len();
     let out = run_qn(&server.uri(), &mpp_args(&cfg, &key_path, "status")).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
     let after = server.received_requests().await.unwrap().len();
     assert_eq!(after, before, "status without --verify must not call out");
 
-    // `--verify` asks the gateway. Exit 0 requires the Payment-Receipt header
-    // to have decoded: a missing or malformed receipt fails the command. (The
-    // harness can't capture the in-process stderr note; see run_qn.)
     let mut verify_args = mpp_args(&cfg, &key_path, "status");
     verify_args.push("--verify");
     let out = run_qn(&server.uri(), &verify_args).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
-    // The probe voucher ADVANCES by one request unit. Re-presenting the current
-    // high-water voucher authorizes no new spend, and the gateway refuses it
-    // with `insufficient-balance` however much deposit remains.
     let requests = server.received_requests().await.unwrap();
     let voucher = requests
         .iter()
@@ -1757,7 +1634,6 @@ async fn mpp_status_replays_voucher_and_reads_the_receipt() {
 #[tokio::test]
 async fn mpp_open_without_yes_is_needs_confirmation_and_settles_nothing() {
     let server = MockServer::start().await;
-    // Gate is checked before any network I/O: nothing reaches the gateway.
     Mock::given(method("POST"))
         .and(path("/session/tempo-testnet"))
         .respond_with(ResponseTemplate::new(200))
@@ -1785,7 +1661,6 @@ async fn mpp_top_up_without_yes_is_needs_confirmation_and_settles_nothing() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // Top-up needs a channel to add to; the gate is only reached once one exists.
     let mut open_args = mpp_args(&cfg, &key_path, "open");
     open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
     let out = run_qn(&server.uri(), &open_args).await;
@@ -1831,7 +1706,6 @@ async fn mpp_close_without_yes_is_needs_confirmation_and_settles_nothing() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // Close needs a channel to settle; the gate is only reached once one exists.
     let mut open_args = mpp_args(&cfg, &key_path, "open");
     open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
     let out = run_qn(&server.uri(), &open_args).await;
@@ -1872,7 +1746,6 @@ async fn mpp_close_with_yes_settles_the_channel() {
 #[tokio::test]
 async fn mpp_session_call_without_open_channel_points_at_open() {
     let server = MockServer::start().await;
-    // No channel cached; the call must refuse before any gateway I/O.
     Mock::given(method("POST"))
         .and(path("/session/tempo-testnet"))
         .respond_with(ResponseTemplate::new(200))
@@ -1914,10 +1787,6 @@ async fn mpp_session_call_without_open_channel_points_at_open() {
     );
 }
 
-// A channel is scoped by what funds it, not by what it queries: the deposit
-// lives on the pay chain, so paying on a testnet to query a mainnet is the
-// intended shape. Keying the cache on the queried network instead made a
-// channel opened for one network invisible to a call against another.
 #[tokio::test]
 async fn mpp_session_call_uses_the_channel_for_a_different_query_network() {
     let server = MockServer::start().await;
@@ -1929,14 +1798,11 @@ async fn mpp_session_call_uses_the_channel_for_a_different_query_network() {
     let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
     let (_guard, key_path) = key_file();
 
-    // Open while paying on Tempo testnet. The open names no query network at
-    // all, so the channel it caches cannot be scoped to one.
     let mut open_args = mpp_args(&cfg, &key_path, "open");
     open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
     let out = run_qn(&server.uri(), &open_args).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
-    // Same payment stack, different query network: the channel must be found.
     let out = run_qn(
         &server.uri(),
         &[
@@ -1961,8 +1827,6 @@ async fn mpp_session_call_uses_the_channel_for_a_different_query_network() {
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
-    // The voucher went to the queried network's gateway path, funded by the
-    // channel opened against a different one.
     let requests = server.received_requests().await.unwrap();
     let voucher = requests
         .iter()
@@ -1974,8 +1838,6 @@ async fn mpp_session_call_uses_the_channel_for_a_different_query_network() {
     assert_eq!(voucher["cumulativeAmount"], "1000");
 }
 
-// Two assets on one pay chain are separate escrow positions. They must not
-// collide in the cache: a channel funded in one token cannot pay in the other.
 #[tokio::test]
 async fn mpp_channels_do_not_collide_across_pay_assets() {
     let server = MockServer::start().await;
@@ -1991,7 +1853,6 @@ async fn mpp_channels_do_not_collide_across_pay_assets() {
     let out = run_qn(&server.uri(), &open_args).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
-    // Same wallet and pay chain, a different token: no channel for this scope.
     let out = run_qn(
         &server.uri(),
         &[
@@ -2019,8 +1880,6 @@ async fn mpp_channels_do_not_collide_across_pay_assets() {
     );
 }
 
-// The lifecycle verbs act on the channel, which the pay network and asset
-// identify on their own. Pin the removal so re-adding --network is deliberate.
 #[tokio::test]
 async fn mpp_lifecycle_verbs_reject_a_query_network() {
     let server = MockServer::start().await;
@@ -2048,15 +1907,12 @@ async fn mpp_lifecycle_verbs_reject_a_query_network() {
 
 // ── x402 / Solana ────────────────────────────────────────────────────────────
 
-// Circle's devnet USDC mint and the gateway's devnet fee payer (both public).
 const SOL_MINT: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const SOL_FEE_PAYER: &str = "CPZSjRmyfTS95UjQD8ZdeTEWbQvW9QvEXnn6aGP7yyMN";
 const SOL_PAY_TO: &str = "2LWbc9Mi6dRUrdEHBttoNS4udDtH1A4xwBdm1EKqcT57";
 const SOL_DEVNET: &str = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
-/// One Solana entry of the x402 menu. Unlike the EVM entries these carry no
-/// `extra.name` and no `extra.decimals` — amount is the only discriminator, and
-/// decimals must come from the mint.
+/// Build a Solana x402 offer.
 fn x402_solana_entry(amount: &str) -> serde_json::Value {
     json!({
         "scheme": "exact",
@@ -2069,10 +1925,6 @@ fn x402_solana_entry(amount: &str) -> serde_json::Value {
     })
 }
 
-/// Serves the Solana lane end to end on one mock: the gateway 402 → paid
-/// resend, plus the two Solana RPC reads the payment build makes
-/// (`getLatestBlockhash` and the mint's `getAccountInfo`). Records the paid
-/// resend's decoded envelope so the test can assert its shape.
 struct SolanaSeq {
     calls: AtomicUsize,
     envelope: std::sync::Mutex<Option<serde_json::Value>>,
@@ -2091,9 +1943,6 @@ impl SolanaSeq {
     }
 }
 
-/// Shares one `SolanaSeq` between the mock and the assertions: `Respond` is
-/// implemented for the wrapper so the test keeps a handle on the recorded
-/// envelope after mounting.
 struct SharedSolanaSeq(std::sync::Arc<SolanaSeq>);
 
 impl Respond for SharedSolanaSeq {
@@ -2104,7 +1953,6 @@ impl Respond for SharedSolanaSeq {
 
 impl SolanaSeq {
     fn respond(&self, req: &Request) -> ResponseTemplate {
-        // Solana RPC reads are JSON-RPC too; route on the method name.
         let body: serde_json::Value =
             serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
         match body.get("method").and_then(|m| m.as_str()) {
@@ -2118,7 +1966,6 @@ impl SolanaSeq {
                 return ResponseTemplate::new(200).set_body_json(json!({
                     "jsonrpc": "2.0", "id": 1,
                     "result": { "value": {
-                        // SPL Token program owns this mint; 6 decimals.
                         "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                         "data": { "parsed": { "info": { "decimals": 6 } } }
                     } }
@@ -2131,8 +1978,6 @@ impl SolanaSeq {
         match req.headers.get("payment-signature") {
             None if n == 0 => ResponseTemplate::new(402).set_body_json(json!({
                 "x402Version": 2,
-                // Dearest FIRST, as the live gateway orders them: selecting by
-                // menu order would pick the wrong tier.
                 "accepts": [x402_solana_entry("1000000"), x402_solana_entry("1000")]
             })),
             Some(sig) => {
@@ -2151,10 +1996,6 @@ impl SolanaSeq {
     }
 }
 
-// The full Solana lane: 402 → build (mint + blockhash reads) → sign → resend.
-// Asserts the envelope shape the gateway requires — `payload` is an OBJECT
-// carrying `transaction`, not a bare base64 string — and that the CHEAPEST
-// offer is paid even though the menu lists the dearer one first.
 #[tokio::test]
 async fn x402_solana_pays_the_cheapest_offer_with_a_transaction_payload() {
     let server = MockServer::start().await;
@@ -2202,7 +2043,6 @@ async fn x402_solana_pays_the_cheapest_offer_with_a_transaction_payload() {
             SOL_MINT,
             "--max-amount",
             "1000000",
-            // Point the payment-build reads at the same mock.
             "--svm-rpc-url",
             &server.uri(),
         ],
@@ -2214,15 +2054,12 @@ async fn x402_solana_pays_the_cheapest_offer_with_a_transaction_payload() {
         .recorded_envelope()
         .expect("the paid resend must carry a payment-signature");
 
-    // `payload` must be an object with `transaction`; a bare string is rejected
-    // by the gateway before it ever verifies the signature.
     let tx = envelope
         .pointer("/payload/transaction")
         .and_then(|t| t.as_str())
         .expect("payload.transaction must be a base64 string");
     assert!(!tx.is_empty(), "transaction must not be empty");
 
-    // The cheaper of the two offers is the one signed.
     assert_eq!(
         envelope
             .pointer("/accepted/amount")

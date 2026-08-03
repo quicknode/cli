@@ -1,17 +1,10 @@
-//! Integration tests for `qn wallet …` — the local payment-wallet store.
-//!
-//! These commands are keyless and make no HTTP calls, so there's no wiremock
-//! gateway here. The in-process harness doesn't capture stdout, so assertions
-//! go through exit codes and on-disk effects (the key file, its 0600 perms,
-//! and the metadata sidecar). `--config-file` points the wallet store at a
-//! tempdir so nothing touches the real config.
+//! Integration tests for the local payment-wallet store.
 
 mod common;
 
 use common::run_qn;
 
-// Any URL works — wallet commands never make a request. The harness requires a
-// --base-url value.
+// Wallet commands never make a request; the harness still requires a base URL.
 const BASE: &str = "http://127.0.0.1:1";
 
 fn cfg_in(dir: &std::path::Path) -> String {
@@ -47,11 +40,9 @@ async fn generate_writes_key_and_sidecar_at_0600() {
     assert!(key.exists(), "key file missing");
     assert!(meta.exists(), "metadata sidecar missing");
 
-    // The stored key is a valid 0x-prefixed hex secp256k1 key.
     let raw = std::fs::read_to_string(&key).unwrap();
     assert!(raw.trim().starts_with("0x"), "key not 0x-prefixed: {raw}");
 
-    // The sidecar records the vm + a derived 0x address, never the key.
     let meta_text = std::fs::read_to_string(&meta).unwrap();
     assert!(meta_text.contains("vm = \"evm\""), "meta: {meta_text}");
     assert!(meta_text.contains("0x"), "meta has no address: {meta_text}");
@@ -95,8 +86,6 @@ async fn generate_svm_stores_base58_key() {
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 
     let raw = std::fs::read_to_string(wallets_dir(dir.path()).join("sol")).unwrap();
-    // base58 key: not 0x-prefixed hex, and non-trivially long (64-byte base58 is
-    // ~88 chars). The SDK's round-trip unit tests cover exact decoding.
     assert!(!raw.trim().starts_with("0x"));
     assert!(
         raw.trim().len() > 64,
@@ -104,7 +93,6 @@ async fn generate_svm_stores_base58_key() {
         raw.trim().len()
     );
 
-    // The address in the sidecar is the base58 pubkey, not a 0x address.
     let meta = std::fs::read_to_string(wallets_dir(dir.path()).join("sol.toml")).unwrap();
     assert!(meta.contains("vm = \"svm\""), "meta: {meta}");
 }
@@ -125,7 +113,6 @@ async fn generate_refuses_overwrite_without_force() {
     ];
     assert_eq!(run_qn(BASE, args).await.exit_code, 0);
 
-    // Second generate without --force must fail and leave the key untouched.
     let key = wallets_dir(dir.path()).join("dup");
     let before = std::fs::read_to_string(&key).unwrap();
     let out = run_qn(BASE, args).await;
@@ -188,7 +175,6 @@ async fn rm_without_yes_non_tty_needs_confirmation_and_keeps_files() {
         0
     );
 
-    // Non-TTY without --yes: exit 5, and both files remain.
     let out = run_qn(BASE, &["--config-file", &cfg, "wallet", "rm", "keep"]).await;
     assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
     assert!(wallets_dir(dir.path()).join("keep").exists());
@@ -258,9 +244,7 @@ async fn show_unknown_wallet_errors() {
     );
 }
 
-// Subprocess: the in-process harness can't capture stdout/stderr, so assert the
-// generate output split (address on stdout; key path + custody note on stderr)
-// via the real binary.
+// Use the real binary to verify stdout/stderr separation.
 #[tokio::test]
 async fn generate_prints_key_path_and_custody_note() {
     let dir = tempfile::tempdir().unwrap();
@@ -289,11 +273,8 @@ async fn generate_prints_key_path_and_custody_note() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
 
-    // Address is the only thing on stdout (the pipeable value).
     assert!(stdout.trim().starts_with("0x"), "stdout={stdout}");
 
-    // The private key file path and the custody note go to stderr (the address
-    // is on stdout, so it isn't repeated on stderr).
     let key_path = wallets_dir(dir.path()).join("payer");
     assert!(
         stderr.contains(&format!("Private key file: {}", key_path.display())),
@@ -303,7 +284,6 @@ async fn generate_prints_key_path_and_custody_note() {
         stderr.contains("stored only on this machine") && stderr.contains("Quicknode does not"),
         "stderr missing custody note: {stderr}"
     );
-    // The raw key must never appear on either stream.
     let raw = std::fs::read_to_string(&key_path).unwrap();
     assert!(!stdout.contains(raw.trim()) && !stderr.contains(raw.trim()));
 }

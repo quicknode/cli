@@ -1,36 +1,14 @@
-//! Human-readable symbols for `--payment-asset`.
-//!
-//! The SDK's `PaymentConfig.asset` is a token contract address (EVM) or mint
-//! (Solana) — the exact value an x402/MPP offer is matched against. A symbol
-//! like `USDC` only identifies a concrete address once the network is known:
-//! USDC is a different address on every chain. So this resolver takes the
-//! already-resolved CAIP-2 network alongside the input and maps a known symbol
-//! to that network's address.
-//!
-//! Unlike `pay_network`, this is intentionally permissive: an asset is an
-//! open-ended address across many chains, not a closed Quicknode vocabulary.
-//! Anything that isn't a recognized symbol passes through verbatim, so any
-//! token address reaches the gateway unchanged and the gateway stays the
-//! authority on whether it is a valid, payable asset. Only symbols confirmed
-//! against a public source (the gateway's own discovery catalog) are listed —
-//! a wrong address could pay in the wrong token.
+//! Resolve known payment-asset symbols against a CAIP-2 network.
 
 use crate::errors::CliError;
 
-/// (CAIP-2 network, lowercase symbol) → token address. Sorted by the
-/// `(network, symbol)` tuple (binary searched); a unit test enforces order and
-/// uniqueness. Addresses are taken from a public source — the payment
-/// gateways' discovery catalog (`qn rpc x402 supported-payments`) or, for
-/// Tempo, the MPP spec / Tempo payment docs.
+/// Sorted `(network, symbol, address)` entries for binary search.
 const PAY_ASSETS: &[(&str, &str, &str)] = &[
     (
         "eip155:196",
         "usdc",
         "0x4ae46a509F6b1D9056937BA4500cb143933D2dc8",
     ),
-    // Tempo pathUSD and USDC.e (bridged USDC, mapped from the `usdc` symbol),
-    // from the MPP spec / Tempo payment docs and the MPP gateway's own 402
-    // challenge. Testnet `usdc` resolves to pathUSD (the testnet stand-in).
     (
         "eip155:4217",
         "pathusd",
@@ -73,16 +51,10 @@ const PAY_ASSETS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// The symbols this resolver recognizes, lowercased. Input matching one of
-/// these (case-insensitively) is rewritten to an address for the given
-/// network, or errors if that network has no mapping. Anything else passes
-/// through verbatim as an address.
+/// Symbols accepted by the resolver, in lowercase.
 const KNOWN_SYMBOLS: &[&str] = &["pathusd", "usdc"];
 
-/// Resolves a `--payment-asset` / config `payment_asset` value to a token
-/// address, given the already-resolved CAIP-2 `network`. A recognized symbol
-/// (e.g. `USDC`, case-insensitive) is mapped to that network's address; every
-/// other value passes through unchanged.
+/// Resolve a symbol; pass explicit addresses through unchanged.
 pub(super) fn resolve(input: &str, network: &str) -> Result<String, CliError> {
     let lower = input.to_ascii_lowercase();
     if !KNOWN_SYMBOLS.contains(&lower.as_str()) {
@@ -101,11 +73,7 @@ pub(super) fn resolve(input: &str, network: &str) -> Result<String, CliError> {
     }
 }
 
-/// Reverse lookup: a resolved token address on `network` → its known symbol,
-/// in display casing. Used to name the asset in funds-moving prompts and the
-/// supported-payments table instead of echoing the raw contract address. EVM
-/// hex compares case-insensitively (checksum casing varies); a miss just means
-/// the caller shows the address.
+/// Return the display symbol for a known address on `network`.
 pub(super) fn symbol_for(network: &str, address: &str) -> Option<String> {
     PAY_ASSETS
         .iter()
@@ -113,7 +81,6 @@ pub(super) fn symbol_for(network: &str, address: &str) -> Option<String> {
         .map(|(_, sym, _)| display_symbol(sym))
 }
 
-/// Display casing for a lowercase table symbol (`pathusd` → `pathUSD`).
 fn display_symbol(sym: &str) -> String {
     match sym {
         "pathusd" => "pathUSD".to_string(),
@@ -144,7 +111,6 @@ mod tests {
             resolve("usdc", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp").unwrap(),
             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         );
-        // Tempo (MPP): mainnet USDC and testnet pathUSD.
         assert_eq!(
             resolve("usdc", "eip155:4217").unwrap(),
             "0x20c000000000000000000000b9537d11c60e8b50"
@@ -167,7 +133,6 @@ mod tests {
     fn address_passes_through_verbatim() {
         let addr = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
         assert_eq!(resolve(addr, "eip155:84532").unwrap(), addr);
-        // A base58 mint (unknown to the table) is untouched.
         let mint = "So11111111111111111111111111111111111111112";
         assert_eq!(
             resolve(mint, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp").unwrap(),
@@ -181,12 +146,10 @@ mod tests {
             symbol_for("eip155:84532", "0x036CbD53842c5426634e7929541eC2318f3dCF7e").as_deref(),
             Some("USDC")
         );
-        // Checksum casing differences still match.
         assert_eq!(
             symbol_for("eip155:84532", "0x036cbd53842c5426634e7929541ec2318f3dcf7e").as_deref(),
             Some("USDC")
         );
-        // Unknown address, or a known address on the wrong network, is a miss.
         assert_eq!(symbol_for("eip155:84532", "0xabc"), None);
         assert_eq!(
             symbol_for("eip155:1", "0x036CbD53842c5426634e7929541eC2318f3dCF7e"),

@@ -70,50 +70,33 @@ pub struct RpcSection {
     pub payment: PaymentSection,
 }
 
-/// `[rpc.payment]` section: parameter defaults for the crypto-micropayment
-/// lane of `qn rpc call` (`--x402`/`--mpp`). This section supplies values;
-/// it never activates payment — only the per-invocation scheme flag does.
-/// Per-call flags override every field here.
-///
-/// There is deliberately no `scheme` key (the flag is the scheme) and no way
-/// to store the raw private key: `key_file` points at a file holding the key,
-/// keeping the key itself out of the most commonly shared/pasted file we own.
+/// Defaults for the paid RPC lane. Values do not enable payment by themselves.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PaymentSection {
-    /// Path to a file containing the raw payment private key (EVM/Tempo hex,
-    /// Solana base58). Never the key itself.
+    /// Path to the raw payment key, never the key itself.
     #[serde(default)]
     pub key_file: Option<PathBuf>,
-    /// Name of a stored wallet (from `qn wallet generate`) to pay with, as
-    /// an alternative to `key_file`. Resolved to its key file under the wallet
-    /// store. Never the key itself.
+    /// Stored wallet name, as an alternative to `key_file`.
     #[serde(default)]
     pub wallet: Option<String>,
-    /// Trap field: an inline raw key is rejected at payment-resolution time
-    /// with an error pointing at `key_file`. Without this field serde would
-    /// silently ignore `key = "..."` and the user would think it took effect.
+    /// Reject an inline raw key instead of silently ignoring it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<toml::Value>,
-    /// Default spend ceiling per paid call, in integer base units of
-    /// `payment_asset`. Accepts a TOML string or integer.
+    /// Default spend ceiling in asset base units.
     #[serde(default, deserialize_with = "de_opt_string_or_int")]
     pub max_amount: Option<String>,
-    /// Chain payments settle on: a Quicknode network name (e.g.
-    /// `base-sepolia`) or a CAIP-2 id (e.g. `eip155:84532`). Independent of
-    /// `--network` (the chain the RPC call queries).
+    /// Network where payments settle, independent of the query network.
     #[serde(default)]
     pub payment_network: Option<String>,
-    /// Token to pay with: EVM contract address or Solana mint.
+    /// Payment token contract or mint.
     #[serde(default)]
     pub payment_asset: Option<String>,
-    /// Explicit Solana RPC URL for x402/Solana payment builds.
+    /// Solana RPC URL for payment builds.
     #[serde(default)]
     pub svm_rpc_url: Option<String>,
 }
 
-/// Deserializes an optional TOML string-or-integer into `Option<String>`, so
-/// `max_amount = 10000` and `max_amount = "10000"` both work. (Base units can
-/// exceed i64 for high-decimal assets, hence the canonical string form.)
+/// Deserialize an optional TOML string or integer as a string.
 fn de_opt_string_or_int<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -288,37 +271,21 @@ fn write_config(path: &Path, cfg: &ConfigFile) -> Result<(), CliError> {
     Ok(())
 }
 
-// ── Tooling Access token cache ───────────────────────────────────────────────
-//
-// Each `qn rpc` is a fresh process, so the SDK's in-memory JWT cache starts
-// empty every time. We persist the short-lived (~10 min) session token next to
-// the config (`tokens.toml`) and re-seed the SDK on the next invocation,
-// avoiding a control-plane round trip while the token is still valid.
-//
-// Tooling Access endpoints are provisioned per account, not per API key, so the
-// cache is keyed by account id via a two-level lookup:
-//
-//   sha256(api_key)  ->  account_id  ->  { endpoint_url, token, exp_unix }
-//
-// The `[keys]` table maps an API-key fingerprint to its account id; the
-// `[tokens.<account_id>]` tables hold the JWTs. On a hit, both lookups are
-// offline (no control-plane call). All API keys for one account share a single
-// cached token. Only the short-lived JWT is written here — never the long-lived
-// API key. The account id is a non-secret numeric identifier, stored raw.
+// Tooling Access token cache. Tokens are keyed by account ID, with an API-key
+// fingerprint mapping used to resolve the account offline.
 
 use std::collections::HashMap;
 
 use quicknode_sdk::CachedToken;
 use quicknode_sdk::GatewaySession;
 
-/// On-disk shape of `~/.config/qn/tokens.toml`.
+/// On-disk token cache.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TokenCacheFile {
     /// API-key fingerprint (SHA-256 hex) -> account id.
     #[serde(default)]
     pub keys: HashMap<String, i64>,
-    /// Account id (as a string, since TOML table keys must be strings) -> cached
-    /// JWT for that account's Tooling Access endpoint.
+    /// Account ID string to cached Tooling Access token.
     #[serde(default)]
     pub tokens: HashMap<String, CachedTokenEntry>,
 }
@@ -330,9 +297,7 @@ pub struct CachedTokenEntry {
     pub exp_unix: i64,
 }
 
-/// The token cache path: `tokens.toml` alongside the resolved config file (so
-/// `--config-file` keeps config and tokens together). Falls back to the default
-/// config dir when no explicit config path is given.
+/// Return the token-cache path beside the config file.
 pub fn token_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
         Some(p) => p.parent().map(|d| d.join("tokens.toml")),
@@ -347,8 +312,7 @@ pub fn fingerprint_key(api_key: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Reads `tokens.toml`, treating an absent or malformed file as an empty cache.
-/// A malformed cache (e.g. an older on-disk schema) is a miss, never an error.
+/// Read the token cache; malformed data is a cache miss.
 fn read_cache(path: &Path) -> TokenCacheFile {
     fs::read_to_string(path)
         .ok()
@@ -356,8 +320,7 @@ fn read_cache(path: &Path) -> TokenCacheFile {
         .unwrap_or_default()
 }
 
-/// Resolves the account id a known API key maps to, offline. Returns `None` when
-/// the key hasn't been seen before (its fingerprint isn't in `[keys]` yet).
+/// Resolve an API key to its cached account ID.
 pub fn account_for_key(path: &Path, api_key: &str) -> Option<i64> {
     read_cache(path)
         .keys
@@ -365,8 +328,7 @@ pub fn account_for_key(path: &Path, api_key: &str) -> Option<i64> {
         .copied()
 }
 
-/// Loads the cached token for `account_id`. Returns `None` if the file is
-/// absent, unparseable, or has no entry for that account.
+/// Load a cached token for an account.
 pub fn load_token_for_account(path: &Path, account_id: i64) -> Option<CachedToken> {
     let entry = read_cache(path).tokens.remove(&account_id.to_string())?;
     Some(CachedToken {
@@ -376,10 +338,7 @@ pub fn load_token_for_account(path: &Path, account_id: i64) -> Option<CachedToke
     })
 }
 
-/// Records the `api_key -> account_id` mapping and stores `token` under that
-/// account, preserving every other account's entry (read-modify-write). Written
-/// atomically with 0600 perms. Last-write-wins under concurrency — two `qn rpc`
-/// processes may both mint, but the atomic rename guarantees no partial file.
+/// Store an account mapping and token atomically.
 pub fn save_token(
     path: &Path,
     api_key: &str,
@@ -399,10 +358,7 @@ pub fn save_token(
     write_cache(path, &cache)
 }
 
-/// Drops the cached JWT for `account_id` (e.g. a stale token against an endpoint
-/// that was disabled out-of-band), leaving other accounts' tokens and every
-/// `[keys]` mapping intact. No-op if there was no entry. Best-effort: a missing
-/// or malformed file is not an error.
+/// Remove one cached account token.
 pub fn delete_account_token(path: &Path, account_id: i64) -> Result<(), CliError> {
     let mut cache = read_cache(path);
     if cache.tokens.remove(&account_id.to_string()).is_none() {
@@ -420,12 +376,7 @@ fn write_cache(path: &Path, cache: &TokenCacheFile) -> Result<(), CliError> {
     write_atomic_0600(path, text.as_bytes(), ".qn-tokens-")
 }
 
-// ── Multichain network URL cache ─────────────────────────────────────────────
-//
-// The per-network URL map (network key -> http_url) is stable endpoint metadata,
-// unlike the ~10-min JWT. We cache it separately in `networks.toml` with a
-// 24-hour TTL so it isn't rewritten on every token refresh. Scoped to the
-// endpoint id; re-fetched (via get_endpoint_urls) when absent or stale.
+// Multichain network URL cache, scoped to the endpoint and refreshed daily.
 
 /// Seconds the cached network map is considered fresh (24h).
 pub const NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
@@ -454,9 +405,7 @@ pub fn networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// The wallet store directory: `wallets/` alongside the resolved config file.
-/// Holds one raw-key file per wallet (0600) plus a `<name>.toml` metadata
-/// sidecar. The directory is tightened to 0700 on first write.
+/// Return the wallet store directory.
 pub fn wallets_dir(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
         Some(p) => p.parent().map(|d| d.join("wallets")),
@@ -464,19 +413,12 @@ pub fn wallets_dir(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-// ── x402 gateway session (JWT) cache ─────────────────────────────────────────
-//
-// The drawdown lane authenticates once (SIWX → JWT, ~1h) and reuses the JWT
-// across `qn rpc` processes. We persist it in `sessions.toml` alongside the
-// config, keyed by the payer wallet's on-chain address (derived offline from
-// the key), so distinct wallets don't collide and a cache lookup needs no
-// network round trip. Only the short-lived JWT is written — never the wallet
-// key. A missing/expired session simply re-authenticates (which is free).
+// x402 gateway session cache, keyed by the payer address.
 
-/// On-disk shape of `~/.config/qn/sessions.toml`.
+/// On-disk gateway-session cache.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SessionCacheFile {
-    /// Payer wallet address (lowercase) -> cached gateway session.
+    /// Lowercase payer address to cached session.
     #[serde(default)]
     pub sessions: HashMap<String, GatewaySessionEntry>,
 }
@@ -488,8 +430,7 @@ pub struct GatewaySessionEntry {
     pub account_id: String,
 }
 
-/// The gateway-session cache path: `sessions.toml` alongside the resolved
-/// config file (falling back to the default config dir).
+/// Return the gateway-session cache path.
 pub fn sessions_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
         Some(p) => p.parent().map(|d| d.join("sessions.toml")),
@@ -497,15 +438,11 @@ pub fn sessions_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-// Normalize an address for use as a cache key (addresses are case-insensitive
-// on EVM; Solana base58 is case-sensitive but never collides after lowercasing
-// within a single wallet's own entries).
 fn session_key(address: &str) -> String {
     address.to_lowercase()
 }
 
-/// Loads the cached gateway session for the payer `address`. Returns `None` if
-/// the file is absent, unparseable, or has no entry for that wallet.
+/// Load a cached gateway session for a payer.
 pub fn load_gateway_session_by_address(path: &Path, address: &str) -> Option<GatewaySession> {
     let text = fs::read_to_string(path).ok()?;
     let cache: SessionCacheFile = toml::from_str(&text).ok()?;
@@ -517,9 +454,7 @@ pub fn load_gateway_session_by_address(path: &Path, address: &str) -> Option<Gat
     })
 }
 
-/// Stores `session` under the payer `address`, preserving every other wallet's
-/// entry (read-modify-write). Written atomically at 0600. Best-effort under
-/// concurrency: the atomic rename guarantees no partial file.
+/// Store a gateway session atomically.
 pub fn save_gateway_session(
     path: &Path,
     address: &str,
@@ -544,18 +479,9 @@ pub fn save_gateway_session(
     write_atomic_0600(path, text.as_bytes(), ".qn-sessions-")
 }
 
-// ── MPP channel state ────────────────────────────────────────────────────────
-//
-// An open MPP payment channel is long-lived local state (channelId, deposit,
-// cumulative spend) reused across `qn rpc` processes. We persist it in
-// `channels.toml` alongside the config, keyed by payer address + query network
-// so one wallet can hold a channel per network. The gateway is the source of
-// truth for the accepted high-water mark; `qn rpc mpp status` re-syncs it into
-// this record. A lost or unparseable record reads as "no channel".
+// MPP channel state cache, keyed by payer, pay network, and pay asset.
 
-/// On-disk shape of `~/.config/qn/channels.toml`. Amounts are stored as
-/// strings because TOML has no unsigned-128-bit integer type; they round-trip
-/// through [`ChannelEntry`] to the SDK's `u128`-typed `ChannelState`.
+/// On-disk channel cache. Amounts are decimal strings for TOML compatibility.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ChannelCacheFile {
     /// "<payer-address>:<pay-network>:<pay-asset>" -> the open channel's state.
@@ -563,10 +489,7 @@ pub struct ChannelCacheFile {
     pub channels: HashMap<String, ChannelEntry>,
 }
 
-/// What scopes an open channel: the payer, the chain the deposit settles on, and
-/// the token it is denominated in. Deliberately *not* the queried network — the
-/// channel is a funding relationship with the gateway on the pay chain, so one
-/// channel funds paid calls to every supported query network.
+/// Channel cache scope. It excludes the queried network.
 #[derive(Debug, Clone)]
 pub struct ChannelScope {
     /// Payer address, as derived offline from the payment key.
@@ -578,9 +501,7 @@ pub struct ChannelScope {
 }
 
 impl ChannelScope {
-    /// Cache key. Both scope values arrive already normalized (CAIP-2 network,
-    /// resolved token address), so a caller who typed a symbol and one who typed
-    /// the contract address land on the same record.
+    /// Build the normalized cache key.
     fn key(&self) -> String {
         format!(
             "{}:{}:{}",
@@ -591,7 +512,7 @@ impl ChannelScope {
     }
 }
 
-/// TOML-safe channel record (u128 amounts as decimal strings).
+/// TOML-safe channel record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelEntry {
     pub channel_id: String,
@@ -638,7 +559,7 @@ impl ChannelEntry {
     }
 }
 
-/// The channel-state cache path: `channels.toml` alongside the resolved config.
+/// Return the channel-state cache path.
 pub fn channels_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
         Some(p) => p.parent().map(|d| d.join("channels.toml")),
@@ -656,8 +577,7 @@ pub fn load_channel(path: &Path, scope: &ChannelScope) -> Option<quicknode_sdk::
         .and_then(ChannelEntry::to_state)
 }
 
-/// Stores `channel` under `scope`, preserving other entries. Written atomically
-/// at 0600.
+/// Store a channel atomically.
 pub fn save_channel(
     path: &Path,
     scope: &ChannelScope,
@@ -677,8 +597,7 @@ pub fn save_channel(
     write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
 }
 
-/// Drops the channel entry for `scope` (e.g. after a close), leaving other
-/// entries intact. No-op if absent.
+/// Remove a channel entry.
 pub fn delete_channel(path: &Path, scope: &ChannelScope) -> Result<(), CliError> {
     let mut cache: ChannelCacheFile = match fs::read_to_string(path)
         .ok()
@@ -697,9 +616,7 @@ pub fn delete_channel(path: &Path, scope: &ChannelScope) -> Result<(), CliError>
     write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
 }
 
-/// Loads the cached network map for `endpoint_id` from `path`, if present, for
-/// the same endpoint, and fetched within the TTL (relative to `now_unix`).
-/// Returns `None` (a cache miss) on any mismatch or parse failure.
+/// Load a fresh network map for an endpoint.
 pub fn load_networks(
     path: &Path,
     endpoint_id: &str,
@@ -717,9 +634,7 @@ pub fn load_networks(
     Some(entry.networks)
 }
 
-/// Saves the network map for `endpoint_id` to `path` atomically with 0600 perms,
-/// stamping `fetched_at_unix` for the TTL check. Same write discipline as
-/// [`save_token`].
+/// Save a network map atomically.
 pub fn save_networks(
     path: &Path,
     endpoint_id: &str,
@@ -740,21 +655,12 @@ pub fn save_networks(
     write_atomic_0600(path, text.as_bytes(), ".qn-networks-")
 }
 
-// ── Payment-gateway discovery cache ──────────────────────────────────────────
-//
-// The networks callable via a payment gateway and the payment options it
-// accepts are stable public metadata fetched from the gateways' discovery
-// surfaces. Cached per scheme (x402 / mpp) in `pay-networks.toml` next to the
-// config file, each section with its own 24-hour TTL (the two lists back
-// separate commands and are fetched independently). Not account-scoped (the
-// data is public and the same for everyone).
+// Payment-gateway discovery cache, split by scheme and list.
 
 /// Seconds a cached discovery list is considered fresh (24h).
 pub const PAY_NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// One accepted payment option: the network the payment moves on, a display
-/// symbol when one is known, and the token contract address (EVM) / mint
-/// (Solana).
+/// One accepted payment option.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayAssetEntry {
     pub network: String,
@@ -771,7 +677,7 @@ pub struct PayNetworksCacheFile {
     pub mpp: SchemeCacheEntry,
 }
 
-/// One gateway's cached discovery lists, each independently timestamped.
+/// Cached discovery lists for one gateway.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SchemeCacheEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -782,14 +688,14 @@ pub struct SchemeCacheEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworksCacheSection {
-    /// Unix seconds the list was fetched, for the TTL check.
+    /// Fetch time in Unix seconds.
     pub fetched_at_unix: i64,
     pub networks: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentsCacheSection {
-    /// Unix seconds the list was fetched, for the TTL check.
+    /// Fetch time in Unix seconds.
     pub fetched_at_unix: i64,
     pub payments: Vec<PayAssetEntry>,
 }
@@ -802,8 +708,6 @@ pub fn pay_networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// Reads and parses the cache file, or an empty default when it is missing,
-/// unreadable, or in an older format.
 fn load_pay_cache_file(path: &Path) -> PayNetworksCacheFile {
     fs::read_to_string(path)
         .ok()
@@ -830,9 +734,7 @@ fn write_pay_cache_file(path: &Path, cache: &PayNetworksCacheFile) -> Result<(),
     write_atomic_0600(path, text.as_bytes(), ".qn-pay-networks-")
 }
 
-/// Loads the cached callable-networks list for `scheme` ("x402" or "mpp") from
-/// `path`, if present and fetched within the TTL (relative to `now_unix`).
-/// Returns `None` on any miss, including a cache file in an older format.
+/// Load a fresh cached network list.
 pub fn load_pay_networks(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec<String>> {
     let mut cache = load_pay_cache_file(path);
     let section = scheme_entry(&mut cache, scheme)?.networks.take()?;
@@ -842,8 +744,7 @@ pub fn load_pay_networks(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec
     Some(section.networks)
 }
 
-/// Loads the cached payment-options list for `scheme`, with the same TTL and
-/// miss semantics as [`load_pay_networks`].
+/// Load a fresh cached payment list.
 pub fn load_pay_payments(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec<PayAssetEntry>> {
     let mut cache = load_pay_cache_file(path);
     let section = scheme_entry(&mut cache, scheme)?.payments.take()?;
@@ -853,9 +754,7 @@ pub fn load_pay_payments(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec
     Some(section.payments)
 }
 
-/// Saves the callable-networks list for `scheme` to `path` atomically,
-/// stamping `fetched_at_unix` for the TTL check. Every other section is kept
-/// when the existing file parses; an older-format file is replaced wholesale.
+/// Save a network list while preserving other scheme sections.
 pub fn save_pay_networks(
     path: &Path,
     scheme: &str,
@@ -874,8 +773,7 @@ pub fn save_pay_networks(
     write_pay_cache_file(path, &cache)
 }
 
-/// Saves the payment-options list for `scheme`, with the same merge semantics
-/// as [`save_pay_networks`].
+/// Save a payment list while preserving other scheme sections.
 pub fn save_pay_payments(
     path: &Path,
     scheme: &str,
@@ -894,10 +792,7 @@ pub fn save_pay_payments(
     write_pay_cache_file(path, &cache)
 }
 
-/// Atomically writes `bytes` to `path` with 0600 perms via a temp file in the
-/// same directory (perms set before the bytes), then `rename`. Also tightens
-/// the parent directory to 0700. Shared by the token/networks caches and the
-/// wallet store.
+/// Atomically write a 0600 file and tighten its parent directory.
 pub(crate) fn write_atomic_0600(
     path: &Path,
     bytes: &[u8],
@@ -1032,7 +927,6 @@ mod tests {
         save_pay_payments(&path, "x402", 200, &payments).unwrap();
         save_pay_networks(&path, "mpp", 100, &["tempo-testnet".to_string()]).unwrap();
 
-        // Each save kept the other sections.
         assert_eq!(
             load_pay_networks(&path, "x402", 100).unwrap(),
             vec!["base-sepolia"]
@@ -1045,7 +939,6 @@ mod tests {
             vec!["tempo-testnet"]
         );
 
-        // An unfetched section and a TTL-expired section are both misses.
         assert!(load_pay_payments(&path, "mpp", 100).is_none());
         assert!(load_pay_networks(&path, "x402", 100 + PAY_NETWORKS_TTL_SECS).is_none());
     }
@@ -1054,7 +947,6 @@ mod tests {
     fn pay_cache_old_formats_are_a_miss() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("pay-networks.toml");
-        // A pre-split cache shape: a per-scheme entry with merged lists.
         fs::write(
             &path,
             "[x402]\nfetched_at_unix = 100\ncallable = [\"base-sepolia\"]\npayments = []\n",
@@ -1063,7 +955,6 @@ mod tests {
         assert!(load_pay_networks(&path, "x402", 100).is_none());
         assert!(load_pay_payments(&path, "x402", 100).is_none());
 
-        // A save on top of the old format replaces it wholesale.
         save_pay_networks(&path, "mpp", 100, &["tempo-testnet".to_string()]).unwrap();
         assert_eq!(
             load_pay_networks(&path, "mpp", 100).unwrap(),
@@ -1151,7 +1042,6 @@ mod tests {
 
     #[test]
     fn config_dir_ignores_relative_xdg() {
-        // A non-absolute XDG_CONFIG_HOME is bogus per the spec; fall through to HOME.
         let d = resolve_config_dir(
             Some(std::ffi::OsString::from("relative/path")),
             Some(std::ffi::OsString::from("/home/u")),

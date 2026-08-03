@@ -1,15 +1,9 @@
-//! Snapshot tests for human-readable table output, rendered by the real
-//! binary against a wiremock server.
-//!
-//! Unlike `output_snapshots.rs` (which pins layout via re-declared renderers),
-//! these run `qn` as a subprocess so the snapshot covers the actual
-//! decode-and-render path for each command.
+//! Snapshot tests for table output through the real binary.
 
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Mount `body` at `GET url_path`, run `qn --format table <args>` against the
-/// mock server, and return stdout. Panics (with stderr) on non-zero exit.
+/// Mount a GET response and return table stdout.
 async fn table_stdout(url_path: &str, body: serde_json::Value, args: &[&str]) -> String {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -364,8 +358,7 @@ async fn endpoint_show_minimal_table_omits_security_and_rate_limit_rows() {
     insta::assert_snapshot!(out);
 }
 
-/// Like [`table_stdout`] but mounts the body at `POST url_path`, for commands
-/// that issue a POST (e.g. `sql query`).
+/// Mount a POST response and return table stdout.
 async fn table_stdout_post(url_path: &str, body: serde_json::Value, args: &[&str]) -> String {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -464,8 +457,7 @@ async fn sql_schema_table_renders_nested_table_blocks() {
     insta::assert_snapshot!(out);
 }
 
-/// Runs `qn --format table rpc <scheme> <verb>` against `server` and returns
-/// stdout. Panics (with stderr) on non-zero exit.
+/// Run an RPC discovery command and return table stdout.
 async fn discovery_stdout(server: &MockServer, scheme: &str, verb: &str) -> String {
     let output = assert_cmd::Command::cargo_bin("qn")
         .unwrap()
@@ -509,7 +501,6 @@ async fn x402_supported_networks_table_lists_slugs() {
 #[tokio::test]
 async fn x402_supported_payments_table_lists_options() {
     let server = MockServer::start().await;
-    // Served with HTTP 402, like the real gateway.
     Mock::given(method("GET"))
         .and(path("/supported"))
         .respond_with(ResponseTemplate::new(402).set_body_json(serde_json::json!({

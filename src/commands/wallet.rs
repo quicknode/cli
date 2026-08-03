@@ -1,20 +1,5 @@
-//! `qn wallet …` — a local store of dedicated payment wallets.
-//!
-//! Removes the raw-key-file juggling the paid RPC lane otherwise requires:
-//! `generate` creates a fresh keypair, stores the raw key at 0600 under
-//! `<config-dir>/qn/wallets/<name>`, and prints the address (plus a QR on a
-//! TTY) so the wallet can be funded. `qn rpc call --payment-wallet <name>`
-//! then resolves the key by name — the raw key never appears on a command line.
-//!
-//! Storage layout, per wallet `<name>`:
-//! - `<name>`        — the raw private key (0600), the exact bytes the paid
-//!   lane's `read_key_file` expects.
-//! - `<name>.toml`   — public metadata (vm, address, created-at). Never the
-//!   key, so `list`/`show` read this and never open the key file.
-//!
-//! The key is stored **unencrypted** at 0600 (the `solana-keygen` model): the
-//! paid lane is keyless and non-interactive, so a passphrase prompt would break
-//! it. Treat every managed wallet as a dedicated, minimally-funded hot wallet.
+//! Local payment-wallet storage. Raw keys are unencrypted files with 0600
+//! permissions; public metadata is stored in a separate sidecar.
 
 use std::path::{Path, PathBuf};
 
@@ -130,8 +115,6 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
     }
 }
 
-// ── verbs ────────────────────────────────────────────────────────────────────
-
 fn generate(a: GenerateArgs, ctx: Ctx) -> Result<(), CliError> {
     let name = validate_name(&a.name)?;
     let dir = wallets_dir(&ctx)?;
@@ -153,7 +136,7 @@ fn generate(a: GenerateArgs, ctx: Ctx) -> Result<(), CliError> {
     };
     let raw = wallet.into_key();
 
-    // Key first (0600, tightens the dir to 0700), then the public sidecar.
+    // Write the key before its metadata so a partial write leaves no usable record.
     crate::config::write_atomic_0600(&key_path, raw.as_bytes(), ".qn-wallet-")?;
     write_meta(&meta_path, &meta)?;
 
@@ -199,8 +182,7 @@ fn rm(a: RmArgs, ctx: Ctx) -> Result<(), CliError> {
         ),
     )?;
 
-    // Remove the key first: if the sidecar removal somehow fails, we never leave
-    // an orphaned key on disk.
+    // Remove the key first; a leftover sidecar must not preserve a usable key.
     if key_path.exists() {
         std::fs::remove_file(&key_path).map_err(|e| remove_err(&key_path, e))?;
     }
@@ -211,20 +193,12 @@ fn rm(a: RmArgs, ctx: Ctx) -> Result<(), CliError> {
     Ok(())
 }
 
-// ── rendering ──────────────────────────────────────────────────────────────
-
-/// The custody disclaimer shown on generate/show. This wallet lives only on
-/// this machine; backing it up is the user's responsibility.
+// The custody disclaimer shown on generate/show.
 const CUSTODY_NOTE: &str = "This wallet is stored only on this machine. \
     Quicknode does not hold, back up, or recover it — keep your own backup of \
     the key file; if you lose it, any funds in the wallet are gone.";
 
-/// Prints the address to stdout (the pipeable value), and to stderr a spaced,
-/// lightly-styled block: the QR (TTY only), the private key file path, a
-/// funding hint, and the custody note. Everything but the bare address goes to
-/// stderr, so a piped `qn wallet show` yields just the address; the QR
-/// must never go to stdout — it would corrupt the pipe. Styling is applied
-/// only when `ctx.out.color` is set (a TTY with color enabled).
+/// Print the address to stdout and interactive details to stderr.
 fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     println!("{}", meta.address);
     if ctx.out.quiet {
@@ -233,30 +207,22 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
     let c = ctx.out.color;
     let on_tty = with_qr && ctx.out.stdout_is_tty;
 
-    // Build one spaced block so blank lines land predictably around the QR.
     let mut block = String::new();
 
     if on_tty {
         if let Some(qr) = render_qr(&meta.address) {
-            // Blank line above so the QR isn't jammed against the address.
             block.push('\n');
             block.push_str(&qr);
             block.push('\n');
         }
     }
 
-    // Private key file path (the address is already on stdout, so it isn't
-    // echoed here).
     block.push_str(&format!(
         "{} {}\n",
         style("Private key file:", Style::Dim, c),
         style(&key_path.display().to_string(), Style::Bold, c)
     ));
 
-    // Funding hint (only meaningful interactively, where the QR is shown).
-    // Show the testnet funding routes for this wallet's VM family, then a
-    // complete, runnable paid-lane call so the address can go straight from
-    // funded to used.
     if on_tty {
         block.push('\n');
         block.push_str(
@@ -283,17 +249,13 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
         block.push_str(&format!("{}\n", config_example(&meta.vm, &meta.name)));
     }
 
-    // Custody note as dim fine-print, set off by a blank line.
     block.push('\n');
     block.push_str(&style(&format!("⚠ {CUSTODY_NOTE}"), Style::Dim, c));
 
     ctx.out.note(&block);
 }
 
-/// A paste-ready `[rpc.payment]` config section that makes this wallet the
-/// default payer, with network/asset/ceiling defaults matching the printed
-/// example call. The section only supplies values — a scheme flag
-/// (`--x402`/`--mpp`) still activates payment per call.
+// Build the matching `[rpc.payment]` example.
 fn config_example(vm: &str, name: &str) -> String {
     let network = match vm {
         "svm" => "solana-devnet",
@@ -308,11 +270,7 @@ fn config_example(vm: &str, name: &str) -> String {
     )
 }
 
-/// Testnet funding routes for a fresh wallet, per VM family. EVM gets the
-/// gateway's built-in Base Sepolia faucet (`qn rpc x402 drip`, pre-filled with
-/// this wallet's name), the Circle faucet for the USDC testnets, the Tempo
-/// testnet faucet (pathUSD, for MPP), and the XLayer USDG note; SVM gets the
-/// Circle faucet on Solana Devnet.
+// Build testnet funding hints for the wallet VM.
 fn funding_hint(vm: &str, name: &str, color: bool) -> String {
     match vm {
         "svm" => "  Circle faucet:  https://faucet.circle.com (USDC on Solana Devnet)".to_string(),
@@ -332,15 +290,7 @@ fn funding_hint(vm: &str, name: &str, color: bool) -> String {
     }
 }
 
-/// A complete, runnable paid-lane `qn rpc call` for a freshly funded wallet,
-/// matching the documented examples in the README. SVM gets one x402/Solana
-/// example; EVM gets both an x402 (pays Base Sepolia USDC) and an MPP (pays
-/// Tempo testnet USDC) example, since the same secp256k1 key works for both.
-/// The EVM examples query a chain the wallet is not funded on — the payment
-/// chain is independent of the chain a call queries.
-/// `--max-amount` is a spend ceiling in base units, not a tier selector: the
-/// CLI pays the cheapest offer at or under it. The Solana example uses 1000000
-/// (0.001 USDC at 6 decimals), which covers that gateway's per-request offer.
+// Build a runnable paid call for a freshly funded wallet.
 fn example_call(vm: &str, name: &str) -> String {
     match vm {
         "svm" => format!(
@@ -373,7 +323,7 @@ fn example_call(vm: &str, name: &str) -> String {
     }
 }
 
-/// Unicode (half-block) QR of `data`, or `None` if it can't be encoded.
+/// Render a Unicode QR code, if encoding succeeds.
 fn render_qr(data: &str) -> Option<String> {
     use qrcode::render::unicode;
     use qrcode::QrCode;
@@ -413,14 +363,10 @@ impl Render for WalletsView {
     }
 }
 
-// ── metadata sidecar ─────────────────────────────────────────────────────────
-
-/// Public wallet metadata, stored as `<name>.toml` beside the key. Never holds
-/// the key itself, so `list`/`show` never open the 0600 key file.
+// Public wallet metadata stored beside the key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletMeta {
     name: String,
-    // `alias` keeps sidecars written before the `--vm` rename loadable.
     #[serde(alias = "chain")]
     vm: String,
     address: String,
@@ -449,8 +395,6 @@ fn write_meta(path: &Path, meta: &WalletMeta) -> Result<(), CliError> {
         path: path.to_path_buf(),
         source: std::io::Error::other(e),
     })?;
-    // The sidecar is public metadata, but reuse the atomic writer for the same
-    // temp-file/rename durability (0600 is harmless for a public file).
     crate::config::write_atomic_0600(path, text.as_bytes(), ".qn-wallet-meta-")
 }
 
@@ -459,8 +403,7 @@ fn load_meta(path: &Path) -> Option<WalletMeta> {
     toml::from_str(&text).ok()
 }
 
-/// Loads every `<name>.toml` sidecar in the wallets directory. Missing dir or
-/// unreadable sidecars yield an empty list / are skipped — `list` is best-effort.
+/// Load readable wallet metadata sidecars.
 fn load_all_meta(dir: &Path) -> Vec<WalletMeta> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -471,8 +414,6 @@ fn load_all_meta(dir: &Path) -> Vec<WalletMeta> {
         .filter_map(|e| load_meta(&e.path()))
         .collect()
 }
-
-// ── paths & validation ─────────────────────────────────────────────────────
 
 fn wallets_dir(ctx: &Ctx) -> Result<PathBuf, CliError> {
     let config_path = ctx.global.resolve_config_path();
@@ -485,8 +426,7 @@ fn meta_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.toml"))
 }
 
-/// Restricts a wallet name to `[a-z0-9_-]` so it can never escape the wallets
-/// directory (no separators, no `..`, no empties). Returns the validated name.
+/// Validate a wallet name for use as a filename.
 fn validate_name(name: &str) -> Result<String, CliError> {
     if name.is_empty() {
         return Err(CliError::Arg("wallet name cannot be empty".to_string()));
@@ -509,9 +449,7 @@ fn not_found(name: &str) -> CliError {
     ))
 }
 
-/// Resolves a stored wallet name to its key file path, validating the name and
-/// checking the file exists. Also used by the paid RPC lane's
-/// `--payment-wallet`, so the name rules live in one place.
+/// Resolve a stored wallet name to its key file.
 pub(crate) fn key_path(name: &str, wallets_dir: Option<&Path>) -> Result<PathBuf, CliError> {
     let name = validate_name(name)?;
     let dir = wallets_dir

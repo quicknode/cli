@@ -1,20 +1,5 @@
-//! The crypto-micropayment lane of `qn rpc call` (`--x402`/`--mpp`): pay per
-//! RPC request with a stablecoin instead of an account API key, via the SDK's
-//! 402 → sign → resend handshake against Quicknode's payment gateways.
-//!
-//! This lane is deliberately structural, not conditional: `run_call` branches
-//! here before any of the default lane's machinery, so the token cache, the
-//! Tooling Access enable/probe recovery, the networks map, and `retrying()`
-//! are unreachable. Paid calls are NEVER auto-retried — a lost response after
-//! the payment was submitted (`PaymentIndeterminate`, or an uninterpretable
-//! post-payment body) means the caller may already have been charged.
-//!
-//! Everything the lane needs is resolved before any network I/O: the private
-//! key (flag file/stdin > `--payment-wallet` > `key_file` > `wallet` in config
-//! — always from a file, never an env var or a raw key on the command line or
-//! inline in config), the spend ceiling, the pay network, and the asset. The
-//! key lives only inside the SDK's `PaymentConfig` (which redacts it in Debug)
-//! and is never logged or echoed.
+//! Keyless x402/MPP payment lane. Configuration is resolved before network I/O;
+//! paid calls are single-attempt because a lost response may mean settlement.
 
 use std::path::Path;
 
@@ -28,13 +13,10 @@ use crate::output::{style, Style};
 
 use super::CallArgs;
 
-// Re-auth margin for the cached gateway session: refresh a session expiring
-// within this window, absorbing clock skew (mirrors the tooling token margin).
+// Refresh cached sessions before expiry to absorb clock skew.
 const SESSION_MARGIN_SECS: i64 = 60;
 
-/// Rejects reading both the params and the payment key from stdin — there is
-/// only one stdin, and draining it into the key would silently leave the params
-/// empty. Shared by every paid lane (per-request, drawdown, session).
+/// Reject using stdin for both params and the payment key.
 fn check_single_stdin(args: &CallArgs) -> Result<(), CliError> {
     let params_use_stdin = matches!(args.params.as_deref(), Some("-"))
         || matches!(&args.params_file, Some(p) if p.as_os_str() == "-");
@@ -49,9 +31,7 @@ fn check_single_stdin(args: &CallArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Entry point from `run_call` once `--x402`/`--mpp` is present.
 pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
-    // Both the key and the params may come from stdin; there is only one stdin.
     let params_use_stdin = matches!(args.params.as_deref(), Some("-"))
         || matches!(&args.params_file, Some(p) if p.as_os_str() == "-");
     let key_use_stdin = matches!(&args.payment_key_file, Some(p) if p.as_os_str() == "-");
@@ -63,12 +43,8 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
         ));
     }
 
-    // Config parameter defaults. Unlike the default lane's endpoint_url load,
-    // a broken config file is a hard error here (exit 4): the user probably
-    // relies on [rpc.payment] values we could not read.
     let section = load_payment_section(&global)?;
 
-    // The wallet store directory backs `--payment-wallet` / config `wallet`.
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
 
     let (payment, network, key_file_warning) = resolve_payment_config(
@@ -85,9 +61,6 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
         ctx.out.warn(&w);
     }
 
-    // ONE attempt, no retrying(): a retried paid call risks a double charge.
-    // call_with_receipt is the single code path; the receipt is dropped unless
-    // --receipt asked for it.
     let resp = ctx
         .sdk
         .rpc
@@ -96,9 +69,6 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
         .map_err(map_paid_error)?;
 
     if args.receipt {
-        // The receipt is data: it goes to stdout, opted into explicitly since
-        // it changes the output shape. `null` on x402 (no settlement
-        // reference exists in that protocol).
         let receipt = resp.payment_receipt.map(|r| {
             serde_json::json!({
                 "method": r.method,
@@ -115,21 +85,13 @@ pub(super) async fn run_paid_call(args: CallArgs, global: GlobalArgs) -> Result<
             }),
         )
     } else {
-        // Identical output shape to an unpaid call.
         super::emit_result(&ctx, &resp.result)
     }
 }
 
-/// Entry point from `run_call` once `--x402-drawdown` is present. Pays for the
-/// call from prepaid x402 credits: no per-call signing, 1 credit per success.
-///
-/// A missing/expired session JWT is re-authenticated transparently (free), and
-/// a `token_expired` 401 on the call triggers exactly ONE re-auth + retry —
-/// that path signs nothing and draws no credit, so it is not a paid retry. The
-/// credit-drawing call itself is single-attempt.
+// Drawdown calls use a cached Bearer session and one transparent auth refresh.
 pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
     check_single_stdin(&args)?;
-    // The query chain, required here so the error can explain the distinction.
     let Some(network) = args.network.clone() else {
         return Err(CliError::Arg(
             "--x402-drawdown requires --network: the chain the call queries, as \
@@ -157,9 +119,6 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
 
     let session = ensure_gateway_session(&ctx, &global).await?;
 
-    // ONE credit-drawing attempt. A token_expired 401 is the sole exception:
-    // it drew no credit, so we re-auth once and retry (mirrors the tooling
-    // lane's reactive 401 refresh).
     let result = match ctx
         .sdk
         .rpc
@@ -185,11 +144,7 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
     super::emit_result(&ctx, &result)
 }
 
-/// Returns a valid gateway session for the configured wallet, authenticating
-/// (and caching) when there's no fresh cached JWT. Free — no funds move — so no
-/// confirmation. Keyed by the wallet's on-chain address (derived offline), so
-/// the cache lookup is a single local read. Shared by `qn rpc x402 …` and the
-/// `--x402-drawdown` call lane.
+/// Load a fresh cached gateway session or authenticate one.
 pub(super) async fn ensure_gateway_session(
     ctx: &Ctx,
     global: &GlobalArgs,
@@ -207,8 +162,7 @@ pub(super) async fn ensure_gateway_session(
     reauthenticate(ctx, global).await
 }
 
-/// Authenticates a fresh session and caches it, unconditionally (bypassing the
-/// cache). Used on first use and on a `token_expired` retry.
+/// Authenticate and replace the cached session.
 async fn reauthenticate(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession, CliError> {
     let sessions_path = config::sessions_cache_path(global.resolve_config_path().as_deref());
     let address = ctx.sdk.rpc.payment_address()?;
@@ -219,9 +173,7 @@ async fn reauthenticate(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession
     Ok(session)
 }
 
-/// True when a gateway error is an expired/invalid session token — the one case
-/// worth a transparent re-auth (it drew no credit). The gateway surfaces this
-/// as a 401 OR a 403 (see the drawdown SDK docs), so match both.
+/// Check for an expired gateway session.
 fn is_token_expired(e: &SdkError) -> bool {
     matches!(
         e,
@@ -231,7 +183,6 @@ fn is_token_expired(e: &SdkError) -> bool {
     )
 }
 
-/// The gateway refused because the credit balance is empty (nothing settled).
 fn is_out_of_credits(e: &SdkError) -> bool {
     matches!(
         e,
@@ -242,9 +193,7 @@ fn is_out_of_credits(e: &SdkError) -> bool {
     )
 }
 
-/// Handles a drawdown-call failure: when the refusal is an empty credit
-/// balance, first print the balance-check command (stderr) in the same bold
-/// multi-line format as the other chained hints, then map to the CLI error.
+// Add a balance hint for empty-credit failures, then map the error.
 fn drawdown_failure(ctx: &Ctx, args: &CallArgs, network: &str, e: SdkError) -> CliError {
     if is_out_of_credits(&e) {
         let wallet = args.payment_wallet.as_deref().unwrap_or("<NAME>");
@@ -266,10 +215,6 @@ fn drawdown_failure(ctx: &Ctx, args: &CallArgs, network: &str, e: SdkError) -> C
     map_drawdown_error(e)
 }
 
-/// Maps a drawdown-call failure onto an actionable CLI error. An empty-credits
-/// or monthly-limit gateway refusal points forward at the fixing verb; because
-/// nothing settled, both map to exit 2 (`PaymentRefused`), not the generic
-/// arg-error bucket. Every other SDK error keeps its normal exit-code mapping.
 fn map_drawdown_error(e: SdkError) -> CliError {
     if is_out_of_credits(&e) {
         return CliError::PaymentRefused(
@@ -290,13 +235,7 @@ fn map_drawdown_error(e: SdkError) -> CliError {
     e.into()
 }
 
-/// Entry point from `run_call` once `--mpp-session` is present. Pays for the
-/// call from an open MPP channel with a cumulative EIP-712 voucher: no on-chain
-/// tx per call. Single-attempt (a paid lane never blind-retries).
-///
-/// Requires an already-open channel for this wallet + query network (from
-/// `qn rpc mpp open`); a missing channel or one whose deposit is exhausted
-/// surfaces an actionable error pointing at `mpp open` / `mpp top-up`.
+// Pay from a cached MPP channel with one cumulative voucher.
 pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Result<(), CliError> {
     check_single_stdin(&args)?;
     let Some(network) = args.network.clone() else {
@@ -318,8 +257,6 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
     )?;
     let params = super::parse_params(args.params.as_deref(), args.params_file.as_deref())?;
 
-    // The channel is scoped by what funds it (pay network + asset), not by the
-    // chain being queried, so one open channel pays for calls to any network.
     let pay_scope = super::mpp::PayScope::from_config(&payment);
     let ctx = Ctx::from_global_keyless_payment(global.clone(), payment)?;
     if let Some(w) = key_file_warning {
@@ -340,8 +277,6 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
             ))
         })?;
 
-    // Advance the cumulative by one per-call unit. Refuse (before any signing)
-    // when the deposit can't cover it: point at top-up.
     let new_cumulative = channel.cumulative_spent.saturating_add(channel.per_call);
     if new_cumulative > channel.deposit {
         return Err(CliError::Arg(format!(
@@ -358,7 +293,6 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
         .await
         .map_err(map_session_error)?;
 
-    // The voucher was accepted: advance and persist the local high-water mark.
     channel.cumulative_spent = new_cumulative;
     if let Some(path) = &channels_path {
         let _ = config::save_channel(path, &scope, &channel);
@@ -367,9 +301,6 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
     super::emit_result(&ctx, &result)
 }
 
-/// Maps a session-call failure onto an actionable CLI error. A refusal to
-/// accept the voucher for want of deposit points at `mpp top-up`; everything
-/// else keeps its normal exit-code mapping.
 fn map_session_error(e: SdkError) -> CliError {
     if let SdkError::Api { status, body } = &e {
         if status.as_u16() == 402
@@ -387,9 +318,6 @@ fn map_session_error(e: SdkError) -> CliError {
     map_paid_error(e)
 }
 
-/// Loads `[rpc.payment]` from the resolved config file. A missing file is an
-/// empty section; an unreadable/invalid file is a hard error, since payment
-/// parameters the user set there would otherwise be silently ignored.
 fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError> {
     let Some(path) = global.resolve_config_path() else {
         return Ok(PaymentSection::default());
@@ -399,15 +327,7 @@ fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError>
         .unwrap_or_default())
 }
 
-/// Resolves the full payment configuration from flags, the injected env value,
-/// and the config section — entirely before any network I/O, so every missing
-/// or malformed input fails fast with an actionable message and zero requests
-/// sent. Returns the SDK config, the query network, and an optional key-file
-/// permissions warning for the caller to print once output exists.
-/// The payment parameter stack shared by `qn rpc call --x402/--mpp` and the
-/// gateway lifecycle verbs (`qn rpc x402 …`, `qn rpc mpp …`). Plain data,
-/// resolved from flags (or the verb's own args) with `[rpc.payment]` fallback
-/// by [`resolve_payment_params`].
+/// Payment parameters shared by paid call and lifecycle commands.
 pub(super) struct PaymentParams<'a> {
     pub key_file: Option<&'a Path>,
     pub wallet: Option<&'a str>,
@@ -417,10 +337,7 @@ pub(super) struct PaymentParams<'a> {
     pub svm_rpc_url: Option<&'a str>,
 }
 
-/// The subset of the payment stack a keyless session needs: a wallet key and a
-/// SIWX pay network, plus an optional SVM RPC URL for Solana auth. The gateway
-/// `balance`/`drip` verbs present a Bearer JWT and sign nothing, so they read
-/// this rather than [`PaymentParams`] — no asset, no spend ceiling.
+/// Parameters needed by keyless session commands.
 pub(super) struct SessionParams<'a> {
     pub key_file: Option<&'a Path>,
     pub wallet: Option<&'a str>,
@@ -447,12 +364,8 @@ fn resolve_payment_config(
     wallets_dir: Option<&Path>,
     base_url_override: Option<String>,
 ) -> Result<(PaymentConfig, String, Option<String>), CliError> {
-    // Scheme comes from which flag is set; clap's ArgGroup guarantees at most
-    // one, and run_paid_call only runs when one is present.
     let scheme = if args.x402 { "x402" } else { "mpp" };
 
-    // The query chain. Required, but enforced here rather than via clap so the
-    // error can explain the query-chain vs pay-chain distinction.
     let Some(network) = args.network.clone() else {
         return Err(CliError::Arg(format!(
             "--{scheme} requires --network: the chain the call queries, as the \
@@ -472,12 +385,7 @@ fn resolve_payment_config(
     Ok((payment.0, network, key_file_warning))
 }
 
-/// Resolves the minimal config a drawdown call needs. Unlike the per-request
-/// lane, a drawdown call signs nothing per request (it presents a Bearer JWT),
-/// so only the wallet key and the SIWX pay network matter — `--payment-asset`
-/// and `--max-amount` are irrelevant and not required. The pay network defaults
-/// to the query `--network` (the common case where you pay on the chain you
-/// query), so a drawdown call needs only `--payment-wallet`.
+// Resolve the wallet and pay network for a drawdown session.
 fn resolve_drawdown_config(
     args: &CallArgs,
     query_network: &str,
@@ -500,7 +408,6 @@ fn resolve_drawdown_config(
         wallets_dir,
     )?;
 
-    // Pay network: explicit flag/config, else default to the query network.
     let payment_network = args
         .payment_network
         .clone()
@@ -522,8 +429,6 @@ fn resolve_drawdown_config(
             scheme: "x402".to_string(),
             key,
             pay_network: payment_network,
-            // asset + max_amount are unused by the Bearer drawdown call (nothing
-            // is signed per request); placeholders keep the SDK config total.
             asset: String::new(),
             max_amount: "0".to_string(),
             svm_rpc_url,
@@ -533,12 +438,7 @@ fn resolve_drawdown_config(
     ))
 }
 
-/// Resolves the minimal config a keyless gateway session needs (`x402 balance`,
-/// `x402 drip`). These verbs authenticate a SIWX session and present a Bearer
-/// JWT — they sign nothing per request — so only the wallet key and the SIWX
-/// pay network matter. `asset`/`max_amount` are supplied as placeholders (the
-/// same construction as [`resolve_drawdown_config`]); the CLI does not accept
-/// `--payment-asset`/`--max-amount` for these verbs.
+// Resolve the wallet and pay network for balance/drip.
 pub(super) fn resolve_session_params(
     params: &SessionParams<'_>,
     section: &PaymentSection,
@@ -589,8 +489,6 @@ pub(super) fn resolve_session_params(
             scheme: "x402".to_string(),
             key,
             pay_network: payment_network,
-            // asset + max_amount are unused by the Bearer session (nothing is
-            // signed per request); placeholders keep the SDK config total.
             asset: String::new(),
             max_amount: "0".to_string(),
             svm_rpc_url,
@@ -600,11 +498,7 @@ pub(super) fn resolve_session_params(
     ))
 }
 
-/// Resolves the shared payment parameter stack (key, spend ceiling, pay
-/// network, asset, SVM RPC URL) into an SDK [`PaymentConfig`] for `scheme`,
-/// applying the flags-then-`[rpc.payment]` precedence. Returns the config plus
-/// an optional key-file permissions warning. Does not touch the query network
-/// (that is call-specific).
+/// Resolve payment parameters before any network I/O.
 pub(super) fn resolve_payment_params(
     scheme: &str,
     params: &PaymentParams<'_>,
@@ -612,7 +506,6 @@ pub(super) fn resolve_payment_params(
     wallets_dir: Option<&Path>,
     base_url_override: Option<String>,
 ) -> Result<(PaymentConfig, Option<String>), CliError> {
-    // An inline raw key in config is never accepted — it belongs in a file.
     if section.key.is_some() {
         return Err(CliError::Arg(
             "[rpc.payment] does not accept an inline `key`; store the key in a \
@@ -701,12 +594,7 @@ pub(super) fn resolve_payment_params(
     ))
 }
 
-/// Resolves the raw private key from a file only — never an env var and never
-/// a raw key on the command line. Precedence: `--payment-key-file` (a path, or
-/// `-` for stdin) > `--payment-wallet` (a stored wallet name) > config
-/// `key_file` > config `wallet`. Returns the key and an optional permissions
-/// warning (group/world-readable key file). Error messages name the path or
-/// wallet, never the file contents.
+/// Resolve a payment key from a file or stored wallet.
 fn resolve_key(
     flag_file: Option<&Path>,
     flag_wallet: Option<&str>,
@@ -738,8 +626,7 @@ fn resolve_key(
     ))
 }
 
-/// Reads and validates a key file, plus an ssh-style permissions warning when
-/// the file is group- or world-readable.
+/// Read a key file and warn on loose Unix permissions.
 fn read_key_file(path: &Path) -> Result<(String, Option<String>), CliError> {
     let raw = std::fs::read_to_string(path).map_err(|e| {
         CliError::Arg(format!(
@@ -770,8 +657,7 @@ fn read_key_file(path: &Path) -> Result<(String, Option<String>), CliError> {
     Ok((key, warning))
 }
 
-/// Trims and rejects an empty key. `source` names where the key came from
-/// (a path or `stdin`) — never its contents.
+/// Trim and reject an empty key without exposing its contents.
 fn checked_key(raw: String, source: &str) -> Result<String, CliError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -782,18 +668,7 @@ fn checked_key(raw: String, source: &str) -> Result<String, CliError> {
     Ok(trimmed.to_string())
 }
 
-/// Maps a paid-call failure onto the paid exit-code contract: 2 = the gateway
-/// refused and nothing settled, 3 = outcome unknown, check the wallet.
-///
-/// - `Decode` on the paid lane always means the gateway's post-payment 2xx
-///   response could not be interpreted (the SDK classifies pre-payment parse
-///   failures as `PaymentUnsupported`/`Config`) — the payment may already
-///   have settled, so it gets the same never-blindly-retry treatment as
-///   `PaymentIndeterminate` (exit 3).
-/// - `PaymentRejected` with a 5xx status is a gateway/settlement failure
-///   after the signed payment was submitted — also unknown, exit 3. A 4xx
-///   rejection means the gateway refused the credential without settling it
-///   and passes through to exit 2.
+/// Map post-payment decode and 5xx failures to the unknown-outcome bucket.
 pub(super) fn map_paid_error(e: SdkError) -> CliError {
     match &e {
         SdkError::Decode { .. } => CliError::PaymentMaybeCharged(e),
@@ -841,9 +716,6 @@ mod tests {
         f
     }
 
-    /// `paid_args` with a valid key file attached, so a test can reach the
-    /// parameter-validation assertions without caring about the key source.
-    /// Returns the (args, key-file guard) pair — keep the guard alive.
     fn paid_args_with_key(x402: bool) -> (CallArgs, tempfile::NamedTempFile) {
         let f = key_file_with("0xkey\n");
         let mut args = paid_args(x402);
@@ -857,7 +729,7 @@ mod tests {
         let (cfg, network, _) =
             resolve_payment_config(&args, &empty_section(), None, None).unwrap();
         assert_eq!(cfg.scheme, "x402");
-        assert_eq!(cfg.key, "0xkey"); // trimmed
+        assert_eq!(cfg.key, "0xkey");
         assert_eq!(cfg.pay_network, "eip155:84532");
         assert_eq!(cfg.asset, "0xabc");
         assert_eq!(cfg.max_amount, "10000");
@@ -917,7 +789,7 @@ mod tests {
         let mut args = paid_args(true);
         args.payment_key_file = Some(flag.path().to_path_buf());
         let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
-        assert_eq!(cfg.key, "0xfromflag"); // and trimmed
+        assert_eq!(cfg.key, "0xfromflag");
     }
 
     #[test]
@@ -997,7 +869,6 @@ mod tests {
         assert!(msg.contains("--payment-key-file"), "got: {msg}");
         assert!(msg.contains("--payment-wallet"), "got: {msg}");
         assert!(msg.contains("key_file"), "got: {msg}");
-        // The env var is gone; the message must not resurrect it.
         assert!(!msg.contains("QN_PAYMENT_KEY"), "got: {msg}");
     }
 
@@ -1051,7 +922,7 @@ mod tests {
     fn flag_max_amount_beats_config() {
         let mut section = empty_section();
         section.max_amount = Some("999999".to_string());
-        let (args, _f) = paid_args_with_key(true); // flag says 10000
+        let (args, _f) = paid_args_with_key(true);
         let (cfg, _, _) = resolve_payment_config(&args, &section, None, None).unwrap();
         assert_eq!(cfg.max_amount, "10000");
     }
@@ -1149,8 +1020,6 @@ mod tests {
 
     #[test]
     fn rejected_5xx_maps_to_payment_maybe_charged() {
-        // A settlement failure after the signed payment was submitted: the
-        // outcome is unknown, so it must NOT land in the "refused" bucket.
         for status in [500, 502, 503] {
             let rejected = SdkError::PaymentRejected {
                 status,
