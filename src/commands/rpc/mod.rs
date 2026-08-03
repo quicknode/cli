@@ -56,11 +56,11 @@ pub enum RpcCmd {
     /// Make a JSON-RPC call.
     #[command(after_help = "Examples:\n  \
         qn rpc call eth_blockNumber\n  \
-        qn rpc call eth_getBalance '[\"0xabc...\", \"latest\"]'\n  \
+        qn rpc call eth_getBalance '[\"0xabc\", \"latest\"]'\n  \
         qn rpc call getSlot --network solana-mainnet\n  \
         qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc\n  \
         qn rpc call eth_call --params-file params.json\n  \
-        echo '[...]' | qn rpc call eth_call -\n  \
+        echo '[{\"to\":\"0xabc\",\"data\":\"0x\"},\"latest\"]' | qn rpc call eth_call -\n  \
         cat params.json | qn rpc call eth_call -f -\n\n\
         Paid (crypto micropayment, no API key;\n  \
         the payment chain is independent of the chain you query):\n  \
