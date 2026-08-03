@@ -259,7 +259,7 @@ fn emit_address(ctx: &Ctx, meta: &WalletMeta, key_path: &Path, with_qr: bool) {
         block.push('\n');
         block.push_str(
             "This wallet can be used to pay for RPC calls via micropayments (x402/MPP).\n\
-             Fund it on the network you'll pay from. Testnet funding:\n\n",
+             Fund it on the network you'll pay from.\n\nTestnet funding:\n\n",
         );
         block.push_str(&format!("{}\n\n", funding_hint(&meta.vm, &meta.name, c)));
         block.push_str("Then use it:\n\n");
@@ -336,7 +336,9 @@ fn funding_hint(vm: &str, name: &str, color: bool) -> String {
 /// Tempo testnet USDC) example, since the same secp256k1 key works for both.
 /// The EVM examples query a chain the wallet is not funded on — the payment
 /// chain is independent of the chain a call queries.
-/// `--max-amount 1000` selects the per-request offer (0.001 USDC).
+/// `--max-amount` is a spend ceiling in base units, not a tier selector: the
+/// CLI pays the cheapest offer at or under it. The Solana example uses 1000000
+/// (0.001 USDC at 6 decimals), which covers that gateway's per-request offer.
 fn example_call(vm: &str, name: &str) -> String {
     match vm {
         "svm" => format!(
@@ -346,7 +348,7 @@ fn example_call(vm: &str, name: &str) -> String {
              --payment-wallet {name} \\\n  \
              --payment-network solana-devnet \\\n  \
              --payment-asset USDC \\\n  \
-             --max-amount 1000"
+             --max-amount 1000000"
         ),
         _ => format!(
             "# x402 (pays Base Sepolia USDC):\n\

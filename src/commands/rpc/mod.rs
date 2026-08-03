@@ -69,22 +69,30 @@ pub enum RpcCmd {
         --payment-asset USDC --max-amount 10000\n  \
         qn rpc call eth_blockNumber --network tempo-testnet --mpp --receipt \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
-        --payment-asset USDC --max-amount 10000\n\n\
+        --payment-asset USDC --max-amount 10000\n  \
+        qn rpc call getSlot --network solana-devnet --x402 \\\n      \
+        --payment-wallet sol-payer --payment-network solana-devnet \\\n      \
+        --payment-asset USDC --max-amount 1000000\n  \
+        qn rpc call getSlot --network solana-devnet --x402 \\\n      \
+        --payment-wallet sol-payer --payment-network solana-devnet \\\n      \
+        --payment-asset USDC --max-amount 1000000 \\\n      \
+        --svm-rpc-url https://my-solana-endpoint.example\n\n\
         Prepaid x402 credits (drawdown — buy once, then spend on any supported network):\n  \
         qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
         qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n\n\
         MPP payment channel (open once, then pay per call with a voucher):\n  \
-        qn rpc mpp open --network tempo-testnet --deposit 1000000 \\\n      \
+        qn rpc mpp open --deposit 1000000 \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
         --payment-asset USDC --max-amount 1000000\n  \
-        qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \\\n      \
+        qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
         --payment-asset USDC --max-amount 1000000\n\n\
         Discover networks and payment options, and manage wallets:\n  \
         qn rpc x402 supported-networks    (mpp: qn rpc mpp supported-networks)\n  \
         qn rpc x402 supported-payments    (mpp: qn rpc mpp supported-payments)\n  \
-        qn wallet generate --vm evm --name payer")]
+        qn wallet generate --vm evm --name payer          (x402/EVM and MPP)\n  \
+        qn wallet generate --vm svm --name sol-payer      (x402/Solana)")]
     Call(Box<CallArgs>),
 
     /// List the endpoint's available network keys.
@@ -188,7 +196,8 @@ pub struct CallArgs {
 
     /// Spend ceiling per call, in integer base units of the asset (e.g.
     /// 10000 = 0.01 USDC). No built-in default: flag > `max_amount` under
-    /// [rpc.payment]. Offered payments above the ceiling are never signed.
+    /// [rpc.payment]. Offered payments above the ceiling are never signed;
+    /// among those at or under it, the cheapest is paid.
     #[arg(
         long,
         value_name = "BASE_UNITS",

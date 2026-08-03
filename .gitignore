@@ -18,3 +18,4 @@ docs/agents/
 
 # Local Claude notes (gitignored per-repo configuration)
 CLAUDE.local.md
+IMPLEMENTATION_PLAN.md

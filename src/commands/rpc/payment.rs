@@ -318,20 +318,25 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
     )?;
     let params = super::parse_params(args.params.as_deref(), args.params_file.as_deref())?;
 
+    // The channel is scoped by what funds it (pay network + asset), not by the
+    // chain being queried, so one open channel pays for calls to any network.
+    let pay_scope = super::mpp::PayScope::from_config(&payment);
     let ctx = Ctx::from_global_keyless_payment(global.clone(), payment)?;
     if let Some(w) = key_file_warning {
         ctx.out.warn(&w);
     }
 
     let address = ctx.sdk.rpc.payment_address()?;
+    let scope = pay_scope.with_address(address);
     let channels_path = config::channels_cache_path(global.resolve_config_path().as_deref());
     let mut channel = channels_path
         .as_deref()
-        .and_then(|p| config::load_channel(p, &address, &network))
+        .and_then(|p| config::load_channel(p, &scope))
         .ok_or_else(|| {
             CliError::Arg(format!(
-                "no open MPP channel for this wallet on {network}. Open one with \
-                 'qn rpc mpp open --network {network} --deposit <BASE_UNITS>'."
+                "no open MPP channel for this wallet paying {}. Open one with \
+                 'qn rpc mpp open --deposit <BASE_UNITS>'.",
+                pay_scope.describe()
             ))
         })?;
 
@@ -341,7 +346,7 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
     if new_cumulative > channel.deposit {
         return Err(CliError::Arg(format!(
             "MPP channel deposit exhausted (deposit {}, would need {}). Top up \
-             with 'qn rpc mpp top-up --network {network} --deposit <BASE_UNITS>'.",
+             with 'qn rpc mpp top-up --deposit <BASE_UNITS>'.",
             channel.deposit, new_cumulative
         )));
     }
@@ -356,7 +361,7 @@ pub(super) async fn run_session_call(args: CallArgs, global: GlobalArgs) -> Resu
     // The voucher was accepted: advance and persist the local high-water mark.
     channel.cumulative_spent = new_cumulative;
     if let Some(path) = &channels_path {
-        let _ = config::save_channel(path, &address, &network, &channel);
+        let _ = config::save_channel(path, &scope, &channel);
     }
 
     super::emit_result(&ctx, &result)

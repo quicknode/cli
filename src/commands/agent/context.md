@@ -175,7 +175,12 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
   gateway credits instead of paying per request, and `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
-  response). `buy-credits` signs a payment, so it takes the full paid-lane
+  response). The gateway currently offers its credit block under the
+  `GatewayWalletBatched` (Circle Gateway batched-transfer) scheme, which this
+  version cannot sign: `buy-credits` refuses with exit 2 and signs nothing
+  rather than settling a per-request offer for a much larger amount. Pay per
+  request with `--x402` until that scheme is supported.
+  `buy-credits` signs a payment, so it takes the full paid-lane
   stack (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
   `--max-amount`, `--svm-rpc-url`); `balance` and `drip` only present a Bearer
   session JWT and sign nothing, so they take just the wallet +
@@ -200,15 +205,23 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **MPP session**: `qn rpc mpp {open, top-up, close, status}` manages an
   on-chain escrow payment channel (Tempo), and `qn rpc call --mpp-session` pays
   from it with a cumulative EIP-712 voucher (no on-chain tx per call). All take
-  the same payment param stack (a Tempo wallet) plus `--network` (the query
-  chain the channel lives on). `open --deposit <BASE_UNITS>` and
+  the same payment param stack (a Tempo wallet). The four lifecycle verbs take
+  no `--network`: they act on the channel, which `--payment-network` and
+  `--payment-asset` identify on their own. Only `--mpp-session` names
+  `--network`, because only it queries a chain. `open --deposit <BASE_UNITS>` and
   `top-up --deposit <BASE_UNITS>` move real funds on-chain (gated Mild); `close`
   cooperatively settles + refunds (gated Mild; its prompt warns further
-  `--mpp-session` calls fail until re-open); `status` shows the gateway's view
-  and re-syncs the accepted spend into the local record. Channel state is cached
-  under `<config-dir>/qn/channels.toml` (0600, keyed by wallet address +
-  network); every channel verb needs that record — a lost one means opening a
-  new channel. `--mpp-session` requires an open channel, is mutually exclusive with
+  `--mpp-session` calls fail until re-open); `status` shows the deposit and
+  remaining balance from the local record with no network call, and `status
+  --verify` asks the gateway instead and re-syncs the accepted spend. `--verify`
+  spends one request unit from the deposit: the gateway prices every session
+  POST as a chargeable request, so there is no free way to ask it. Channel state is cached
+  under `<config-dir>/qn/channels.toml` (0600, keyed by wallet address + pay
+  network + pay asset); every channel verb needs that record — a lost one means
+  opening a new channel. The key is the pay scope: a channel funds paid calls to
+  any supported `--network`, so you can pay on a testnet to query a mainnet.
+  Two pay assets on one pay chain are separate
+  channels. `--mpp-session` requires an open channel, is mutually exclusive with
   `--x402`/`--mpp`/`--x402-drawdown`/`--endpoint-url`, and points at
   `qn rpc mpp top-up` when the channel deposit is exhausted.
 - `wallet` — the local store of payment wallets for the paid RPC lane; no API
@@ -318,7 +331,14 @@ qn rpc call eth_blockNumber --network ethereum-mainnet --mpp --receipt \
 qn wallet generate --vm svm --name sol-payer
 qn rpc call getSlot --network solana-devnet --x402 \
     --payment-wallet sol-payer --payment-network solana-devnet \
-    --payment-asset USDC --max-amount 1000
+    --payment-asset USDC --max-amount 1000000
+
+# Solana payment builds read the mint and a recent blockhash from a Solana RPC.
+# The public default rate-limits; point --svm-rpc-url at your own endpoint:
+qn rpc call getSlot --network solana-devnet --x402 \
+    --payment-wallet sol-payer --payment-network solana-devnet \
+    --payment-asset USDC --max-amount 1000000 \
+    --svm-rpc-url https://my-solana-endpoint.example
 
 # Store the parameters in config to keep calls short (never the raw key):
 cat >> ~/.config/qn/config.toml <<'EOF'

@@ -6,13 +6,22 @@
 //! - `top-up`  — add deposit to the open channel. Gated Mild.
 //! - `close`   — cooperatively close (settle on-chain + refund). Gated Mild;
 //!   the prompt warns that further `--mpp-session` calls fail until re-open.
-//! - `status`  — the gateway's view of the channel (re-syncs the accepted
-//!   spend high-water mark into the local record).
+//! - `status`  — the channel's deposit and remaining balance from the local
+//!   record. `--verify` asks the gateway instead and re-syncs the accepted
+//!   spend high-water mark; that costs one request unit, because the gateway
+//!   prices every session POST as a chargeable request.
 //!
 //! Channel state (channelId, deposit, cumulative spend) is persisted under the
-//! config dir (`channels.toml`, 0600, keyed by wallet address + network) and
-//! re-seeded next run. Every lifecycle verb ends with a ready-to-run next
+//! config dir (`channels.toml`, 0600, keyed by wallet address + pay network +
+//! pay asset) and re-seeded next run. The key is the pay scope, not the queried
+//! network: the deposit lives on the pay chain, so one open channel funds paid
+//! calls to every supported query network. Every lifecycle verb ends with a ready-to-run next
 //! command. Paid verbs are single-attempt.
+//!
+//! None of the four verbs takes `--network`. They act on the channel, which the
+//! pay network and asset identify on their own; the gateway path segment they
+//! route on is fixed in the SDK. Only `rpc call --mpp-session` names a query
+//! network, because only it queries a chain.
 
 use clap::{Args as ClapArgs, Subcommand};
 use quicknode_sdk::ChannelState;
@@ -27,21 +36,21 @@ use super::payment::{resolve_payment_params, PaymentParams};
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 #[command(after_help = "Examples:\n  \
-    qn rpc mpp open --network tempo-testnet --deposit 1000000 \\\n      \
+    qn rpc mpp open --deposit 1000000 \\\n      \
     --payment-wallet payer --payment-network tempo-testnet \\\n      \
-    --payment-asset USDC --max-amount 1000000\n  \
-    qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \\\n      \
+    --payment-asset pathUSD --max-amount 1000000\n  \
+    qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session \\\n      \
     --payment-wallet payer --payment-network tempo-testnet \\\n      \
-    --payment-asset USDC --max-amount 1000000\n  \
-    qn rpc mpp status --network tempo-testnet \\\n      \
+    --payment-asset pathUSD --max-amount 1000000\n  \
+    qn rpc mpp status \\\n      \
     --payment-wallet payer --payment-network tempo-testnet \\\n      \
-    --payment-asset USDC --max-amount 1000000\n  \
-    qn rpc mpp top-up --network tempo-testnet --deposit 500000 \\\n      \
+    --payment-asset pathUSD --max-amount 1000000\n  \
+    qn rpc mpp top-up --deposit 500000 \\\n      \
     --payment-wallet payer --payment-network tempo-testnet \\\n      \
-    --payment-asset USDC --max-amount 500000\n  \
-    qn rpc mpp close --network tempo-testnet \\\n      \
+    --payment-asset pathUSD --max-amount 500000\n  \
+    qn rpc mpp close \\\n      \
     --payment-wallet payer --payment-network tempo-testnet \\\n      \
-    --payment-asset USDC --max-amount 1000000")]
+    --payment-asset pathUSD --max-amount 1000000")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: MppCmd,
@@ -52,7 +61,7 @@ pub enum MppCmd {
     /// Open a payment channel by depositing into the escrow. Gated: names the
     /// deposit before signing.
     #[command(after_help = "Examples:\n  \
-        qn rpc mpp open --network tempo-testnet --deposit 1000000 \\\n      \
+        qn rpc mpp open --deposit 1000000 \\\n      \
         --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC \\\n      \
         --max-amount 1000000")]
     Open(OpenArgs),
@@ -60,25 +69,29 @@ pub enum MppCmd {
     /// Add deposit to the open channel. Gated.
     #[command(name = "top-up")]
     #[command(after_help = "Examples:\n  \
-        qn rpc mpp top-up --network tempo-testnet --deposit 500000 \\\n      \
+        qn rpc mpp top-up --deposit 500000 \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
-        --payment-asset USDC --max-amount 500000")]
+        --payment-asset pathUSD --max-amount 500000")]
     TopUp(TopUpArgs),
 
     /// Cooperatively close the channel (settle on-chain + refund unused
     /// deposit). Gated.
     #[command(after_help = "Examples:\n  \
-        qn rpc mpp close --network tempo-testnet \\\n      \
+        qn rpc mpp close \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
-        --payment-asset USDC --max-amount 1000000")]
+        --payment-asset pathUSD --max-amount 1000000")]
     Close(ChannelArgs),
 
-    /// Show the gateway's view of the channel (re-syncs the accepted spend).
+    /// Show the channel's deposit and remaining balance from the local record.
+    /// Pass --verify to ask the gateway instead (spends one request unit).
     #[command(after_help = "Examples:\n  \
-        qn rpc mpp status --network tempo-testnet \\\n      \
+        qn rpc mpp status \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
-        --payment-asset USDC --max-amount 1000000")]
-    Status(ChannelArgs),
+        --payment-asset pathUSD --max-amount 1000000\n  \
+        qn rpc mpp status --verify \\\n      \
+        --payment-wallet payer --payment-network tempo-testnet \\\n      \
+        --payment-asset pathUSD --max-amount 1000000")]
+    Status(StatusArgs),
 
     /// List the networks you can make MPP-paid RPC calls to. Each slug is a
     /// valid --network for a paid call. No API key required.
@@ -98,14 +111,12 @@ pub enum MppCmd {
     SupportedPayments,
 }
 
-/// The payment parameter stack + query network shared by the MPP verbs.
+/// The payment parameter stack shared by the MPP verbs. There is no query
+/// network here: the channel is scoped by --payment-network and
+/// --payment-asset, and one open channel funds paid calls to every supported
+/// network, so the lifecycle verbs never name a chain to query.
 #[derive(Debug, ClapArgs)]
 pub struct PaymentArgs {
-    /// The query chain, as the payment gateway's path slug (e.g.
-    /// `tempo-testnet`). The channel lives on this network.
-    #[arg(long, value_name = "NETWORK")]
-    pub network: String,
-
     /// File containing the raw Tempo payment key (hex); `-` reads stdin.
     /// Precedence: this > --payment-wallet > `key_file` > `wallet` in config.
     #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
@@ -176,12 +187,25 @@ pub struct ChannelArgs {
     pub payment: PaymentArgs,
 }
 
+/// `status` reads the local channel record by default. `--verify` asks the
+/// gateway instead, which costs one request unit (see `run_status`).
+#[derive(Debug, ClapArgs)]
+pub struct StatusArgs {
+    #[command(flatten)]
+    pub payment: PaymentArgs,
+
+    /// Ask the gateway for its view instead of reading the local record. Spends
+    /// one request unit from the channel deposit.
+    #[arg(long)]
+    pub verify: bool,
+}
+
 pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
     match args.cmd {
         MppCmd::Open(a) => run_open(a, global).await,
         MppCmd::TopUp(a) => run_top_up(a, global).await,
         MppCmd::Close(a) => run_close(a.payment, global).await,
-        MppCmd::Status(a) => run_status(a.payment, global).await,
+        MppCmd::Status(a) => run_status(a, global).await,
         MppCmd::SupportedNetworks => {
             super::supported_networks::run_networks(super::supported_networks::Scheme::Mpp, global)
                 .await
@@ -195,7 +219,12 @@ pub async fn run(args: Args, global: GlobalArgs) -> Result<(), CliError> {
 
 // Shared setup: resolve the MPP payment config (scheme "mpp"), build the
 // keyless-payment Ctx, and surface any key-file warning. No network I/O.
-fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, String), CliError> {
+//
+// Returns the resolved pay scope: what the channel record is keyed on. The
+// lifecycle verbs take no query network, so there is nothing else to carry —
+// conflating the two is what once made a channel opened for one query network
+// invisible to a call against another.
+fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PayScope), CliError> {
     let section = load_payment_section(&global)?;
     let wallets_dir = config::wallets_dir(global.resolve_config_path().as_deref());
     let (payment, key_file_warning) = resolve_payment_params(
@@ -205,12 +234,47 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, String), CliErr
         wallets_dir.as_deref(),
         global.base_url.clone(),
     )?;
-    let network = args.network.clone();
+    // Capture the resolved pay network/asset before `payment` moves into the Ctx.
+    let scope = PayScope::from_config(&payment);
     let ctx = Ctx::from_global_keyless_payment(global, payment)?;
     if let Some(w) = key_file_warning {
         ctx.out.warn(&w);
     }
-    Ok((ctx, network))
+    Ok((ctx, scope))
+}
+
+// The resolved pay network + asset, carried from payment resolution to the point
+// where the channel record is keyed. The payer address is added later (it is
+// derived from the SDK's signer, which only exists once the Ctx is built).
+pub(super) struct PayScope {
+    pay_network: String,
+    pay_asset: String,
+}
+
+impl PayScope {
+    pub(super) fn from_config(payment: &quicknode_sdk::PaymentConfig) -> Self {
+        PayScope {
+            pay_network: payment.pay_network.clone(),
+            pay_asset: payment.asset.clone(),
+        }
+    }
+
+    // Completes the cache scope with the payer address. `None` when the address
+    // cannot be derived, which is also the only case where there is nothing to
+    // key a record by.
+    pub(super) fn with_address(&self, address: String) -> config::ChannelScope {
+        config::ChannelScope {
+            address,
+            pay_network: self.pay_network.clone(),
+            pay_asset: self.pay_asset.clone(),
+        }
+    }
+
+    // Human-readable form for error messages: the asset and chain the channel is
+    // funded on.
+    pub(super) fn describe(&self) -> String {
+        format!("{} on {}", self.pay_asset, self.pay_network)
+    }
 }
 
 fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError> {
@@ -266,31 +330,35 @@ fn note_next(ctx: &Ctx, base: &str, payment: &PaymentArgs) {
 
 async fn run_open(args: OpenArgs, global: GlobalArgs) -> Result<(), CliError> {
     let deposit = parse_base_units(&args.deposit, "deposit")?;
-    let (ctx, network) = setup(&args.payment, global.clone())?;
+    let (ctx, scope) = setup(&args.payment, global.clone())?;
 
     crate::confirm::confirm_mild(
         &ctx,
         &format!(
-            "Open an MPP channel with a {deposit} base-unit deposit on {network}? \
-             This moves real funds on-chain."
+            "Open an MPP channel with a {deposit} base-unit deposit of {}? \
+             This moves real funds on-chain.",
+            scope.describe()
         ),
     )?;
 
     let channel = ctx
         .sdk
         .rpc
-        .mpp_open(&network, deposit)
+        .mpp_open(deposit)
         .await
         .map_err(super::payment::map_paid_error)?;
-    persist_channel(&ctx, &global, &network, &channel);
+    persist_channel(&ctx, &global, &scope, &channel);
 
     ctx.out.note(&format!(
         "✓ Opened channel {} (deposit: {})",
         channel.channel_id, channel.deposit
     ));
+    // Suggest a mainnet query to show what the channel actually buys: the
+    // deposit is denominated on the pay chain, and it funds calls to any
+    // supported network, not just the one this channel was opened against.
     note_next(
         &ctx,
-        &format!("qn rpc call eth_blockNumber --network {network} --mpp-session"),
+        "qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session",
         &args.payment,
     );
     emit_channel(&ctx, &channel)
@@ -298,105 +366,136 @@ async fn run_open(args: OpenArgs, global: GlobalArgs) -> Result<(), CliError> {
 
 async fn run_top_up(args: TopUpArgs, global: GlobalArgs) -> Result<(), CliError> {
     let additional = parse_base_units(&args.deposit, "deposit")?;
-    let (ctx, network) = setup(&args.payment, global.clone())?;
-    let channel = require_channel(&ctx, &global, &network)?;
+    let (ctx, scope) = setup(&args.payment, global.clone())?;
+    let channel = require_channel(&ctx, &global, &scope)?;
 
     crate::confirm::confirm_mild(
         &ctx,
         &format!(
-            "Top up channel {} with {additional} more base units on {network}? \
+            "Top up channel {} with {additional} more base units of {}? \
              This moves real funds on-chain.",
-            channel.channel_id
+            channel.channel_id,
+            scope.describe()
         ),
     )?;
 
     let updated = ctx
         .sdk
         .rpc
-        .mpp_top_up(&network, &channel, additional)
+        .mpp_top_up(&channel, additional)
         .await
         .map_err(super::payment::map_paid_error)?;
-    persist_channel(&ctx, &global, &network, &updated);
+    persist_channel(&ctx, &global, &scope, &updated);
 
     ctx.out.note(&format!(
         "✓ Topped up channel {} (deposit: {})",
         updated.channel_id, updated.deposit
     ));
-    note_next(
-        &ctx,
-        &format!("qn rpc mpp status --network {network}"),
-        &args.payment,
-    );
+    note_next(&ctx, "qn rpc mpp status", &args.payment);
     emit_channel(&ctx, &updated)
 }
 
 async fn run_close(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let (ctx, network) = setup(&args, global.clone())?;
-    let channel = require_channel(&ctx, &global, &network)?;
+    let (ctx, scope) = setup(&args, global.clone())?;
+    let channel = require_channel(&ctx, &global, &scope)?;
 
     crate::confirm::confirm_mild(
         &ctx,
         &format!(
-            "Close channel {} on {network}? It settles on-chain and refunds the \
+            "Close channel {} ({})? It settles on-chain and refunds the \
              unused deposit; further --mpp-session calls fail until you open a \
              new channel.",
-            channel.channel_id
+            channel.channel_id,
+            scope.describe()
         ),
     )?;
 
     ctx.sdk
         .rpc
-        .mpp_close(&network, &channel)
+        .mpp_close(&channel)
         .await
         .map_err(super::payment::map_paid_error)?;
     // The channel is settled: drop the local record so a stale one can't be
     // reused. Best-effort — a failed delete must not fail the completed close.
     if let Some(address) = wallet_address(&ctx) {
         if let Some(path) = config::channels_cache_path(global.resolve_config_path().as_deref()) {
-            let _ = config::delete_channel(&path, &address, &network);
+            let _ = config::delete_channel(&path, &scope.with_address(address));
         }
     }
 
     ctx.out
         .note(&format!("✓ Closed channel {}", channel.channel_id));
-    note_next(
-        &ctx,
-        &format!("qn rpc mpp open --network {network} --deposit <BASE_UNITS>"),
-        &args,
-    );
+    note_next(&ctx, "qn rpc mpp open --deposit <BASE_UNITS>", &args);
     Ok(())
 }
 
-async fn run_status(args: PaymentArgs, global: GlobalArgs) -> Result<(), CliError> {
-    let (ctx, network) = setup(&args, global.clone())?;
-    let channel = require_channel(&ctx, &global, &network)?;
+// Reads the local channel record. `--verify` instead asks the gateway, which
+// costs one request unit: the gateway prices every session POST as a chargeable
+// request and computes the available balance from the NEW spend a voucher
+// authorizes, so there is no free way to ask it. The local record is exact
+// unless a call settled without the CLI recording it (an interrupted call), so
+// the free path is the right default and --verify is the reconciliation tool.
+async fn run_status(args: StatusArgs, global: GlobalArgs) -> Result<(), CliError> {
+    let (ctx, scope) = setup(&args.payment, global.clone())?;
+    let channel = require_channel(&ctx, &global, &scope)?;
 
-    let status = ctx.sdk.rpc.mpp_status(&network, &channel).await?;
+    if !args.verify {
+        return emit_status(&ctx, &channel, channel.cumulative_spent, None);
+    }
 
-    // Re-seed the local spend high-water mark from the gateway (it is
-    // authoritative for what it has accepted). The deposit is tracked locally:
-    // the gateway exposes no read-only channel endpoint.
+    let status = ctx.sdk.rpc.mpp_status(&channel).await?;
+
+    // The probe voucher itself spends one unit, and the gateway is
+    // authoritative for what it has accepted. Persist before rendering so an
+    // interrupted render cannot lose the advance and desync the next voucher.
     let mut synced = channel.clone();
-    synced.cumulative_spent = synced.cumulative_spent.max(status.accepted_cumulative);
-    persist_channel(&ctx, &global, &network, &synced);
+    synced.cumulative_spent = synced
+        .cumulative_spent
+        .saturating_add(synced.per_call)
+        .max(status.accepted_cumulative);
+    persist_channel(&ctx, &global, &scope, &synced);
 
-    let deposit = synced.deposit;
+    emit_status(
+        &ctx,
+        &synced,
+        status.accepted_cumulative,
+        Some(status.spent),
+    )
+}
+
+// Render a channel view. `spent` is present only when the gateway was asked.
+fn emit_status(
+    ctx: &Ctx,
+    channel: &ChannelState,
+    accepted: u128,
+    spent: Option<u128>,
+) -> Result<(), CliError> {
+    let deposit = channel.deposit;
+    let remaining = deposit.saturating_sub(accepted);
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
-        let v = serde_json::json!({
-            "channel_id": status.channel_id,
+        let mut v = serde_json::json!({
+            "channel_id": channel.channel_id,
             "deposit": deposit,
-            "accepted_cumulative": status.accepted_cumulative,
-            "spent": status.spent,
-            "remaining": deposit.saturating_sub(status.accepted_cumulative),
+            "accepted_cumulative": accepted,
+            "remaining": remaining,
+            "verified": spent.is_some(),
         });
-        return super::emit_result(&ctx, &v);
+        if let Some(spent) = spent {
+            v["spent"] = serde_json::json!(spent);
+        }
+        return super::emit_result(ctx, &v);
     }
     ctx.out.note(&format!(
-        "channel {}: deposit {}, accepted {}, remaining {}",
-        status.channel_id,
+        "channel {}: deposit {}, accepted {}, remaining {}{}",
+        channel.channel_id,
         deposit,
-        status.accepted_cumulative,
-        deposit.saturating_sub(status.accepted_cumulative),
+        accepted,
+        remaining,
+        if spent.is_some() {
+            ""
+        } else {
+            " (local record; --verify asks the gateway)"
+        },
     ));
     Ok(())
 }
@@ -406,33 +505,34 @@ fn wallet_address(ctx: &Ctx) -> Option<String> {
     ctx.sdk.rpc.payment_address().ok()
 }
 
-// Persist channel state, keyed by wallet address + network. Best-effort.
-fn persist_channel(ctx: &Ctx, global: &GlobalArgs, network: &str, channel: &ChannelState) {
+// Persist channel state, keyed by the pay scope. Best-effort.
+fn persist_channel(ctx: &Ctx, global: &GlobalArgs, scope: &PayScope, channel: &ChannelState) {
     if let Some(address) = wallet_address(ctx) {
         if let Some(path) = config::channels_cache_path(global.resolve_config_path().as_deref()) {
-            let _ = config::save_channel(&path, &address, network, channel);
+            let _ = config::save_channel(&path, &scope.with_address(address), channel);
         }
     }
 }
 
-// Load the open channel for this wallet+network, or an actionable error
-// pointing at `mpp open`. Every channel verb (including `status`) needs the
-// local record; a lost one means opening a new channel.
+// Load the open channel for this pay scope, or an actionable error pointing at
+// `mpp open`. Every channel verb (including `status`) needs the local record; a
+// lost one means opening a new channel.
 fn require_channel(
     ctx: &Ctx,
     global: &GlobalArgs,
-    network: &str,
+    scope: &PayScope,
 ) -> Result<ChannelState, CliError> {
     let address = wallet_address(ctx)
         .ok_or_else(|| CliError::Arg("could not derive the payment wallet address".to_string()))?;
     let path = config::channels_cache_path(global.resolve_config_path().as_deref());
     let channel = path
         .as_deref()
-        .and_then(|p| config::load_channel(p, &address, network));
+        .and_then(|p| config::load_channel(p, &scope.with_address(address)));
     channel.ok_or_else(|| {
         CliError::Arg(format!(
-            "no open MPP channel for this wallet on {network}. Open one with \
-             'qn rpc mpp open --network {network} --deposit <BASE_UNITS>'."
+            "no open MPP channel for this wallet paying {}. Open one with \
+             'qn rpc mpp open --deposit <BASE_UNITS>'.",
+            scope.describe()
         ))
     })
 }

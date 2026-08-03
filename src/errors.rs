@@ -98,6 +98,24 @@ pub fn exit_code_for(err: &CliError) -> i32 {
     }
 }
 
+// Map a payment-gateway 402 problem document (RFC 9457) to an actionable
+// headline. Returns None for problem types with no specific advice, so the
+// caller falls back to the generic HTTP rendering.
+fn payment_problem_headline(body: &str) -> Option<String> {
+    let problem: serde_json::Value = serde_json::from_str(body).ok()?;
+    let kind = problem.get("type").and_then(|v| v.as_str())?;
+    let slug = kind.rsplit('/').next().unwrap_or(kind);
+    match slug {
+        "insufficient-balance" => Some(
+            "the payment channel has too little deposit left for this request. \
+             Add funds with 'qn rpc mpp top-up --deposit <BASE_UNITS>', or close and \
+             reopen it with 'qn rpc mpp close' then 'qn rpc mpp open'."
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// Renders the error to a human-friendly message using the real process argv
 /// for did-you-mean suggestions. Use [`render_with_argv`] from tests where the
 /// simulated argv differs from the process argv.
@@ -111,12 +129,37 @@ pub fn render(err: &CliError, verbose: bool) -> String {
 /// Like [`render`] but uses the supplied argv values for did-you-mean lookup.
 pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> String {
     match err {
+        // The gateway offered the option that was asked for, but it uses a
+        // signing scheme this version does not implement. That is not a
+        // misconfiguration, so it gets its own message rather than the
+        // "check your flags" one.
+        CliError::Sdk(SdkError::PaymentUnsupported { offered })
+            if offered.contains("cannot sign") =>
+        {
+            format!("Error: {offered} Nothing was charged.")
+        }
         CliError::Sdk(SdkError::PaymentUnsupported { offered }) => {
-            format!(
-                "Error: no offered payment option matched your configuration \
-                 (check --payment-network, --payment-asset, and --max-amount). Nothing was charged.\n\
-                 Gateway offered: {offered}"
-            )
+            // The SDK names the specific lever when it can identify one (e.g.
+            // every offer sits above the ceiling, so max_amount is the fix).
+            // Don't bury that under the generic "check your flags" advice.
+            if offered.contains("raise max_amount") {
+                // The full menu is long and mostly irrelevant once the lever is
+                // named; keep it for --verbose.
+                let body = match offered.split_once(" Full menu: ") {
+                    Some((lever, _)) if !verbose => lever,
+                    _ => offered.as_str(),
+                };
+                format!(
+                    "Error: {}. Nothing was charged.",
+                    body.trim_end().trim_end_matches('.')
+                )
+            } else {
+                format!(
+                    "Error: no offered payment option matched your configuration \
+                     (check --payment-network, --payment-asset, and --max-amount). Nothing was charged.\n\
+                     Gateway offered: {offered}"
+                )
+            }
         }
         CliError::Sdk(SdkError::PaymentRejected { status, body }) => {
             // Only 4xx rejections reach this arm from the paid lane (5xx are
@@ -226,6 +269,20 @@ fn payment_rejection_reason(body: &str) -> Option<String> {
 }
 
 fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> String {
+    // A 402 from the payment gateway is an RFC 9457 problem document whose
+    // `type` names the refusal. Map the ones a user can act on; anything else
+    // falls through to the generic headline.
+    if code == 402 {
+        if let Some(headline) = payment_problem_headline(body) {
+            let mut out = format!("Error: {headline}");
+            if verbose && !body.is_empty() {
+                out.push('\n');
+                out.push_str(body);
+            }
+            return out;
+        }
+    }
+
     let headline = match code {
         400 | 422 => "invalid request.".to_string(),
         401 | 403 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
@@ -600,6 +657,55 @@ mod tests {
         assert!(msg.contains("Nothing was charged"), "got: {msg}");
         assert!(msg.contains("999999"), "got: {msg}");
         assert!(msg.contains("--max-amount"), "got: {msg}");
+    }
+
+    // When the SDK identifies max_amount as the lever, that sentence leads and
+    // the (long, mostly irrelevant) menu dump is held back for --verbose.
+    #[test]
+    fn renders_over_ceiling_lever_first_and_hides_the_menu() {
+        let err = CliError::Sdk(SdkError::PaymentUnsupported {
+            offered: "every offer for solana:abc/mint1 is above max_amount 100; the cheapest \
+                      is 1000 base units — raise max_amount to at least that. Full menu: \
+                      [a, b, c]"
+                .to_string(),
+        });
+
+        let terse = render(&err, false);
+        assert!(terse.contains("raise max_amount"), "got: {terse}");
+        assert!(terse.contains("Nothing was charged"), "got: {terse}");
+        assert!(
+            !terse.contains("Full menu"),
+            "menu should be hidden: {terse}"
+        );
+        assert!(!terse.contains(".."), "no doubled period: {terse}");
+
+        let verbose = render(&err, true);
+        assert!(verbose.contains("Full menu"), "got: {verbose}");
+    }
+
+    #[test]
+    fn renders_session_insufficient_balance_with_a_top_up_hint() {
+        // The gateway's RFC 9457 problem document for an exhausted channel. The
+        // raw JSON must not reach the user; the message names the fix.
+        let err = CliError::Sdk(SdkError::Api {
+            status: reqwest::StatusCode::PAYMENT_REQUIRED,
+            body: r#"{"type":"https://paymentauth.org/problems/session/insufficient-balance","title":"Insufficient Balance","status":402,"detail":"Insufficient balance: requested 10, available 0."}"#
+                .to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("qn rpc mpp top-up"), "got: {msg}");
+        assert!(!msg.contains("API returned HTTP 402"), "got: {msg}");
+        assert!(!msg.contains("paymentauth.org"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_unknown_402_problem_with_the_generic_headline() {
+        let err = CliError::Sdk(SdkError::Api {
+            status: reqwest::StatusCode::PAYMENT_REQUIRED,
+            body: r#"{"type":"https://paymentauth.org/problems/payment-required"}"#.to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("402"), "got: {msg}");
     }
 
     #[test]

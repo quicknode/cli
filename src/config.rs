@@ -558,9 +558,37 @@ pub fn save_gateway_session(
 /// through [`ChannelEntry`] to the SDK's `u128`-typed `ChannelState`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ChannelCacheFile {
-    /// "<payer-address>:<network>" -> the open channel's state.
+    /// "<payer-address>:<pay-network>:<pay-asset>" -> the open channel's state.
     #[serde(default)]
     pub channels: HashMap<String, ChannelEntry>,
+}
+
+/// What scopes an open channel: the payer, the chain the deposit settles on, and
+/// the token it is denominated in. Deliberately *not* the queried network — the
+/// channel is a funding relationship with the gateway on the pay chain, so one
+/// channel funds paid calls to every supported query network.
+#[derive(Debug, Clone)]
+pub struct ChannelScope {
+    /// Payer address, as derived offline from the payment key.
+    pub address: String,
+    /// Resolved CAIP-2 pay network (e.g. `eip155:42431`).
+    pub pay_network: String,
+    /// Resolved pay asset — a token address, not a symbol.
+    pub pay_asset: String,
+}
+
+impl ChannelScope {
+    /// Cache key. Both scope values arrive already normalized (CAIP-2 network,
+    /// resolved token address), so a caller who typed a symbol and one who typed
+    /// the contract address land on the same record.
+    fn key(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.address.to_lowercase(),
+            self.pay_network,
+            self.pay_asset.to_lowercase()
+        )
+    }
 }
 
 /// TOML-safe channel record (u128 amounts as decimal strings).
@@ -618,40 +646,30 @@ pub fn channels_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-fn channel_key(address: &str, network: &str) -> String {
-    format!("{}:{}", address.to_lowercase(), network)
-}
-
-/// Loads the open channel for `(address, network)`, if any.
-pub fn load_channel(
-    path: &Path,
-    address: &str,
-    network: &str,
-) -> Option<quicknode_sdk::ChannelState> {
+/// Loads the open channel for `scope`, if any.
+pub fn load_channel(path: &Path, scope: &ChannelScope) -> Option<quicknode_sdk::ChannelState> {
     let text = fs::read_to_string(path).ok()?;
     let cache: ChannelCacheFile = toml::from_str(&text).ok()?;
     cache
         .channels
-        .get(&channel_key(address, network))
+        .get(&scope.key())
         .and_then(ChannelEntry::to_state)
 }
 
-/// Stores `channel` under `(address, network)`, preserving other entries.
-/// Written atomically at 0600.
+/// Stores `channel` under `scope`, preserving other entries. Written atomically
+/// at 0600.
 pub fn save_channel(
     path: &Path,
-    address: &str,
-    network: &str,
+    scope: &ChannelScope,
     channel: &quicknode_sdk::ChannelState,
 ) -> Result<(), CliError> {
     let mut cache: ChannelCacheFile = fs::read_to_string(path)
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
         .unwrap_or_default();
-    cache.channels.insert(
-        channel_key(address, network),
-        ChannelEntry::from_state(channel),
-    );
+    cache
+        .channels
+        .insert(scope.key(), ChannelEntry::from_state(channel));
     let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other(e),
@@ -659,9 +677,9 @@ pub fn save_channel(
     write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
 }
 
-/// Drops the channel entry for `(address, network)` (e.g. after a close),
-/// leaving other entries intact. No-op if absent.
-pub fn delete_channel(path: &Path, address: &str, network: &str) -> Result<(), CliError> {
+/// Drops the channel entry for `scope` (e.g. after a close), leaving other
+/// entries intact. No-op if absent.
+pub fn delete_channel(path: &Path, scope: &ChannelScope) -> Result<(), CliError> {
     let mut cache: ChannelCacheFile = match fs::read_to_string(path)
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
@@ -669,11 +687,7 @@ pub fn delete_channel(path: &Path, address: &str, network: &str) -> Result<(), C
         Some(c) => c,
         None => return Ok(()),
     };
-    if cache
-        .channels
-        .remove(&channel_key(address, network))
-        .is_none()
-    {
+    if cache.channels.remove(&scope.key()).is_none() {
         return Ok(());
     }
     let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {

@@ -448,6 +448,12 @@ The gateway session (a JWT) is authenticated once and cached (0600) under the
 config dir, refreshed automatically. Out of credits points you back at
 `qn rpc x402 buy-credits`.
 
+> **Note:** the gateway currently offers its credit block under the
+> `GatewayWalletBatched` (Circle Gateway batched-transfer) scheme, which this
+> version cannot sign. `buy-credits` refuses with exit 2 and signs nothing
+> rather than settling a per-request offer for a much larger amount than you
+> asked for. Use Path 1 (`--x402`, per request) until that scheme is supported.
+
 ##### Path 4 — MPP session (open a channel, then call)
 
 Open an on-chain escrow payment channel once, then pay per call with a
@@ -457,29 +463,38 @@ cumulative EIP-712 voucher (no on-chain transaction per call):
 qn wallet generate --vm evm --name payer           # evm covers Tempo; fund the address
 
 # Open a channel by depositing into the escrow (moves real funds; gated).
-qn rpc mpp open --network tempo-testnet --deposit 1000000 --max-amount 1000000 \
+qn rpc mpp open --deposit 1000000 --max-amount 1000000 \
     --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC
 
-# Pay for calls from the channel — one cumulative voucher per call.
-qn rpc call eth_blockNumber --network tempo-testnet --mpp-session \
+# Pay for calls from the channel — one cumulative voucher per call. Only the
+# call names --network: the channel is not network-scoped, so query any
+# supported network. Here a Tempo testnet deposit pays for an Ethereum mainnet
+# call.
+qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session \
     --payment-wallet payer --payment-network tempo-testnet \
     --payment-asset USDC --max-amount 1000000
 
-# Inspect the channel (re-syncs the accepted spend from the gateway).
-qn rpc mpp status --network tempo-testnet --payment-wallet payer \
+# Inspect the channel from the local record (free, no network call).
+qn rpc mpp status --payment-wallet payer \
+    --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
+
+# Ask the gateway instead and re-sync the accepted spend. This spends one
+# request unit from the deposit: the gateway prices every session request.
+qn rpc mpp status --verify --payment-wallet payer \
     --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
 
 # Add more deposit, or close to settle on-chain and refund the unused balance.
-qn rpc mpp top-up --network tempo-testnet --deposit 1000000 \
+qn rpc mpp top-up --deposit 1000000 \
     --payment-wallet payer --payment-network tempo-testnet \
     --payment-asset USDC --max-amount 1000000
-qn rpc mpp close --network tempo-testnet --payment-wallet payer \
+qn rpc mpp close --payment-wallet payer \
     --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
 ```
 
-Channel state is cached (0600) under the config dir, keyed by wallet + network.
-Exhausting the deposit points you at `qn rpc mpp top-up`; after `close`, open a
-new channel to keep paying by session.
+Channel state is cached (0600) under the config dir, keyed by wallet + payment
+network + payment asset. Two payment assets on one payment network are separate
+channels. Exhausting the deposit points you at `qn rpc mpp top-up`; after
+`close`, open a new channel to keep paying by session.
 
 ##### Shared flags, config, and wallet management
 
