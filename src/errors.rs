@@ -129,10 +129,9 @@ pub fn render(err: &CliError, verbose: bool) -> String {
 /// Like [`render`] but uses the supplied argv values for did-you-mean lookup.
 pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> String {
     match err {
-        // The gateway offered the option that was asked for, but it uses a
-        // signing scheme this version does not implement. That is not a
-        // misconfiguration, so it gets its own message rather than the
-        // "check your flags" one.
+        // The offer matched what was asked for, but its signing scheme is
+        // outside the set this lane settles. That is not a misconfiguration, so
+        // it gets its own message rather than the "check your flags" one.
         CliError::Sdk(SdkError::PaymentUnsupported { offered })
             if offered.contains("cannot sign") =>
         {

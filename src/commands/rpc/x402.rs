@@ -39,8 +39,8 @@ const EXAMPLE_QUERY_NETWORK: &str = "ethereum-mainnet";
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 #[command(after_help = "Examples:\n  \
-    qn rpc x402 drip --payment-wallet payer\n  \
-    qn rpc x402 balance --payment-wallet payer\n  \
+    qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia\n  \
+    qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia\n  \
     qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
     --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
     qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n  \
@@ -64,13 +64,14 @@ pub enum X402Cmd {
     /// --format json for the full envelope).
     #[command(visible_alias = "credits")]
     #[command(after_help = "Examples:\n  \
-        qn rpc x402 balance --payment-wallet payer\n  \
-        qn rpc x402 balance --payment-wallet payer --format json")]
+        qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia\n  \
+        qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia \\\n      \
+        --format json")]
     Balance(SessionArgs),
 
     /// Request testnet credits from the faucet (Base Sepolia, once per account).
     #[command(after_help = "Examples:\n  \
-        qn rpc x402 drip --payment-wallet payer")]
+        qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia")]
     Drip(SessionArgs),
 
     /// List the networks you can make x402-paid RPC calls to. Each slug is a
