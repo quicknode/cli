@@ -23,13 +23,18 @@ use comfy_table::Cell;
 use quicknode_sdk::{generate_payment_wallet, ChainKind};
 use serde::{Deserialize, Serialize};
 
-use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
+use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
 use crate::output::{new_table, set_header_bold, style, write_table, Render, Style};
 
 #[derive(Debug, ClapArgs)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
+#[command(after_help = "Examples:\n  \
+    qn wallet generate --vm evm --name payer\n  \
+    qn wallet list\n  \
+    qn wallet show payer\n  \
+    qn wallet rm payer")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: WalletCmd,
@@ -48,9 +53,14 @@ pub enum WalletCmd {
     List,
 
     /// Show a wallet's address, with a QR to fund it (on a terminal).
+    #[command(after_help = "Examples:\n  \
+        qn wallet show payer")]
     Show(ShowArgs),
 
     /// Delete a stored wallet. The key is the only copy and cannot be recovered.
+    #[command(after_help = "Examples:\n  \
+        qn wallet rm payer\n  \
+        qn wallet rm payer --yes")]
     Rm(RmArgs),
 }
 
@@ -181,21 +191,13 @@ fn rm(a: RmArgs, ctx: Ctx) -> Result<(), CliError> {
         return Err(not_found(&name));
     }
 
-    let cfg = ConfirmCfg::new(
-        ctx.global.yes_count,
-        ctx.global.no_input,
-        ctx.out.stdout_is_tty,
-    );
-    let proceed = match decide_without_prompt(Severity::Mild, cfg)? {
-        true => true,
-        false => prompt_yes_no(&format!(
+    confirm_mild(
+        &ctx,
+        &format!(
             "Delete wallet '{name}'? The private key is destroyed locally; without a backup \
              of the key, funds at its address are unrecoverable."
-        ))?,
-    };
-    if !proceed {
-        return Err(CliError::Cancelled);
-    }
+        ),
+    )?;
 
     // Remove the key first: if the sidecar removal somehow fails, we never leave
     // an orphaned key on disk.
