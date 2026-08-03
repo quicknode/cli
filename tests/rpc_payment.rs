@@ -1776,6 +1776,100 @@ async fn mpp_open_without_yes_is_needs_confirmation_and_settles_nothing() {
 }
 
 #[tokio::test]
+async fn mpp_top_up_without_yes_is_needs_confirmation_and_settles_nothing() {
+    let server = MockServer::start().await;
+    mount_session(&server, "tempo-testnet").await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    // Top-up needs a channel to add to; the gate is only reached once one exists.
+    let mut open_args = mpp_args(&cfg, &key_path, "open");
+    open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
+    let out = run_qn(&server.uri(), &open_args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    let before = server.received_requests().await.unwrap().len();
+    let mut args = mpp_args(&cfg, &key_path, "top-up");
+    args.extend_from_slice(&["--deposit", "500000"]);
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+    let after = server.received_requests().await.unwrap().len();
+    assert_eq!(after, before, "a refused top-up must not settle anything");
+}
+
+#[tokio::test]
+async fn mpp_top_up_with_yes_adds_deposit_to_the_open_channel() {
+    let server = MockServer::start().await;
+    mount_session(&server, "tempo-testnet").await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let mut open_args = mpp_args(&cfg, &key_path, "open");
+    open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
+    let out = run_qn(&server.uri(), &open_args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    let mut args = mpp_args(&cfg, &key_path, "top-up");
+    args.extend_from_slice(&["--deposit", "500000", "--yes"]);
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn mpp_close_without_yes_is_needs_confirmation_and_settles_nothing() {
+    let server = MockServer::start().await;
+    mount_session(&server, "tempo-testnet").await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    // Close needs a channel to settle; the gate is only reached once one exists.
+    let mut open_args = mpp_args(&cfg, &key_path, "open");
+    open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
+    let out = run_qn(&server.uri(), &open_args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    let before = server.received_requests().await.unwrap().len();
+    let out = run_qn(&server.uri(), &mpp_args(&cfg, &key_path, "close")).await;
+    assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
+    let after = server.received_requests().await.unwrap().len();
+    assert_eq!(after, before, "a refused close must not settle anything");
+    assert!(
+        dir.path().join("channels.toml").exists(),
+        "a refused close must leave the channel record intact"
+    );
+}
+
+#[tokio::test]
+async fn mpp_close_with_yes_settles_the_channel() {
+    let server = MockServer::start().await;
+    mount_session(&server, "tempo-testnet").await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let mut open_args = mpp_args(&cfg, &key_path, "open");
+    open_args.extend_from_slice(&["--deposit", "1000000", "--yes"]);
+    let out = run_qn(&server.uri(), &open_args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    let mut args = mpp_args(&cfg, &key_path, "close");
+    args.push("--yes");
+    let out = run_qn(&server.uri(), &args).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn mpp_session_call_without_open_channel_points_at_open() {
     let server = MockServer::start().await;
     // No channel cached; the call must refuse before any gateway I/O.
