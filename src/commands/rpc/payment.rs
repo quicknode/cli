@@ -771,7 +771,7 @@ fn read_key_file(path: &Path) -> Result<(String, Option<String>), CliError> {
 }
 
 /// Trims and rejects an empty key. `source` names where the key came from
-/// (a path, `stdin`, or the env var) — never its contents.
+/// (a path or `stdin`) — never its contents.
 fn checked_key(raw: String, source: &str) -> Result<String, CliError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

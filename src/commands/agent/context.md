@@ -68,7 +68,7 @@ outcome is unknown — the payment was submitted and **may have been charged** (
 gateway 5xx after the paid resend, a lost response, or an uninterpretable
 post-payment response). On exit 3, check the wallet before re-running; never
 blind-retry a paid call. A **drawdown** call (`--x402-drawdown`) spends prepaid
-credits, not per-call funds: running out surfaces an actionable exit-1 error
+credits, not per-call funds: running out surfaces an actionable exit-2 error
 pointing at `qn rpc x402 buy-credits`, and a credit is drawn only on success.
 
 ## 4. Non-interactive & confirmation behavior
@@ -175,11 +175,10 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
   gateway credits instead of paying per request, and `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
-  response). The gateway currently offers its credit block under the
-  `GatewayWalletBatched` (Circle Gateway batched-transfer) scheme, which this
-  version cannot sign: `buy-credits` refuses with exit 2 and signs nothing
-  rather than settling a per-request offer for a much larger amount. Pay per
-  request with `--x402` until that scheme is supported.
+  response). `buy-credits` settles per-request-style credit offers: when the
+  credit block is offered under the `GatewayWalletBatched` (Circle Gateway
+  batched-transfer) scheme, it exits 2 and signs nothing rather than settling a
+  per-request offer for a much larger amount. `--x402` pays per request.
   `buy-credits` signs a payment, so it takes the full paid-lane
   stack (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
   `--max-amount`, `--svm-rpc-url`); `balance` and `drip` only present a Bearer
