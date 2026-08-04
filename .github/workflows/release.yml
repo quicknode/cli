@@ -60,6 +60,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Checkout local SDK dependency
+        uses: actions/checkout@v6
+        with:
+          repository: quicknode/sdk
+          ref: feat/x402-solana-drawdown
+          path: ../sdk
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -124,6 +130,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Checkout local SDK dependency
+        uses: actions/checkout@v6
+        with:
+          repository: quicknode/sdk
+          ref: feat/x402-solana-drawdown
+          path: ../sdk
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -187,6 +199,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Checkout local SDK dependency
+        uses: actions/checkout@v6
+        with:
+          repository: quicknode/sdk
+          ref: feat/x402-solana-drawdown
+          path: ../sdk
       - name: Install cached dist
         uses: actions/download-artifact@v8
         with:
@@ -237,6 +255,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Checkout local SDK dependency
+        uses: actions/checkout@v6
+        with:
+          repository: quicknode/sdk
+          ref: feat/x402-solana-drawdown
+          path: ../sdk
       - name: Install cached dist
         uses: actions/download-artifact@v8
         with:
@@ -360,3 +384,9 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Checkout local SDK dependency
+        uses: actions/checkout@v6
+        with:
+          repository: quicknode/sdk
+          ref: feat/x402-solana-drawdown
+          path: ../sdk
