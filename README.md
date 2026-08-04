@@ -420,8 +420,9 @@ output is shaped exactly like an unpaid call. On x402 the receipt is `null`.
 
 ##### Path 3 — x402 drawdown (buy credits, then call)
 
-Buy a block of prepaid credits once, then spend them with no per-call signing
-(one credit per successful response):
+Authenticate once, buy a block of prepaid credits when the gateway returns its
+credit offer, then spend them with no per-call signing (one credit per
+successful response). EVM and Solana payment wallets are supported:
 
 ```sh
 qn wallet generate --vm evm --name payer           # dedicated wallet
@@ -442,6 +443,19 @@ qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia
 # the wallet is needed — no asset or spend ceiling. Credits are not
 # network-scoped: query any supported network, not just the one you paid on.
 qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer
+```
+
+Solana Devnet USDC can fund the drawdown wallet directly. Solana has no x402
+faucet:
+
+```sh
+qn wallet generate --vm svm --name sol-payer
+qn rpc x402 buy-credits --network solana-devnet --payment-wallet sol-payer \
+    --payment-network solana-devnet \
+    --payment-asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
+    --max-amount 1000000
+qn rpc call getSlot --network solana-devnet --x402-drawdown \
+    --payment-wallet sol-payer --payment-network solana-devnet
 ```
 
 The gateway session (a JWT) is authenticated once and cached (0600) under the

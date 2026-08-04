@@ -173,7 +173,8 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   accepts — each row's network/address pair is a ready
   `--payment-network`/`--payment-asset`.
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
-  gateway credits instead of paying per request, and `qn rpc call
+  gateway credits instead of paying per request. EVM payment networks use SIWE;
+  Solana payment networks use SIWS with Base58 Ed25519 signatures. `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
   response). `buy-credits` selects the largest regular x402 offer for the credit
   block. `GatewayWalletBatched` is the separate Circle Gateway nanopayment
@@ -194,7 +195,8 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   the spend ceiling); `balance` (alias
   `credits`) prints the current credit count (bare number, or the full envelope
   with `--format json`); `drip` funds the wallet from the testnet faucet
-  (Base Sepolia, returns the funding tx, not credits; once per account). The
+  (Base Sepolia only, returns the funding tx, not credits; once per account).
+  Solana wallets have no x402 faucet and must be funded out of band. The
   session JWT is authenticated once and cached under
   `<config-dir>/qn/sessions.toml` (0600, keyed by wallet address); a
   missing/expired session re-authenticates transparently (free, no

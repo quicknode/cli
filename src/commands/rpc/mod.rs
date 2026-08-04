@@ -57,8 +57,13 @@ pub enum RpcCmd {
         Prepaid x402 credits (drawdown — buy once, then spend on any supported network):\n  \
         qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
         --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
-        qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n\n\
-        MPP payment channel (open once, then pay per call with a voucher):\n  \
+         qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n\n\
+         qn rpc x402 buy-credits --network solana-devnet --payment-wallet sol-payer \\\n     \
+         --payment-network solana-devnet --payment-asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \\\n     \
+         --max-amount 1000000\n\
+         qn rpc call getSlot --network solana-devnet --x402-drawdown \\\n     \
+         --payment-wallet sol-payer --payment-network solana-devnet\n\n\
+         MPP payment channel (open once, then pay per call with a voucher):\n  \
         qn rpc mpp open --deposit 1000000 \\\n      \
         --payment-wallet payer --payment-network tempo-testnet \\\n      \
         --payment-asset USDC --max-amount 1000000\n  \

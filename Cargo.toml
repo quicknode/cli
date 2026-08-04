@@ -21,9 +21,7 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-# DEV ONLY: path dep on the SDK's unreleased crypto-micropayment branch.
-# Swap back to a published crates.io version (with the same features) before
-# any release tag — the release is gated on the SDK publishing this feature.
+# DEV ONLY: use the local SDK while testing unreleased payment behavior.
 quicknode-sdk = { path = "../sdk/crates/core", features = [
   "payments",       # x402/EVM
   "payments-svm",   # + x402/Solana

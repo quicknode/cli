@@ -5,7 +5,7 @@ mod common;
 use common::{parse, run_qn, run_qn_no_key};
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const EVM_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -1060,6 +1060,19 @@ async fn mount_auth(server: &MockServer) {
         .await;
 }
 
+/// Mount a fixed Solana SIWX session response.
+async fn mount_solana_auth(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "token": "jwt-solana",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "accountId": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1:11111111111111111111111111111111"
+        })))
+        .mount(server)
+        .await;
+}
+
 fn x402_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<&'a str> {
     vec![
         "--config-file",
@@ -1263,6 +1276,38 @@ async fn x402_drip_reports_funding_tx() {
 }
 
 #[tokio::test]
+async fn x402_drip_rejects_solana_without_network_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "x402",
+            "drip",
+            "--payment-key-file",
+            &key_path,
+            "--payment-network",
+            "solana-devnet",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 1, "stderr={}", out.stderr);
+    assert!(out.stderr.contains("Base Sepolia"), "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn x402_balance_rejects_spend_flags() {
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap();
@@ -1358,6 +1403,73 @@ async fn x402_drawdown_needs_only_wallet_and_network() {
     )
     .await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_solana_drawdown_authenticates_with_siwx_and_uses_bearer() {
+    let server = MockServer::start().await;
+    mount_solana_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/solana-devnet"))
+        .and(header("authorization", "Bearer jwt-solana"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": 1234
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let generated = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "wallet",
+            "generate",
+            "--vm",
+            "svm",
+            "--name",
+            "sol-payer",
+        ],
+    )
+    .await;
+    assert_eq!(generated.exit_code, 0, "stderr={}", generated.stderr);
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "getSlot",
+            "--network",
+            "solana-devnet",
+            "--x402-drawdown",
+            "--payment-wallet",
+            "sol-payer",
+            "--payment-network",
+            "solana-devnet",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+
+    let requests = server.received_requests().await.unwrap();
+    let auth = requests
+        .iter()
+        .find(|request| request.url.path() == "/auth")
+        .expect("Solana drawdown must authenticate");
+    let body: serde_json::Value = serde_json::from_slice(&auth.body).unwrap();
+    assert_eq!(body["type"], "siwx");
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("sign in with your Solana account"));
+    assert!(!body["signature"].as_str().unwrap().is_empty());
 }
 
 /// Return an expired-token response once, then success.
@@ -1948,6 +2060,28 @@ const SOL_FEE_PAYER: &str = "CPZSjRmyfTS95UjQD8ZdeTEWbQvW9QvEXnn6aGP7yyMN";
 const SOL_PAY_TO: &str = "2LWbc9Mi6dRUrdEHBttoNS4udDtH1A4xwBdm1EKqcT57";
 const SOL_DEVNET: &str = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
+struct SolanaCreditSeq {
+    calls: AtomicUsize,
+}
+
+impl Respond for SolanaCreditSeq {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if n == 0 && !req.headers.contains_key("payment-signature") {
+            ResponseTemplate::new(402).set_body_json(json!({
+                "x402Version": 2,
+                "accepts": [x402_solana_entry("1000000"), x402_solana_entry("1000")]
+            }))
+        } else {
+            assert!(req.headers.contains_key("authorization"));
+            assert!(req.headers.contains_key("payment-signature"));
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1, "result": "credit-purchased"
+            }))
+        }
+    }
+}
+
 /// Build a Solana x402 offer.
 fn x402_solana_entry(amount: &str) -> serde_json::Value {
     json!({
@@ -1959,6 +2093,97 @@ fn x402_solana_entry(amount: &str) -> serde_json::Value {
         "asset": SOL_MINT,
         "extra": { "feePayer": SOL_FEE_PAYER }
     })
+}
+
+#[tokio::test]
+async fn x402_solana_buy_credits_authenticates_and_settles_credit_offer() {
+    let server = MockServer::start().await;
+    mount_solana_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/solana-devnet"))
+        .respond_with(SolanaCreditSeq {
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/svm-rpc"))
+        .and(body_partial_json(json!({ "method": "getAccountInfo" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "value": {
+                "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                "data": { "parsed": { "info": { "decimals": 6 } } }
+            }}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/svm-rpc"))
+        .and(body_partial_json(json!({ "method": "getLatestBlockhash" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "value": { "blockhash": "11111111111111111111111111111112" } }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/credits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1:11111111111111111111111111111111",
+            "credits": 100000
+        })))
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let generated = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "wallet",
+            "generate",
+            "--vm",
+            "svm",
+            "--name",
+            "sol-payer",
+        ],
+    )
+    .await;
+    assert_eq!(generated.exit_code, 0, "stderr={}", generated.stderr);
+    let svm_rpc_url = format!("{}/svm-rpc", server.uri());
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "x402",
+            "buy-credits",
+            "--network",
+            "solana-devnet",
+            "--payment-wallet",
+            "sol-payer",
+            "--payment-network",
+            "solana-devnet",
+            "--payment-asset",
+            SOL_MINT,
+            "--max-amount",
+            "1000000",
+            "--svm-rpc-url",
+            &svm_rpc_url,
+            "--yes",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
 struct SolanaSeq {

@@ -24,7 +24,12 @@ const EXAMPLE_QUERY_NETWORK: &str = "ethereum-mainnet";
     qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia\n  \
     qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \\\n      \
     --payment-network base-sepolia --payment-asset USDC --max-amount 10000000\n  \
-    qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n  \
+     qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer\n  \
+     qn rpc x402 buy-credits --network solana-devnet --payment-wallet sol-payer \\\n      \
+     --payment-network solana-devnet --payment-asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \\\n     \
+      --max-amount 1000000 --svm-rpc-url https://solana.example/rpc\n  \
+     qn rpc call getSlot --network solana-devnet --x402-drawdown \\\n     \
+      --payment-wallet sol-payer --payment-network solana-devnet\n  \
     qn rpc x402 supported-networks\n  \
     qn rpc x402 supported-payments")]
 pub struct Args {
@@ -83,7 +88,8 @@ pub struct PaymentArgs {
     #[arg(long, value_name = "NETWORK")]
     pub network: Option<String>,
 
-    /// File containing the raw payment private key (EVM hex); `-` reads stdin.
+    /// File containing the raw payment private key (EVM hex or Solana base58);
+    /// `-` reads stdin.
     /// Precedence: this > --payment-wallet > `key_file` > `wallet` in config.
     #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
     pub payment_key_file: Option<std::path::PathBuf>,
@@ -103,8 +109,8 @@ pub struct PaymentArgs {
     #[arg(long, value_name = "NETWORK")]
     pub payment_network: Option<String>,
 
-    /// Token to pay with: an EVM contract address or a symbol like USDC
-    /// (resolved per network). Falls back to `payment_asset` in [rpc.payment].
+    /// Token to pay with: an EVM contract address, Solana mint, or a symbol like
+    /// USDC (resolved per network). Falls back to `payment_asset` in [rpc.payment].
     #[arg(long, value_name = "ADDRESS")]
     pub payment_asset: Option<String>,
 
@@ -137,7 +143,8 @@ pub struct SessionArgs {
     #[arg(long, value_name = "NETWORK")]
     pub network: Option<String>,
 
-    /// File containing the raw payment private key (EVM hex); `-` reads stdin.
+    /// File containing the raw payment private key (EVM hex or Solana base58);
+    /// `-` reads stdin.
     /// Precedence: this > --payment-wallet > `key_file` > `wallet` in config.
     #[arg(long, value_name = "PATH", conflicts_with = "payment_wallet")]
     pub payment_key_file: Option<std::path::PathBuf>,
@@ -284,7 +291,7 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
             Style::Bold,
             ctx.out.color,
         ),
-        drawdown_call_hint(&args, ctx.out.color)
+        drawdown_call_hint(&args, &payment, ctx.out.color)
     ));
     if matches!(ctx.global.format, Some(f) if f.is_structured()) || !ctx.out.stdout_is_tty {
         return emit_balance(&ctx, &balance);
@@ -293,7 +300,12 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
 }
 
 // Build the next drawdown command. Credits are not network-scoped.
-fn drawdown_call_hint(args: &PaymentArgs, color: bool) -> String {
+fn drawdown_call_hint(args: &PaymentArgs, payment: &PaymentConfig, color: bool) -> String {
+    let (method, query_network) = if payment.pay_network.starts_with("solana:") {
+        ("getSlot", "solana-devnet")
+    } else {
+        ("eth_blockNumber", EXAMPLE_QUERY_NETWORK)
+    };
     let mut cmd = format!(
         "  qn rpc call eth_blockNumber \\\n    \
            --network {EXAMPLE_QUERY_NETWORK} \\\n    \
@@ -301,6 +313,9 @@ fn drawdown_call_hint(args: &PaymentArgs, color: bool) -> String {
            --payment-wallet {}",
         args.payment_wallet.as_deref().unwrap_or("<NAME>")
     );
+    cmd = cmd
+        .replace("eth_blockNumber", method)
+        .replace(EXAMPLE_QUERY_NETWORK, query_network);
     if let Some(pn) = &args.payment_network {
         if pn != EXAMPLE_QUERY_NETWORK {
             cmd.push_str(&format!(" \\\n    --payment-network {pn}"));
@@ -317,6 +332,7 @@ async fn run_balance(args: SessionArgs, global: GlobalArgs) -> Result<(), CliErr
 }
 
 async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError> {
+    reject_non_base_drip(&args, &global)?;
     let ctx = session_setup(&args, global.clone())?;
     let session = ensure_gateway_session(&ctx, &global).await?;
     let receipt = ctx.sdk.rpc.gateway_drip(&session).await?;
@@ -396,6 +412,25 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
     }
     if !ctx.out.stdout_is_tty {
         println!("{}", receipt.transaction_hash);
+    }
+    Ok(())
+}
+
+fn reject_non_base_drip(args: &SessionArgs, global: &GlobalArgs) -> Result<(), CliError> {
+    let section = load_payment_section(global)?;
+    let Some(network) = args
+        .payment_network
+        .clone()
+        .or_else(|| section.payment_network.clone())
+    else {
+        return Ok(());
+    };
+    let resolved = super::pay_network::resolve(&network)?;
+    if resolved != "eip155:84532" {
+        return Err(CliError::Arg(
+            "x402 drip is available only on Base Sepolia. Fund Solana wallets out of band."
+                .to_string(),
+        ));
     }
     Ok(())
 }
