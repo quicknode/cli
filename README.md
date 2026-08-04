@@ -448,11 +448,11 @@ The gateway session (a JWT) is authenticated once and cached (0600) under the
 config dir, refreshed automatically. Out of credits points you back at
 `qn rpc x402 buy-credits`.
 
-> **Note:** `buy-credits` settles per-request-style credit offers. When the
-> gateway's credit block is offered under the `GatewayWalletBatched` (Circle
-> Gateway batched-transfer) scheme, `buy-credits` exits 2 and signs nothing
-> rather than settling a per-request offer for a much larger amount than you
-> asked for. Path 1 (`--x402`, per request) pays for calls directly.
+> **Note:** `buy-credits` selects the gateway's largest regular x402 offer,
+> which buys the credit block. `GatewayWalletBatched` is the separate Circle
+> Gateway nanopayment option, not the credit offer. It requires USDC deposited
+> in the Circle Gateway wallet contract and is not used by `buy-credits`.
+> Path 1 (`--x402`, per request) pays for calls directly.
 
 ##### Path 4 — MPP session (open a channel, then call)
 

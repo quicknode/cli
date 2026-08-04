@@ -175,10 +175,10 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **x402 drawdown**: `qn rpc x402 {buy-credits, balance, drip}` manages prepaid
   gateway credits instead of paying per request, and `qn rpc call
   --x402-drawdown` spends them (no per-call signing, 1 credit per successful
-  response). `buy-credits` settles per-request-style credit offers: when the
-  credit block is offered under the `GatewayWalletBatched` (Circle Gateway
-  batched-transfer) scheme, it exits 2 and signs nothing rather than settling a
-  per-request offer for a much larger amount. `--x402` pays per request.
+  response). `buy-credits` selects the largest regular x402 offer for the credit
+  block. `GatewayWalletBatched` is the separate Circle Gateway nanopayment
+  option, not the credit offer; it requires USDC deposited in the Circle Gateway
+  wallet contract and is not used by `buy-credits`. `--x402` pays per request.
   `buy-credits` signs a payment, so it takes the full paid-lane
   stack (`--payment-wallet`/`-key-file`, `--payment-network`, `--payment-asset`,
   `--max-amount`, `--svm-rpc-url`); `balance` and `drip` only present a Bearer

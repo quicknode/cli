@@ -1093,23 +1093,64 @@ fn x402_session_args<'a>(cfg: &'a str, key_path: &'a str, verb: &'a str) -> Vec<
 }
 
 #[tokio::test]
-async fn x402_buy_credits_refuses_the_batched_scheme_and_settles_nothing() {
+async fn x402_buy_credits_selects_the_regular_credit_tier() {
     let server = MockServer::start().await;
     mount_auth(&server).await;
-    let mut credit = x402_accepts_entry("100");
-    credit["maxTimeoutSeconds"] = json!(604_900);
-    credit["extra"] = json!({
+    let mut nanopayment = x402_accepts_entry("100");
+    nanopayment["maxTimeoutSeconds"] = json!(604_900);
+    nanopayment["extra"] = json!({
         "name": "GatewayWalletBatched",
         "version": "1",
         "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"
     });
+    struct BuySeq {
+        calls: AtomicUsize,
+        nanopayment: serde_json::Value,
+    }
+    impl Respond for BuySeq {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 && !req.headers.contains_key("payment-signature") {
+                ResponseTemplate::new(402).set_body_json(json!({
+                    "x402Version": 2,
+                    "accepts": [x402_accepts_entry("1000000"), x402_accepts_entry("1000"), self.nanopayment.clone()],
+                }))
+            } else {
+                use base64::Engine;
+                let header = req
+                    .headers
+                    .get("payment-signature")
+                    .expect("paid resend must include a payment signature")
+                    .to_str()
+                    .unwrap();
+                let envelope: serde_json::Value = serde_json::from_slice(
+                    &base64::engine::general_purpose::STANDARD
+                        .decode(header)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(envelope["accepted"]["amount"], "1000000");
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0", "id": 1, "result": "0x1"
+                }))
+            }
+        }
+    }
     Mock::given(method("POST"))
         .and(path("/base-sepolia"))
-        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
-            "x402Version": 2,
-            "accepts": [x402_accepts_entry("1000000"), x402_accepts_entry("1000"), credit],
+        .respond_with(BuySeq {
+            calls: AtomicUsize::new(0),
+            nanopayment,
+        })
+        .expect(2) // one offer probe and one paid resend
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/credits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": "eip155:84532:0xabc", "credits": 100_000u64
         })))
-        .expect(1) // the offer probe only: nothing is ever signed or resent
+        .expect(1)
         .mount(&server)
         .await;
     mount_control_plane_expect_zero(&server).await;
@@ -1121,12 +1162,7 @@ async fn x402_buy_credits_refuses_the_batched_scheme_and_settles_nothing() {
     let mut args = x402_args(&cfg, &key_path, "buy-credits");
     args.extend_from_slice(&["--network", "base-sepolia", "--yes"]); // query chain + consent
     let out = run_qn(&server.uri(), &args).await;
-    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
-    assert!(
-        out.stderr.contains("GatewayWalletBatched"),
-        "stderr={}",
-        out.stderr
-    );
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 
 #[tokio::test]
