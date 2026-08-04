@@ -1,0 +1,6 @@
+---
+source: tests/table_snapshots.rs
+expression: "discovery_stdout(&server, \"mpp\", \"supported-payments\").await"
+---
+NETWORK        ASSET    ADDRESS                                     
+tempo-testnet  pathUSD  0x20c0000000000000000000000000000000000000

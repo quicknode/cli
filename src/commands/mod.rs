@@ -16,4 +16,5 @@ pub mod stream;
 pub mod team;
 pub mod tooling_access;
 pub mod usage;
+pub mod wallet;
 pub mod webhook;

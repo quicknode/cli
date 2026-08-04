@@ -7,7 +7,9 @@
 //! There is deliberately no environment-variable source: a key left exported
 //! in a shell is invisible state that outlives the session it was set for,
 //! and is the easiest way to run a destructive command against the wrong
-//! account.
+//! account. The paid RPC lane's payment key follows the same principle — it
+//! comes only from a file or a stored wallet, never an env var (see
+//! `commands::rpc::payment`).
 //!
 //! When both sources fail we return [`CliError::NoApiKey`] which exits 4 with
 //! a message directing the user to `qn auth login`. The `qn auth login`
@@ -64,6 +66,51 @@ pub struct ApiSection {
 pub struct RpcSection {
     #[serde(default)]
     pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub payment: PaymentSection,
+}
+
+/// Defaults for the paid RPC lane. Values do not enable payment by themselves.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PaymentSection {
+    /// Path to the raw payment key, never the key itself.
+    #[serde(default)]
+    pub key_file: Option<PathBuf>,
+    /// Stored wallet name, as an alternative to `key_file`.
+    #[serde(default)]
+    pub wallet: Option<String>,
+    /// Reject an inline raw key instead of silently ignoring it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<toml::Value>,
+    /// Default spend ceiling in asset base units.
+    #[serde(default, deserialize_with = "de_opt_string_or_int")]
+    pub max_amount: Option<String>,
+    /// Network where payments settle, independent of the query network.
+    #[serde(default)]
+    pub payment_network: Option<String>,
+    /// Payment token contract or mint.
+    #[serde(default)]
+    pub payment_asset: Option<String>,
+    /// Solana RPC URL for payment builds.
+    #[serde(default)]
+    pub svm_rpc_url: Option<String>,
+}
+
+/// Deserialize an optional TOML string or integer as a string.
+fn de_opt_string_or_int<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<toml::Value>::deserialize(deserializer)?;
+    match v {
+        None => Ok(None),
+        Some(toml::Value::String(s)) => Ok(Some(s)),
+        Some(toml::Value::Integer(i)) => Ok(Some(i.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "expected a string or integer, got {}",
+            other.type_str()
+        ))),
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -224,36 +271,21 @@ fn write_config(path: &Path, cfg: &ConfigFile) -> Result<(), CliError> {
     Ok(())
 }
 
-// ── Tooling Access token cache ───────────────────────────────────────────────
-//
-// Each `qn rpc` is a fresh process, so the SDK's in-memory JWT cache starts
-// empty every time. We persist the short-lived (~10 min) session token next to
-// the config (`tokens.toml`) and re-seed the SDK on the next invocation,
-// avoiding a control-plane round trip while the token is still valid.
-//
-// Tooling Access endpoints are provisioned per account, not per API key, so the
-// cache is keyed by account id via a two-level lookup:
-//
-//   sha256(api_key)  ->  account_id  ->  { endpoint_url, token, exp_unix }
-//
-// The `[keys]` table maps an API-key fingerprint to its account id; the
-// `[tokens.<account_id>]` tables hold the JWTs. On a hit, both lookups are
-// offline (no control-plane call). All API keys for one account share a single
-// cached token. Only the short-lived JWT is written here — never the long-lived
-// API key. The account id is a non-secret numeric identifier, stored raw.
+// Tooling Access token cache. Tokens are keyed by account ID, with an API-key
+// fingerprint mapping used to resolve the account offline.
 
 use std::collections::HashMap;
 
 use quicknode_sdk::CachedToken;
+use quicknode_sdk::GatewaySession;
 
-/// On-disk shape of `~/.config/qn/tokens.toml`.
+/// On-disk token cache.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TokenCacheFile {
     /// API-key fingerprint (SHA-256 hex) -> account id.
     #[serde(default)]
     pub keys: HashMap<String, i64>,
-    /// Account id (as a string, since TOML table keys must be strings) -> cached
-    /// JWT for that account's Tooling Access endpoint.
+    /// Account ID string to cached Tooling Access token.
     #[serde(default)]
     pub tokens: HashMap<String, CachedTokenEntry>,
 }
@@ -265,9 +297,7 @@ pub struct CachedTokenEntry {
     pub exp_unix: i64,
 }
 
-/// The token cache path: `tokens.toml` alongside the resolved config file (so
-/// `--config-file` keeps config and tokens together). Falls back to the default
-/// config dir when no explicit config path is given.
+/// Return the token-cache path beside the config file.
 pub fn token_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
         Some(p) => p.parent().map(|d| d.join("tokens.toml")),
@@ -282,8 +312,7 @@ pub fn fingerprint_key(api_key: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Reads `tokens.toml`, treating an absent or malformed file as an empty cache.
-/// A malformed cache (e.g. an older on-disk schema) is a miss, never an error.
+/// Read the token cache; malformed data is a cache miss.
 fn read_cache(path: &Path) -> TokenCacheFile {
     fs::read_to_string(path)
         .ok()
@@ -291,8 +320,7 @@ fn read_cache(path: &Path) -> TokenCacheFile {
         .unwrap_or_default()
 }
 
-/// Resolves the account id a known API key maps to, offline. Returns `None` when
-/// the key hasn't been seen before (its fingerprint isn't in `[keys]` yet).
+/// Resolve an API key to its cached account ID.
 pub fn account_for_key(path: &Path, api_key: &str) -> Option<i64> {
     read_cache(path)
         .keys
@@ -300,8 +328,7 @@ pub fn account_for_key(path: &Path, api_key: &str) -> Option<i64> {
         .copied()
 }
 
-/// Loads the cached token for `account_id`. Returns `None` if the file is
-/// absent, unparseable, or has no entry for that account.
+/// Load a cached token for an account.
 pub fn load_token_for_account(path: &Path, account_id: i64) -> Option<CachedToken> {
     let entry = read_cache(path).tokens.remove(&account_id.to_string())?;
     Some(CachedToken {
@@ -311,10 +338,7 @@ pub fn load_token_for_account(path: &Path, account_id: i64) -> Option<CachedToke
     })
 }
 
-/// Records the `api_key -> account_id` mapping and stores `token` under that
-/// account, preserving every other account's entry (read-modify-write). Written
-/// atomically with 0600 perms. Last-write-wins under concurrency — two `qn rpc`
-/// processes may both mint, but the atomic rename guarantees no partial file.
+/// Store an account mapping and token atomically.
 pub fn save_token(
     path: &Path,
     api_key: &str,
@@ -334,10 +358,7 @@ pub fn save_token(
     write_cache(path, &cache)
 }
 
-/// Drops the cached JWT for `account_id` (e.g. a stale token against an endpoint
-/// that was disabled out-of-band), leaving other accounts' tokens and every
-/// `[keys]` mapping intact. No-op if there was no entry. Best-effort: a missing
-/// or malformed file is not an error.
+/// Remove one cached account token.
 pub fn delete_account_token(path: &Path, account_id: i64) -> Result<(), CliError> {
     let mut cache = read_cache(path);
     if cache.tokens.remove(&account_id.to_string()).is_none() {
@@ -355,12 +376,7 @@ fn write_cache(path: &Path, cache: &TokenCacheFile) -> Result<(), CliError> {
     write_atomic_0600(path, text.as_bytes(), ".qn-tokens-")
 }
 
-// ── Multichain network URL cache ─────────────────────────────────────────────
-//
-// The per-network URL map (network key -> http_url) is stable endpoint metadata,
-// unlike the ~10-min JWT. We cache it separately in `networks.toml` with a
-// 24-hour TTL so it isn't rewritten on every token refresh. Scoped to the
-// endpoint id; re-fetched (via get_endpoint_urls) when absent or stale.
+// Multichain network URL cache, scoped to the endpoint and refreshed daily.
 
 /// Seconds the cached network map is considered fresh (24h).
 pub const NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
@@ -389,9 +405,218 @@ pub fn networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// Loads the cached network map for `endpoint_id` from `path`, if present, for
-/// the same endpoint, and fetched within the TTL (relative to `now_unix`).
-/// Returns `None` (a cache miss) on any mismatch or parse failure.
+/// Return the wallet store directory.
+pub fn wallets_dir(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("wallets")),
+        None => config_dir().map(|d| d.join("qn").join("wallets")),
+    }
+}
+
+// x402 gateway session cache, keyed by the payer address.
+
+/// On-disk gateway-session cache.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SessionCacheFile {
+    /// Lowercase payer address to cached session.
+    #[serde(default)]
+    pub sessions: HashMap<String, GatewaySessionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewaySessionEntry {
+    pub token: String,
+    pub exp_unix: i64,
+    pub account_id: String,
+}
+
+/// Return the gateway-session cache path.
+pub fn sessions_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("sessions.toml")),
+        None => config_dir().map(|d| d.join("qn").join("sessions.toml")),
+    }
+}
+
+fn session_key(address: &str) -> String {
+    address.to_lowercase()
+}
+
+/// Load a cached gateway session for a payer.
+pub fn load_gateway_session_by_address(path: &Path, address: &str) -> Option<GatewaySession> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: SessionCacheFile = toml::from_str(&text).ok()?;
+    let entry = cache.sessions.get(&session_key(address))?;
+    Some(GatewaySession {
+        token: entry.token.clone(),
+        exp_unix: entry.exp_unix,
+        account_id: entry.account_id.clone(),
+    })
+}
+
+/// Store a gateway session atomically.
+pub fn save_gateway_session(
+    path: &Path,
+    address: &str,
+    session: &GatewaySession,
+) -> Result<(), CliError> {
+    let mut cache: SessionCacheFile = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    cache.sessions.insert(
+        session_key(address),
+        GatewaySessionEntry {
+            token: session.token.clone(),
+            exp_unix: session.exp_unix,
+            account_id: session.account_id.clone(),
+        },
+    );
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-sessions-")
+}
+
+// MPP channel state cache, keyed by payer, pay network, and pay asset.
+
+/// On-disk channel cache. Amounts are decimal strings for TOML compatibility.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ChannelCacheFile {
+    /// "<payer-address>:<pay-network>:<pay-asset>" -> the open channel's state.
+    #[serde(default)]
+    pub channels: HashMap<String, ChannelEntry>,
+}
+
+/// Channel cache scope. It excludes the queried network.
+#[derive(Debug, Clone)]
+pub struct ChannelScope {
+    /// Payer address, as derived offline from the payment key.
+    pub address: String,
+    /// Resolved CAIP-2 pay network (e.g. `eip155:42431`).
+    pub pay_network: String,
+    /// Resolved pay asset — a token address, not a symbol.
+    pub pay_asset: String,
+}
+
+impl ChannelScope {
+    /// Build the normalized cache key.
+    fn key(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.address.to_lowercase(),
+            self.pay_network,
+            self.pay_asset.to_lowercase()
+        )
+    }
+}
+
+/// TOML-safe channel record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelEntry {
+    pub channel_id: String,
+    pub token: String,
+    pub payee: String,
+    pub salt: String,
+    pub authorized_signer: String,
+    pub escrow_contract: String,
+    pub deposit: String,
+    pub cumulative_spent: String,
+    pub per_call: String,
+    pub chain_id: u64,
+}
+
+impl ChannelEntry {
+    fn from_state(s: &quicknode_sdk::ChannelState) -> Self {
+        ChannelEntry {
+            channel_id: s.channel_id.clone(),
+            token: s.token.clone(),
+            payee: s.payee.clone(),
+            salt: s.salt.clone(),
+            authorized_signer: s.authorized_signer.clone(),
+            escrow_contract: s.escrow_contract.clone(),
+            deposit: s.deposit.to_string(),
+            cumulative_spent: s.cumulative_spent.to_string(),
+            per_call: s.per_call.to_string(),
+            chain_id: s.chain_id,
+        }
+    }
+
+    fn to_state(&self) -> Option<quicknode_sdk::ChannelState> {
+        Some(quicknode_sdk::ChannelState {
+            channel_id: self.channel_id.clone(),
+            token: self.token.clone(),
+            payee: self.payee.clone(),
+            salt: self.salt.clone(),
+            authorized_signer: self.authorized_signer.clone(),
+            escrow_contract: self.escrow_contract.clone(),
+            deposit: self.deposit.parse().ok()?,
+            cumulative_spent: self.cumulative_spent.parse().ok()?,
+            per_call: self.per_call.parse().ok()?,
+            chain_id: self.chain_id,
+        })
+    }
+}
+
+/// Return the channel-state cache path.
+pub fn channels_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("channels.toml")),
+        None => config_dir().map(|d| d.join("qn").join("channels.toml")),
+    }
+}
+
+/// Loads the open channel for `scope`, if any.
+pub fn load_channel(path: &Path, scope: &ChannelScope) -> Option<quicknode_sdk::ChannelState> {
+    let text = fs::read_to_string(path).ok()?;
+    let cache: ChannelCacheFile = toml::from_str(&text).ok()?;
+    cache
+        .channels
+        .get(&scope.key())
+        .and_then(ChannelEntry::to_state)
+}
+
+/// Store a channel atomically.
+pub fn save_channel(
+    path: &Path,
+    scope: &ChannelScope,
+    channel: &quicknode_sdk::ChannelState,
+) -> Result<(), CliError> {
+    let mut cache: ChannelCacheFile = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    cache
+        .channels
+        .insert(scope.key(), ChannelEntry::from_state(channel));
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
+}
+
+/// Remove a channel entry.
+pub fn delete_channel(path: &Path, scope: &ChannelScope) -> Result<(), CliError> {
+    let mut cache: ChannelCacheFile = match fs::read_to_string(path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+    {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    if cache.channels.remove(&scope.key()).is_none() {
+        return Ok(());
+    }
+    let text = toml::to_string_pretty(&cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-channels-")
+}
+
+/// Load a fresh network map for an endpoint.
 pub fn load_networks(
     path: &Path,
     endpoint_id: &str,
@@ -409,9 +634,7 @@ pub fn load_networks(
     Some(entry.networks)
 }
 
-/// Saves the network map for `endpoint_id` to `path` atomically with 0600 perms,
-/// stamping `fetched_at_unix` for the TTL check. Same write discipline as
-/// [`save_token`].
+/// Save a network map atomically.
 pub fn save_networks(
     path: &Path,
     endpoint_id: &str,
@@ -432,10 +655,149 @@ pub fn save_networks(
     write_atomic_0600(path, text.as_bytes(), ".qn-networks-")
 }
 
-/// Atomically writes `bytes` to `path` with 0600 perms via a temp file in the
-/// same directory (perms set before the bytes), then `rename`. Shared by the
-/// token and networks caches.
-fn write_atomic_0600(path: &Path, bytes: &[u8], tmp_prefix: &str) -> Result<(), CliError> {
+// Payment-gateway discovery cache, split by scheme and list.
+
+/// Seconds a cached discovery list is considered fresh (24h).
+pub const PAY_NETWORKS_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// One accepted payment option.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayAssetEntry {
+    pub network: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    pub address: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PayNetworksCacheFile {
+    #[serde(default)]
+    pub x402: SchemeCacheEntry,
+    #[serde(default)]
+    pub mpp: SchemeCacheEntry,
+}
+
+/// Cached discovery lists for one gateway.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchemeCacheEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub networks: Option<NetworksCacheSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payments: Option<PaymentsCacheSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworksCacheSection {
+    /// Fetch time in Unix seconds.
+    pub fetched_at_unix: i64,
+    pub networks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentsCacheSection {
+    /// Fetch time in Unix seconds.
+    pub fetched_at_unix: i64,
+    pub payments: Vec<PayAssetEntry>,
+}
+
+/// The discovery cache path: `pay-networks.toml` alongside the config.
+pub fn pay_networks_cache_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(p) => p.parent().map(|d| d.join("pay-networks.toml")),
+        None => config_dir().map(|d| d.join("qn").join("pay-networks.toml")),
+    }
+}
+
+fn load_pay_cache_file(path: &Path) -> PayNetworksCacheFile {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn scheme_entry<'a>(
+    cache: &'a mut PayNetworksCacheFile,
+    scheme: &str,
+) -> Option<&'a mut SchemeCacheEntry> {
+    match scheme {
+        "x402" => Some(&mut cache.x402),
+        "mpp" => Some(&mut cache.mpp),
+        _ => None,
+    }
+}
+
+fn write_pay_cache_file(path: &Path, cache: &PayNetworksCacheFile) -> Result<(), CliError> {
+    let text = toml::to_string_pretty(cache).map_err(|e| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e),
+    })?;
+    write_atomic_0600(path, text.as_bytes(), ".qn-pay-networks-")
+}
+
+/// Load a fresh cached network list.
+pub fn load_pay_networks(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec<String>> {
+    let mut cache = load_pay_cache_file(path);
+    let section = scheme_entry(&mut cache, scheme)?.networks.take()?;
+    if now_unix.saturating_sub(section.fetched_at_unix) >= PAY_NETWORKS_TTL_SECS {
+        return None;
+    }
+    Some(section.networks)
+}
+
+/// Load a fresh cached payment list.
+pub fn load_pay_payments(path: &Path, scheme: &str, now_unix: i64) -> Option<Vec<PayAssetEntry>> {
+    let mut cache = load_pay_cache_file(path);
+    let section = scheme_entry(&mut cache, scheme)?.payments.take()?;
+    if now_unix.saturating_sub(section.fetched_at_unix) >= PAY_NETWORKS_TTL_SECS {
+        return None;
+    }
+    Some(section.payments)
+}
+
+/// Save a network list while preserving other scheme sections.
+pub fn save_pay_networks(
+    path: &Path,
+    scheme: &str,
+    fetched_at_unix: i64,
+    networks: &[String],
+) -> Result<(), CliError> {
+    let mut cache = load_pay_cache_file(path);
+    let entry = scheme_entry(&mut cache, scheme).ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(format!("unknown payment scheme '{scheme}'")),
+    })?;
+    entry.networks = Some(NetworksCacheSection {
+        fetched_at_unix,
+        networks: networks.to_vec(),
+    });
+    write_pay_cache_file(path, &cache)
+}
+
+/// Save a payment list while preserving other scheme sections.
+pub fn save_pay_payments(
+    path: &Path,
+    scheme: &str,
+    fetched_at_unix: i64,
+    payments: &[PayAssetEntry],
+) -> Result<(), CliError> {
+    let mut cache = load_pay_cache_file(path);
+    let entry = scheme_entry(&mut cache, scheme).ok_or_else(|| CliError::ConfigWrite {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(format!("unknown payment scheme '{scheme}'")),
+    })?;
+    entry.payments = Some(PaymentsCacheSection {
+        fetched_at_unix,
+        payments: payments.to_vec(),
+    });
+    write_pay_cache_file(path, &cache)
+}
+
+/// Atomically write a 0600 file and tighten its parent directory.
+pub(crate) fn write_atomic_0600(
+    path: &Path,
+    bytes: &[u8],
+    tmp_prefix: &str,
+) -> Result<(), CliError> {
     let parent = path.parent().ok_or_else(|| CliError::ConfigWrite {
         path: path.to_path_buf(),
         source: std::io::Error::other("cache path has no parent directory"),
@@ -553,6 +915,54 @@ mod tests {
     }
 
     #[test]
+    fn pay_cache_sections_roundtrip_independently() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("pay-networks.toml");
+        let payments = vec![PayAssetEntry {
+            network: "base-sepolia".to_string(),
+            asset: Some("USDC".to_string()),
+            address: "0xabc".to_string(),
+        }];
+        save_pay_networks(&path, "x402", 100, &["base-sepolia".to_string()]).unwrap();
+        save_pay_payments(&path, "x402", 200, &payments).unwrap();
+        save_pay_networks(&path, "mpp", 100, &["tempo-testnet".to_string()]).unwrap();
+
+        assert_eq!(
+            load_pay_networks(&path, "x402", 100).unwrap(),
+            vec!["base-sepolia"]
+        );
+        let got = load_pay_payments(&path, "x402", 200).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].asset.as_deref(), Some("USDC"));
+        assert_eq!(
+            load_pay_networks(&path, "mpp", 100).unwrap(),
+            vec!["tempo-testnet"]
+        );
+
+        assert!(load_pay_payments(&path, "mpp", 100).is_none());
+        assert!(load_pay_networks(&path, "x402", 100 + PAY_NETWORKS_TTL_SECS).is_none());
+    }
+
+    #[test]
+    fn pay_cache_old_formats_are_a_miss() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("pay-networks.toml");
+        fs::write(
+            &path,
+            "[x402]\nfetched_at_unix = 100\ncallable = [\"base-sepolia\"]\npayments = []\n",
+        )
+        .unwrap();
+        assert!(load_pay_networks(&path, "x402", 100).is_none());
+        assert!(load_pay_payments(&path, "x402", 100).is_none());
+
+        save_pay_networks(&path, "mpp", 100, &["tempo-testnet".to_string()]).unwrap();
+        assert_eq!(
+            load_pay_networks(&path, "mpp", 100).unwrap(),
+            vec!["tempo-testnet"]
+        );
+    }
+
+    #[test]
     fn flag_wins_over_config_and_prompt() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -632,7 +1042,6 @@ mod tests {
 
     #[test]
     fn config_dir_ignores_relative_xdg() {
-        // A non-absolute XDG_CONFIG_HOME is bogus per the spec; fall through to HOME.
         let d = resolve_config_dir(
             Some(std::ffi::OsString::from("relative/path")),
             Some(std::ffi::OsString::from("/home/u")),
@@ -726,6 +1135,89 @@ mod tests {
         let cfg = load_from(&path).unwrap().unwrap();
         assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
         assert_eq!(cfg.rpc.endpoint_url.as_deref(), Some("https://x/rpc"));
+    }
+
+    #[test]
+    fn rpc_payment_section_round_trips_through_config_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[rpc.payment]\n\
+             key_file = \"/keys/payer.key\"\n\
+             max_amount = \"10000\"\n\
+             payment_network = \"eip155:84532\"\n\
+             payment_asset = \"0xabc\"\n\
+             svm_rpc_url = \"https://solana.example/rpc\"\n",
+        )
+        .unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        let p = &cfg.rpc.payment;
+        assert_eq!(p.key_file.as_deref(), Some(Path::new("/keys/payer.key")));
+        assert_eq!(p.max_amount.as_deref(), Some("10000"));
+        assert_eq!(p.payment_network.as_deref(), Some("eip155:84532"));
+        assert_eq!(p.payment_asset.as_deref(), Some("0xabc"));
+        assert_eq!(p.svm_rpc_url.as_deref(), Some("https://solana.example/rpc"));
+        assert!(p.key.is_none());
+    }
+
+    #[test]
+    fn rpc_payment_section_is_optional() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc]\nendpoint_url = \"https://x/rpc\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert!(cfg.rpc.payment.key_file.is_none());
+        assert!(cfg.rpc.payment.max_amount.is_none());
+    }
+
+    #[test]
+    fn rpc_payment_max_amount_accepts_toml_integer() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc.payment]\nmax_amount = 10000\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.rpc.payment.max_amount.as_deref(), Some("10000"));
+    }
+
+    #[test]
+    fn rpc_payment_max_amount_rejects_other_types() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc.payment]\nmax_amount = 1.5\n").unwrap();
+        let err = load_from(&path).unwrap_err();
+        assert!(matches!(err, CliError::BadConfig { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn rpc_payment_inline_key_parses_into_trap_field() {
+        // An inline raw key must not break config parsing (unrelated commands
+        // still run); the payment lane rejects it with an actionable error at
+        // resolution time instead.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[rpc.payment]\nkey = \"0xdeadbeef\"\n").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert!(cfg.rpc.payment.key.is_some());
+    }
+
+    #[test]
+    fn save_api_key_preserves_rpc_payment_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[rpc.payment]\nkey_file = \"/keys/payer.key\"\nmax_amount = \"10000\"\n",
+        )
+        .unwrap();
+        save_api_key(&path, "new-key").unwrap();
+        let cfg = load_from(&path).unwrap().unwrap();
+        assert_eq!(cfg.api.key.as_deref(), Some("new-key"));
+        assert_eq!(
+            cfg.rpc.payment.key_file.as_deref(),
+            Some(Path::new("/keys/payer.key"))
+        );
+        assert_eq!(cfg.rpc.payment.max_amount.as_deref(), Some("10000"));
     }
 
     #[test]

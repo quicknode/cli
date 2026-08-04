@@ -40,6 +40,17 @@ pub enum CliError {
     #[error(transparent)]
     Sdk(#[from] SdkError),
 
+    /// A paid call may have settled; maps to exit 3.
+    #[error(
+        "the paid request's outcome is unknown — the payment may have been settled; \
+         check your wallet before retrying"
+    )]
+    PaymentMaybeCharged(#[source] SdkError),
+
+    /// A paid request was refused without settlement; maps to exit 2.
+    #[error("{0}")]
+    PaymentRefused(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -50,25 +61,37 @@ pub enum CliError {
     Format(String),
 }
 
-/// Maps a [`CliError`] to a process exit code per the plan.
-///
-/// - 0: success (never produced here)
-/// - 1: generic CLI failure (arg parse, IO, decode). clap usage errors are
-///   mapped to 1 in main.rs too, so 2 always and only means an API error.
-/// - 2: SdkError::Api (server returned a non-2xx)
-/// - 3: SdkError::Http (network failure)
-/// - 4: NoApiKey / BadConfig
-/// - 5: user cancelled or needs --yes
+/// Map a CLI error to its process exit code.
 pub fn exit_code_for(err: &CliError) -> i32 {
     match err {
         CliError::NoApiKey | CliError::BadConfig { .. } | CliError::ConfigWrite { .. } => 4,
         CliError::Cancelled | CliError::NeedsConfirmation => 5,
+        CliError::PaymentMaybeCharged(_) => 3,
+        CliError::PaymentRefused(_) => 2,
         CliError::Sdk(sdk) => match sdk {
             SdkError::Api { .. } => 2,
             SdkError::Http(_) => 3,
+            SdkError::PaymentUnsupported { .. } | SdkError::PaymentRejected { .. } => 2,
+            SdkError::PaymentIndeterminate => 3,
             _ => 1,
         },
         _ => 1,
+    }
+}
+
+// Map known payment problem types to actionable headlines.
+fn payment_problem_headline(body: &str) -> Option<String> {
+    let problem: serde_json::Value = serde_json::from_str(body).ok()?;
+    let kind = problem.get("type").and_then(|v| v.as_str())?;
+    let slug = kind.rsplit('/').next().unwrap_or(kind);
+    match slug {
+        "insufficient-balance" => Some(
+            "the payment channel has too little deposit left for this request. \
+             Add funds with 'qn rpc mpp top-up --deposit <BASE_UNITS>', or close and \
+             reopen it with 'qn rpc mpp close' then 'qn rpc mpp open'."
+                .to_string(),
+        ),
+        _ => None,
     }
 }
 
@@ -85,6 +108,63 @@ pub fn render(err: &CliError, verbose: bool) -> String {
 /// Like [`render`] but uses the supplied argv values for did-you-mean lookup.
 pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> String {
     match err {
+        CliError::Sdk(SdkError::PaymentUnsupported { offered })
+            if offered.contains("cannot sign") =>
+        {
+            format!("Error: {offered} Nothing was charged.")
+        }
+        CliError::Sdk(SdkError::PaymentUnsupported { offered }) => {
+            if offered.contains("raise max_amount") {
+                let body = match offered.split_once(" Full menu: ") {
+                    Some((lever, _)) if !verbose => lever,
+                    _ => offered.as_str(),
+                };
+                format!(
+                    "Error: {}. Nothing was charged.",
+                    body.trim_end().trim_end_matches('.')
+                )
+            } else {
+                format!(
+                    "Error: no offered payment option matched your configuration \
+                     (check --payment-network, --payment-asset, and --max-amount). Nothing was charged.\n\
+                     Gateway offered: {offered}"
+                )
+            }
+        }
+        CliError::Sdk(SdkError::PaymentRejected { status, body }) => {
+            let reason = payment_rejection_reason(body);
+            let mut msg = format!("Error: the gateway refused the payment (HTTP {status}).");
+            if let Some(r) = &reason {
+                let r = r.trim_end_matches('.');
+                msg.push_str(&format!(" Gateway: {r}."));
+            }
+            msg.push_str(
+                " The signed payment was not accepted, so nothing should have settled. \
+                 Common causes: the wallet is unfunded, or --payment-network/--payment-asset/--max-amount \
+                 don't match an offer (see 'qn rpc x402 supported-payments' / 'qn rpc mpp supported-payments').",
+            );
+            if verbose && reason.is_none() && !body.is_empty() {
+                format!("{msg}\n{body}")
+            } else {
+                msg
+            }
+        }
+        CliError::Sdk(SdkError::PaymentIndeterminate) => {
+            "Error: the paid request was sent but its response was lost — the request \
+             may have been settled; check your wallet before retrying. Do not blindly \
+             re-run this command."
+                .to_string()
+        }
+        CliError::PaymentMaybeCharged(source) => {
+            let msg = "Error: the paid request failed after the payment was submitted — \
+                       the payment may have been settled; check your wallet before \
+                       retrying. Do not blindly re-run this command.";
+            if verbose {
+                format!("{msg}\n{source}")
+            } else {
+                format!("{msg} Re-run with --verbose for the response detail.")
+            }
+        }
         CliError::Sdk(SdkError::Api { status, body }) => {
             render_api_error(status.as_u16(), body, verbose, argv)
         }
@@ -137,9 +217,28 @@ pub fn render_with_argv(err: &CliError, verbose: bool, argv: &[String]) -> Strin
     }
 }
 
-/// Status codes have a small set of canonical user-facing messages. Validation
-/// (400/422) gets the structured body treatment from `parse_api_body`.
+/// Return a short gateway rejection reason, if present.
+fn payment_rejection_reason(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() || trimmed.len() > 200 || trimmed.starts_with('{') {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> String {
+    // Map actionable payment problem types before generic API errors.
+    if code == 402 {
+        if let Some(headline) = payment_problem_headline(body) {
+            let mut out = format!("Error: {headline}");
+            if verbose && !body.is_empty() {
+                out.push('\n');
+                out.push_str(body);
+            }
+            return out;
+        }
+    }
+
     let headline = match code {
         400 | 422 => "invalid request.".to_string(),
         401 | 403 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
@@ -152,8 +251,7 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
         _ => format!("API returned HTTP {code}."),
     };
 
-    // For non-validation status codes, body is mostly noise (server stack traces,
-    // HTML error pages, etc). Only mine it for validation-class errors.
+    // Parse response bodies only for validation errors.
     let parsed = if matches!(code, 400 | 422) {
         parse_api_body(body, argv)
     } else {
@@ -168,8 +266,7 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
             out.push_str(bullet);
         }
     } else if matches!(code, 400 | 422) && !body.is_empty() && !verbose {
-        // We tried to parse and got nothing useful; surface the raw body so
-        // the user isn't left with a bare "invalid request." line.
+        // Preserve an unstructured validation body.
         out.push('\n');
         out.push_str(body.trim());
     }
@@ -182,8 +279,13 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
     if verbose && !body.is_empty() {
         out.push('\n');
         out.push_str(body);
-    } else if matches!(code, 400 | 422) && !parsed.bullets.is_empty() && !body.is_empty() {
-        out.push_str("\nRe-run with --verbose for the full response body.");
+    } else if !body.is_empty() {
+        // 400/422 with nothing parseable already surfaced the raw body above;
+        // everywhere else, point at the flag that reveals it.
+        let raw_body_shown = matches!(code, 400 | 422) && parsed.bullets.is_empty();
+        if !raw_body_shown {
+            out.push_str("\nRe-run with --verbose for the full response body.");
+        }
     }
 
     out
@@ -464,6 +566,153 @@ mod tests {
         assert_eq!(exit_code_for(&CliError::Cancelled), 5);
     }
 
+    // ---- payment errors ----
+
+    fn decode_err() -> SdkError {
+        SdkError::Decode {
+            source: serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+            body: "<html>gateway oops</html>".to_string(),
+        }
+    }
+
+    #[test]
+    fn exit_code_payment_refusals_are_2() {
+        // The gateway said no and nothing settled: an unmatched/unreadable
+        // offer (unsupported) or a 4xx-refused credential (rejected). The
+        // paid lane wraps 5xx rejections into PaymentMaybeCharged before
+        // this mapping ever sees them.
+        let unsupported = CliError::Sdk(SdkError::PaymentUnsupported {
+            offered: "eip155:84532/0xabc amount 999999".to_string(),
+        });
+        let rejected = CliError::Sdk(SdkError::PaymentRejected {
+            status: 402,
+            body: "invalid signature".to_string(),
+        });
+        assert_eq!(exit_code_for(&unsupported), 2);
+        assert_eq!(exit_code_for(&rejected), 2);
+    }
+
+    #[test]
+    fn exit_code_unknown_payment_outcome_is_3() {
+        // Request sent, outcome unknown: the transport-ambiguity bucket, so
+        // scripts can distinguish "safe to retry" (2) from "check wallet" (3).
+        let indeterminate = CliError::Sdk(SdkError::PaymentIndeterminate);
+        let maybe_charged = CliError::PaymentMaybeCharged(decode_err());
+        assert_eq!(exit_code_for(&indeterminate), 3);
+        assert_eq!(exit_code_for(&maybe_charged), 3);
+    }
+
+    #[test]
+    fn renders_payment_unsupported_as_not_charged() {
+        let err = CliError::Sdk(SdkError::PaymentUnsupported {
+            offered: "eip155:84532/0xabc amount 999999".to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("Nothing was charged"), "got: {msg}");
+        assert!(msg.contains("999999"), "got: {msg}");
+        assert!(msg.contains("--max-amount"), "got: {msg}");
+    }
+
+    // When the SDK identifies max_amount as the lever, that sentence leads and
+    // the (long, mostly irrelevant) menu dump is held back for --verbose.
+    #[test]
+    fn renders_over_ceiling_lever_first_and_hides_the_menu() {
+        let err = CliError::Sdk(SdkError::PaymentUnsupported {
+            offered: "every offer for solana:abc/mint1 is above max_amount 100; the cheapest \
+                      is 1000 base units — raise max_amount to at least that. Full menu: \
+                      [a, b, c]"
+                .to_string(),
+        });
+
+        let terse = render(&err, false);
+        assert!(terse.contains("raise max_amount"), "got: {terse}");
+        assert!(terse.contains("Nothing was charged"), "got: {terse}");
+        assert!(
+            !terse.contains("Full menu"),
+            "menu should be hidden: {terse}"
+        );
+        assert!(!terse.contains(".."), "no doubled period: {terse}");
+
+        let verbose = render(&err, true);
+        assert!(verbose.contains("Full menu"), "got: {verbose}");
+    }
+
+    #[test]
+    fn renders_session_insufficient_balance_with_a_top_up_hint() {
+        // The gateway's RFC 9457 problem document for an exhausted channel. The
+        // raw JSON must not reach the user; the message names the fix.
+        let err = CliError::Sdk(SdkError::Api {
+            status: reqwest::StatusCode::PAYMENT_REQUIRED,
+            body: r#"{"type":"https://paymentauth.org/problems/session/insufficient-balance","title":"Insufficient Balance","status":402,"detail":"Insufficient balance: requested 10, available 0."}"#
+                .to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("qn rpc mpp top-up"), "got: {msg}");
+        assert!(!msg.contains("API returned HTTP 402"), "got: {msg}");
+        assert!(!msg.contains("paymentauth.org"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_unknown_402_problem_with_the_generic_headline() {
+        let err = CliError::Sdk(SdkError::Api {
+            status: reqwest::StatusCode::PAYMENT_REQUIRED,
+            body: r#"{"type":"https://paymentauth.org/problems/payment-required"}"#.to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("402"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_payment_rejected_as_refused_without_settling() {
+        // A short gateway reason surfaces in the default message (the SDK has
+        // already reduced its JSON error shape to this string).
+        let err = CliError::Sdk(SdkError::PaymentRejected {
+            status: 402,
+            body: "insufficient funds".to_string(),
+        });
+        let msg = render(&err, false);
+        assert!(msg.contains("402"), "got: {msg}");
+        assert!(msg.contains("refused"), "got: {msg}");
+        assert!(msg.contains("nothing should have settled"), "got: {msg}");
+        assert!(msg.contains("Gateway: insufficient funds"), "got: {msg}");
+    }
+
+    #[test]
+    fn payment_rejected_hides_long_body_unless_verbose() {
+        // A long/JSON body (e.g. a full 402 payment menu) is not a reason: the
+        // default message stays generic and the raw body appears under --verbose.
+        let body = format!("{{\"accepts\":[{}]}}", "\"x\",".repeat(80));
+        let err = CliError::Sdk(SdkError::PaymentRejected {
+            status: 402,
+            body: body.clone(),
+        });
+        let msg = render(&err, false);
+        assert!(
+            !msg.contains(&body),
+            "long body must not leak by default: {msg}"
+        );
+        assert!(msg.contains("supported-payments"), "got: {msg}");
+        let verbose = render(&err, true);
+        assert!(verbose.contains("accepts"), "got: {verbose}");
+    }
+
+    #[test]
+    fn renders_payment_indeterminate_as_possibly_settled() {
+        let msg = render(&CliError::Sdk(SdkError::PaymentIndeterminate), false);
+        assert!(msg.contains("may have been settled"), "got: {msg}");
+        assert!(msg.contains("check your wallet"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_payment_maybe_charged_with_source_when_verbose() {
+        let err = CliError::PaymentMaybeCharged(decode_err());
+        let msg = render(&err, false);
+        assert!(msg.contains("may have been settled"), "got: {msg}");
+        assert!(!msg.contains("gateway oops"), "got: {msg}");
+        let verbose = render(&err, true);
+        assert!(verbose.contains("gateway oops"), "got: {verbose}");
+    }
+
     #[test]
     fn renders_401_as_unauthorized() {
         let msg = render(&api_err(401), false);
@@ -492,6 +741,19 @@ mod tests {
     fn non_verbose_404_omits_body() {
         let msg = render(&api_err(404), false);
         assert!(!msg.contains("boom"), "got: {msg}");
+    }
+
+    #[test]
+    fn non_verbose_402_hints_at_verbose() {
+        // A gateway 402 carries an actionable problem+json body; without
+        // --verbose the message must say how to see it.
+        let body = r#"{"title":"Insufficient Balance","status":402,"detail":"Insufficient balance: requested 10, available 0."}"#;
+        let msg = render(&api_err_with(402, body), false);
+        assert!(msg.contains("402"), "got: {msg}");
+        assert!(msg.contains("--verbose"), "got: {msg}");
+        assert!(!msg.contains("Insufficient balance"), "got: {msg}");
+        let verbose = render(&api_err_with(402, body), true);
+        assert!(verbose.contains("Insufficient balance"), "got: {verbose}");
     }
 
     // ---- body parsing ----

@@ -327,6 +327,240 @@ API key, so subsequent calls skip the mint round trip while it's valid. Results 
 schemaless JSON; `-o json|yaml|toon` controls the format (`table`/`md` fall back to
 JSON).
 
+#### Micropayments
+
+Pay for RPC with crypto instead of an account API key — no login, no Tooling
+Access. There are four ways to pay, all through the same wallet and flags:
+
+| Path | Flag / verbs | When |
+| --- | --- | --- |
+| x402 per-request | `--x402` | One-off calls; sign a payment each call. |
+| MPP per-request | `--mpp` | One-off calls on Tempo; settlement receipt per call. |
+| x402 drawdown | `qn rpc x402` + `--x402-drawdown` | Buy prepaid credits once, then spend them. |
+| MPP session | `qn rpc mpp` + `--mpp-session` | Open a channel once, then pay per call with a voucher. |
+
+**This moves real funds** (testnet tokens are still real transfers): use a
+dedicated, minimally funded wallet. Every paid call is single-attempt —
+`--retries` never applies (a retried payment could double-charge).
+
+Each walkthrough below is complete on its own, testnet-first.
+
+##### Get a wallet
+
+Every path needs a payment wallet. Two options:
+
+1. **Generate one locally** (stored at `0600` under `~/.config/qn/wallets/`,
+   referenced by name with `--payment-wallet`):
+
+   ```sh
+   qn wallet generate --vm evm --name payer       # evm also covers MPP/Tempo
+   qn wallet generate --vm svm --name sol-payer   # svm for x402/Solana
+   ```
+
+   `generate` prints the address (and a QR on a terminal) to fund. The key is
+   stored unencrypted — treat each wallet as a dedicated, minimally funded hot
+   wallet. **Quicknode does not hold, back up, or recover it**; backing up the
+   key file is your responsibility.
+
+2. **Bring your own key** — point `--payment-key-file <PATH>` at a file holding
+   the raw key (EVM/Tempo hex, Solana base58), or set `key_file = "<path>"`
+   under `[rpc.payment]`. The key comes only from a file or a stored wallet —
+   never an environment variable, never a flag value, never inline in config,
+   never printed.
+
+Each gateway exposes two discovery lists, no API key needed. `qn rpc
+{x402,mpp} supported-networks` (alias `networks`) shows the networks you can
+make paid calls to — each slug is a valid `--network`. `qn rpc {x402,mpp}
+supported-payments` (alias `payments`) shows the payment options the gateway
+accepts — each row's network/address pair is a ready
+`--payment-network`/`--payment-asset`. Both are cached at
+`~/.config/qn/pay-networks.toml` (24h).
+
+##### Path 1 — x402 per-request
+
+Sign an x402 payment on each call (EVM or Solana stablecoin):
+
+```sh
+qn wallet generate --vm evm --name payer           # fund the printed address with Base Sepolia USDC
+qn rpc call eth_blockNumber \
+    --network ethereum-mainnet --x402 \
+    --payment-wallet payer \
+    --payment-network base-sepolia \
+    --payment-asset USDC \
+    --max-amount 1000
+```
+
+`--network` is the chain you *query*; `--payment-network` is the chain the
+payment *settles* on (independent — above, testnet USDC pays for a mainnet
+query). `--max-amount` is the per-call ceiling in
+integer base units (e.g. `1000` = 0.001 USDC); an offer above it is refused
+before anything is signed. For Solana, generate a `--vm svm` wallet and use
+`--network solana-devnet --payment-network solana-devnet` (add `--svm-rpc-url`
+at volume; the public default rate-limits).
+
+##### Path 2 — MPP per-request (charge)
+
+The same as path 1, paying on Tempo via the MPP gateway. The EVM wallet works
+(MPP uses the same secp256k1 key format); `--receipt` wraps the result with
+the settlement transaction hash:
+
+```sh
+qn wallet generate --vm evm --name payer           # fund on Tempo testnet
+qn rpc call eth_blockNumber \
+    --network ethereum-mainnet --mpp --receipt \
+    --payment-wallet payer \
+    --payment-network tempo-testnet \
+    --payment-asset USDC \
+    --max-amount 1000
+```
+
+`--receipt` wraps stdout as `{"result": ..., "payment_receipt": ...}` (the
+receipt carries `method`/`status`/`timestamp`/`reference`); without it, paid
+output is shaped exactly like an unpaid call. On x402 the receipt is `null`.
+
+##### Path 3 — x402 drawdown (buy credits, then call)
+
+Authenticate once, buy a block of prepaid credits when the gateway returns its
+credit offer, then spend them with no per-call signing (one credit per
+successful response). EVM and Solana payment wallets are supported:
+
+```sh
+qn wallet generate --vm evm --name payer           # dedicated wallet
+
+# Testnet only: fund the wallet from the faucet (Base Sepolia, once per
+# account). Prints the funding tx; mainnet wallets are funded normally.
+qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia
+
+# Buy prepaid credits with the funded wallet (moves real funds; gated — pass
+# --yes to skip the prompt).
+qn rpc x402 buy-credits --network ethereum-mainnet --payment-wallet payer \
+    --payment-network base-sepolia --payment-asset USDC --max-amount 10000000
+
+# Check the balance (prints the bare number).
+qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia
+
+# Spend credits on calls: 1 credit per call, no per-call payment, so only
+# the wallet is needed — no asset or spend ceiling. Credits are not
+# network-scoped: query any supported network, not just the one you paid on.
+qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown --payment-wallet payer
+```
+
+Solana Devnet USDC can fund the drawdown wallet directly. Solana has no x402
+faucet:
+
+```sh
+qn wallet generate --vm svm --name sol-payer
+qn rpc x402 buy-credits --network solana-devnet --payment-wallet sol-payer \
+    --payment-network solana-devnet \
+    --payment-asset 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
+    --max-amount 1000000
+qn rpc call getSlot --network solana-devnet --x402-drawdown \
+    --payment-wallet sol-payer --payment-network solana-devnet
+```
+
+The gateway session (a JWT) is authenticated once and cached (0600) under the
+config dir, refreshed automatically. Out of credits points you back at
+`qn rpc x402 buy-credits`.
+
+> **Note:** `buy-credits` selects the gateway's largest regular x402 offer,
+> which buys the credit block. `GatewayWalletBatched` is the separate Circle
+> Gateway nanopayment option, not the credit offer. It requires USDC deposited
+> in the Circle Gateway wallet contract and is not used by `buy-credits`.
+> Path 1 (`--x402`, per request) pays for calls directly.
+
+##### Path 4 — MPP session (open a channel, then call)
+
+Open an on-chain escrow payment channel once, then pay per call with a
+cumulative EIP-712 voucher (no on-chain transaction per call):
+
+```sh
+qn wallet generate --vm evm --name payer           # evm covers Tempo; fund the address
+
+# Open a channel by depositing into the escrow (moves real funds; gated).
+qn rpc mpp open --deposit 1000000 --max-amount 1000000 \
+    --payment-wallet payer --payment-network tempo-testnet --payment-asset USDC
+
+# Pay for calls from the channel — one cumulative voucher per call. Only the
+# call names --network: the channel is not network-scoped, so query any
+# supported network. Here a Tempo testnet deposit pays for an Ethereum mainnet
+# call.
+qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session \
+    --payment-wallet payer --payment-network tempo-testnet \
+    --payment-asset USDC --max-amount 1000000
+
+# Inspect the channel from the local record (free, no network call).
+qn rpc mpp status --payment-wallet payer \
+    --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
+
+# Ask the gateway instead and re-sync the accepted spend. This spends one
+# request unit from the deposit: the gateway prices every session request.
+qn rpc mpp status --verify --payment-wallet payer \
+    --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
+
+# Add more deposit, or close to settle on-chain and refund the unused balance.
+qn rpc mpp top-up --deposit 1000000 \
+    --payment-wallet payer --payment-network tempo-testnet \
+    --payment-asset USDC --max-amount 1000000
+qn rpc mpp close --payment-wallet payer \
+    --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
+```
+
+Channel state is cached (0600) under the config dir, keyed by wallet + payment
+network + payment asset. Two payment assets on one payment network are separate
+channels. Exhausting the deposit points you at `qn rpc mpp top-up`; after
+`close`, open a new channel to keep paying by session.
+
+##### Shared flags, config, and wallet management
+
+The flag stack is the same across all four paths:
+
+- `--payment-network` takes a Quicknode network name (`base-sepolia`,
+  `solana-devnet`, `tempo-testnet`, ...) or a raw CAIP-2 id (`eip155:84532`,
+  `solana:EtWTRA...`); anything with a `:` passes through verbatim.
+- `--payment-asset` takes a token address (EVM), a mint (Solana), or a symbol
+  like `USDC` resolved to that network's address.
+- `--max-amount` is the per-signature spend ceiling in integer base units;
+  offers/deposits above it are refused before anything is signed.
+- Exit code 2 means the gateway refused and nothing settled; exit 3 means the
+  outcome is unknown (payment submitted, may have settled — check the wallet
+  before re-running).
+
+Store the parameters once in `~/.config/qn/config.toml` and the per-request
+invocation shrinks to just the scheme flag (config supplies values but never
+activates payment by itself):
+
+```toml
+[rpc.payment]
+wallet          = "payer"          # a stored wallet name (or key_file = "<path>")
+max_amount      = "10000"
+payment_network = "base-sepolia"   # network name or CAIP-2 id
+payment_asset   = "USDC"           # symbol (resolved per network), or a raw address/mint
+```
+
+```sh
+qn rpc call eth_blockNumber --network ethereum-mainnet --x402
+```
+
+Manage stored wallets with the top-level `qn wallet` noun (see
+[Wallets](#wallets)).
+
+### Wallets
+
+`qn wallet` (alias `wallets`) manages the local store of payment wallets the
+paid RPC lane uses (see [Micropayments](#micropayments)). It needs no API key
+or login:
+
+```sh
+qn wallet generate --vm evm --name payer      # create + store; prints the address and a QR to fund
+qn wallet list                                # names, vm, address (never the key)
+qn wallet show payer                          # bare address to stdout; QR + key path to stderr
+qn wallet rm payer                            # gated: --yes to confirm; destroys the local key
+```
+
+Keys are stored unencrypted at `0600` under `~/.config/qn/wallets/`. Treat each
+wallet as a dedicated, minimally funded hot wallet: it lives only on this
+machine, and Quicknode does not hold, back up, or recover it.
+
 ### Other
 
 ```sh

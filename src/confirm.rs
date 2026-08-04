@@ -84,6 +84,7 @@ pub fn prompt_yes_no(message: &str) -> Result<bool, CliError> {
     Confirm::new()
         .with_prompt(message)
         .default(false)
+        .report(false)
         .interact()
         .map_err(|e| CliError::Io(std::io::Error::other(e)))
 }

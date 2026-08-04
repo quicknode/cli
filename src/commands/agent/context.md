@@ -61,6 +61,16 @@ Branch on these — especially **4** and **5**.
 | 5 | Cancelled, or confirmation required and not granted (see §4). |
 | 130 | Interrupted (SIGINT). |
 
+On a **per-request paid** `rpc call` (`--x402`/`--mpp`, §6) the 2/3 split carries
+payment semantics: **2** means the gateway refused and nothing settled (an
+unmatched or unreadable offer, or a 4xx-refused payment), while **3** means the
+outcome is unknown — the payment was submitted and **may have been charged** (a
+gateway 5xx after the paid resend, a lost response, or an uninterpretable
+post-payment response). On exit 3, check the wallet before re-running; never
+blind-retry a paid call. A **drawdown** call (`--x402-drawdown`) spends prepaid
+credits, not per-call funds: running out surfaces an actionable exit-2 error
+pointing at `qn rpc x402 buy-credits`, and a credit is drawn only on success.
+
 ## 4. Non-interactive & confirmation behavior
 
 Destructive commands are gated. On a TTY they prompt `y/N`. To proceed without a
@@ -96,6 +106,13 @@ if you need it.
   nothing — it is read-only and safe to retry.
 - `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
   so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
+- A **paid** `rpc call` (`--x402`/`--mpp`/`--x402-drawdown`/`--mpp-session`)
+  never auto-retries — `--retries` does not apply. A per-request attempt can
+  move funds, and after a lost response the previous attempt may already have
+  settled (§3, exit 3). A drawdown call draws 1 credit per success and is
+  single-attempt (the one exception is a transparent re-auth when the session
+  token expired, which draws nothing). A session call signs one cumulative
+  voucher and is single-attempt.
 
 ## 6. Command catalog
 
@@ -128,6 +145,76 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   available keys. Custom endpoint: `--endpoint-url <URL>` (or `[rpc] endpoint_url`
   in config) sends the call to a fully-formed HTTP URL that authenticates itself
   (no token minted); it's mutually exclusive with `--network`.
+  **Paid lane**: use a gateway micropayment instead of an API key, login, or
+  Tooling Access. Choose one mode before building the command:
+
+  | Mode | Use it when | Call flag | What pays |
+  |------|-------------|-----------|-----------|
+  | x402 per request | You make a small number of calls. | `--x402` | A signed payment on each call. |
+  | MPP per request | You make a small number of calls through Tempo. | `--mpp` | A signed Tempo payment on each call. |
+  | x402 drawdown | You want prepaid credits and no per-call signing. | `--x402-drawdown` | One credit per successful response. |
+  | MPP session | You want repeated calls from a funded Tempo channel. | `--mpp-session` | A cumulative voucher from the channel. |
+
+  Start with discovery. These commands need no API key:
+
+  ```sh
+  qn rpc x402 supported-networks
+  qn rpc x402 supported-payments
+  qn rpc mpp supported-networks
+  qn rpc mpp supported-payments
+  ```
+
+  Use a supported gateway slug for `--network`. It selects the chain the
+  gateway call queries. Use `--payment-network` for the chain that settles the
+  payment. They can differ. For example, `--network ethereum-mainnet` can query
+  Ethereum while `--payment-network base-sepolia` settles an x402 payment.
+
+  `--payment-asset` accepts a token symbol, EVM contract address, or Solana
+  mint. `--max-amount` sets the per-call or per-action ceiling in integer base
+  units. An offer above that ceiling is refused before signing. The CLI has no
+  default ceiling.
+
+  The key source precedence is `--payment-key-file` > `--payment-wallet` >
+  `key_file` > `wallet` in `[rpc.payment]`. Keys come from a file or a stored
+  wallet. The CLI does not read payment keys from environment variables,
+  command-line values, or inline config. Config supplies values but never
+  activates a mode; the call still needs `--x402`, `--mpp`,
+  `--x402-drawdown`, or `--mpp-session`.
+
+  `--receipt` changes paid-call stdout to
+  `{"result": ..., "payment_receipt": ...}`. MPP includes the settlement
+  reference. x402 returns `null`. Without `--receipt`, paid calls use the same
+  result shape as unpaid calls. Paid calls cannot use `--endpoint-url`.
+
+  **x402 drawdown** uses a cached gateway session. `qn rpc x402 buy-credits`
+  signs the credit purchase and requires the full payment flags. `balance` and
+  `drip` authenticate the wallet but do not sign a payment, so they need only
+  the wallet and payment network. `drip` works on Base Sepolia only. Fund
+  Solana wallets out of band. `buy-credits` is gated and needs `--yes` in a
+  script. `qn rpc call --x402-drawdown` needs the query network and wallet; it
+  uses one credit after a successful response and does not need an asset or
+  spend ceiling. The pay network defaults to the query network. Credits can pay
+  for calls to any supported query network.
+
+  **MPP session** uses a cached Tempo escrow channel. `open --deposit` funds
+  the channel, `top-up --deposit` adds funds, `status` reads the local record,
+  and `close` settles and refunds the unused balance. These lifecycle commands
+  identify the channel with `--payment-network` and `--payment-asset`; they do
+  not take a query `--network`. `status --verify` contacts the gateway and
+  spends one request unit. `--mpp-session` needs an open channel and adds the
+  query `--network`. The channel can fund calls to any supported query network.
+  `open`, `top-up`, and `close` are gated. A lost channel record under
+  `<config-dir>/qn/channels.toml` requires opening a new channel.
+- `wallet` — the local store of payment wallets for the paid RPC lane; no API
+  key or login required. `qn wallet generate --vm <evm|svm> --name <NAME>`
+  creates and stores a dedicated payment wallet (raw key at 0600 under
+  `<config-dir>/qn/wallets/`, `evm` also covers MPP/Tempo), printing its
+  address (and a QR to fund it on a terminal); `qn wallet list`/`show <NAME>`
+  display stored wallets (address only, never the key) and the key file path;
+  `qn wallet rm <NAME>` deletes one (gated: `--yes`, or exit 5 in scripts).
+  Reference a wallet on a paid call with `--payment-wallet <NAME>`. These
+  wallets live only on this machine — Quicknode does not hold, back up, or
+  recover them; backing up the key file is the user's job.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
@@ -197,9 +284,79 @@ qn rpc call eth_blockNumber --endpoint-url https://my-endpoint.example/rpc
 is enabling Tooling Access (or pass `--yes` to enable on first use). A custom
 `--endpoint-url` (or `[rpc] endpoint_url` in config) bypasses that entirely.
 
+**Choose a paid RPC mode:**
+
+Discovery and wallet setup come first. Fund the address printed by
+`qn wallet generate` before you run a paid command.
+
+```sh
+qn rpc x402 supported-networks
+qn rpc x402 supported-payments
+qn rpc mpp supported-networks
+qn rpc mpp supported-payments
+qn wallet generate --vm evm --name payer
+```
+
+**x402 per request:** sign one payment for each call. Use this for occasional
+calls. The query network and settlement network can differ.
+
+```sh
+qn rpc call eth_blockNumber --network ethereum-mainnet --x402 \
+  --payment-wallet payer --payment-network base-sepolia \
+  --payment-asset USDC --max-amount 1000
+```
+
+**MPP per request:** pay each call on Tempo. Use the same EVM wallet and add
+`--receipt` when you need the settlement reference.
+
+```sh
+qn rpc call eth_blockNumber --network ethereum-mainnet --mpp --receipt \
+  --payment-wallet payer --payment-network tempo-testnet \
+  --payment-asset USDC --max-amount 1000
+```
+
+**x402 drawdown:** buy credits once, then spend one credit per successful call.
+Use this when you want to avoid signing each call.
+
+```sh
+qn rpc x402 buy-credits --network ethereum-mainnet --yes \
+  --payment-wallet payer --payment-network base-sepolia \
+  --payment-asset USDC --max-amount 10000000
+qn rpc x402 balance --payment-wallet payer --payment-network base-sepolia
+qn rpc call eth_blockNumber --network ethereum-mainnet --x402-drawdown \
+  --payment-wallet payer
+```
+
+**MPP session:** deposit into a Tempo channel, then pay with cumulative
+vouchers. Use this for repeated calls. The channel's payment network and asset
+identify the channel; the call's `--network` identifies the query chain.
+
+```sh
+qn rpc mpp open --deposit 1000000 --yes \
+  --payment-wallet payer --payment-network tempo-testnet \
+  --payment-asset USDC --max-amount 1000000
+qn rpc call eth_blockNumber --network ethereum-mainnet --mpp-session \
+  --payment-wallet payer --payment-network tempo-testnet \
+  --payment-asset USDC --max-amount 1000000
+qn rpc mpp status --payment-wallet payer \
+  --payment-network tempo-testnet --payment-asset USDC --max-amount 1000000
+```
+
+Use `qn rpc mpp top-up` after the channel runs low. Use `qn rpc mpp close` to
+settle the channel and refund its unused balance. Both commands need the same
+channel flags and `--yes` in a script.
+
+For Solana x402, generate an SVM wallet and set both networks to
+`solana-devnet`. Set `--svm-rpc-url` when the public Solana RPC rate-limits the
+payment build.
+
 ## 8. Gotchas & safety rails
 
 - Mutations are never retried; re-running a failed create can double-provision (§5).
+- Paid `rpc call` moves real funds and never auto-retries; exit 3 means the
+  payment may have settled — check the wallet before re-running (§3, §5). The
+  CLI never prints the payment key; it comes only from a key file or a stored
+  wallet (never an env var, never argv, never inline in config).
 - No account-wide wipe command exists by design (§4).
 - Piped output defaults to `json`; pass `-o toon` for the compact LLM form (§2).
 - `--base-url` overrides the API host; it exists for testing.

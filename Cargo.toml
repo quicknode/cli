@@ -21,7 +21,11 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-quicknode-sdk = "0.7"
+quicknode-sdk = { version = "0.8.1", features = [
+  "payments",       # x402/EVM
+  "payments-svm",   # + x402/Solana
+  "payments-tempo", # + MPP/Tempo
+] }
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -42,6 +46,14 @@ url = "2"
 # Stable fingerprint of the API key for scoping the JWT token cache to an
 # account. The key itself is never written to the cache — only this hash.
 sha2 = "0.10"
+qrcode = { version = "0.14", default-features = false }
+# Direct HTTP for the keyless payable-networks discovery fetch (the paid
+# gateways' public /networks + /discovery/resources endpoints, which the SDK
+# sub-clients don't cover). rustls matches the SDK's TLS backend.
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false }

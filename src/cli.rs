@@ -155,8 +155,12 @@ pub enum Command {
     /// Run SQL queries and inspect cluster schemas.
     Sql(commands::sql::Args),
 
-    /// Make JSON-RPC calls against your Tooling Access endpoint.
+    /// Make RPC calls.
     Rpc(commands::rpc::Args),
+
+    /// Manage local payment wallets for the paid RPC lane (`--x402`/`--mpp`).
+    #[command(visible_alias = "wallets")]
+    Wallet(commands::wallet::Args),
 
     /// Manage Tooling Access (the endpoint `qn rpc` uses).
     #[command(name = "tooling-access")]
@@ -210,8 +214,7 @@ impl Cli {
             config_file: self.config_file.clone(),
             format: self.format,
             wide: self.wide,
-            // format resolved-from-config in Ctx::from_global; auth.rs falls
-            // back to Table directly if it stays None there.
+            // Resolve format defaults in the context.
             no_color: self.no_color,
             quiet: self.quiet,
             verbose: self.verbose,
@@ -253,9 +256,12 @@ impl Cli {
             Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
             Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
             Command::Sql(args) => commands::sql::run(args, Ctx::from_global(global)?).await,
-            // rpc builds its own Ctx (it seeds the SDK from the on-disk token
-            // cache before construction), so it takes `global` directly.
+            // RPC resolves its own context for token-cache seeding.
             Command::Rpc(args) => commands::rpc::run(args, global).await,
+            // Wallet management is local and keyless.
+            Command::Wallet(args) => {
+                commands::wallet::run(args, Ctx::from_global_keyless(global)?).await
+            }
             Command::ToolingAccess(args) => {
                 commands::tooling_access::run(args, Ctx::from_global(global)?).await
             }

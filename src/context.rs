@@ -114,13 +114,20 @@ pub fn user_agent() -> String {
 /// SDK's supported way to replace its auto-generated `User-Agent`.
 pub fn sdk_config(api_key: String) -> SdkFullConfig {
     let mut full = SdkFullConfig::from_api_key(api_key);
+    apply_user_agent(&mut full);
+    full
+}
+
+/// Installs the CLI `User-Agent` header on `full`. Shared by the keyed
+/// ([`sdk_config`]) and keyless ([`Ctx::from_global_keyless_payment`])
+/// construction paths.
+fn apply_user_agent(full: &mut SdkFullConfig) {
     let mut headers = std::collections::HashMap::new();
     headers.insert("User-Agent".to_string(), user_agent());
     full.http = Some(HttpConfig {
         headers: Some(headers),
         ..Default::default()
     });
-    full
 }
 
 /// Points every sub-client at a custom host, suffixing each with its own base
@@ -187,6 +194,59 @@ impl Ctx {
         Self::build(global, seed, config_endpoint_url)
     }
 
+    /// Build a keyless SDK context for paid RPC calls.
+    pub fn from_global_keyless_payment(
+        global: GlobalArgs,
+        payment: quicknode_sdk::PaymentConfig,
+    ) -> Result<Self, CliError> {
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let (format, wide) = global.resolve_output(stdout_is_tty);
+
+        let mut full = SdkFullConfig::keyless();
+        apply_user_agent(&mut full);
+        full.rpc = Some(RpcConfig {
+            payment: Some(payment),
+            ..Default::default()
+        });
+
+        let sdk = QuicknodeSdk::new(&full)?;
+        let out = OutputCtx::detect_with(
+            format,
+            global.no_color,
+            global.quiet,
+            global.verbose,
+            wide,
+            stdout_is_tty,
+            std::env::var_os("NO_COLOR"),
+            std::env::var("TERM").ok(),
+        );
+
+        Ok(Self { sdk, out, global })
+    }
+
+    /// Build a keyless SDK context for local-only commands.
+    pub fn from_global_keyless(global: GlobalArgs) -> Result<Self, CliError> {
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let (format, wide) = global.resolve_output(stdout_is_tty);
+
+        let mut full = SdkFullConfig::keyless();
+        apply_user_agent(&mut full);
+
+        let sdk = QuicknodeSdk::new(&full)?;
+        let out = OutputCtx::detect_with(
+            format,
+            global.no_color,
+            global.quiet,
+            global.verbose,
+            wide,
+            stdout_is_tty,
+            std::env::var_os("NO_COLOR"),
+            std::env::var("TERM").ok(),
+        );
+
+        Ok(Self { sdk, out, global })
+    }
+
     fn build(
         global: GlobalArgs,
         rpc_seed: Option<CachedToken>,
@@ -205,11 +265,7 @@ impl Ctx {
 
         let mut full = sdk_config(api_key.clone());
 
-        // The `[rpc] endpoint_url` config default becomes the client-wide custom
-        // URL (a per-call `--endpoint-url` overrides it in the call itself). We
-        // validate it here so a malformed config value fails with a clear error
-        // rather than at call time. `seed` and `endpoint_url` coexist harmlessly:
-        // the SDK ignores the seed when a custom URL is set.
+        // Validate the config URL before building the SDK.
         let rpc_endpoint_url = match rpc_endpoint_url {
             Some(u) => Some(validate_endpoint_url(&u)?),
             None => None,
@@ -222,20 +278,12 @@ impl Ctx {
             });
         }
 
-        // --base-prefix only makes sense when overriding the host. Composing it
-        // against the default prod host isn't supported, so fail loudly rather
-        // than silently ignore it.
         if global.base_prefix.is_some() && global.base_url.is_none() {
             return Err(CliError::Arg(
                 "--base-prefix requires --base-url".to_string(),
             ));
         }
 
-        // --base-url applies to every sub-client. Useful for wiremock tests and
-        // on-prem mirrors. Each sub-client has its own fixed suffix; an optional
-        // --base-prefix is inserted between the host and that suffix for
-        // reverse-proxy / gateway environments. Tooling Access / RPC minting
-        // lives on the admin `v0` base, so no separate RPC base is needed here.
         if let Some(base) = &global.base_url {
             let host = validate_base_url(base)?;
             let prefix = match &global.base_prefix {
@@ -330,7 +378,6 @@ fn validate_base_prefix(prefix: &str) -> Result<String, CliError> {
     }
     let inner = trimmed.trim_matches('/');
     if inner.is_empty() {
-        // Bare "/" (or "///") carries no prefix.
         return Ok(String::new());
     }
     let normalized = format!("/{inner}");
@@ -501,7 +548,6 @@ mod tests {
             http.headers.as_ref().and_then(|h| h.get("User-Agent")),
             Some(&user_agent())
         );
-        // SDK defaults (timeout, pooling) must stay untouched.
         assert_eq!(http.timeout_secs, None);
         assert_eq!(http.pool_max_idle_per_host, None);
     }
