@@ -1472,6 +1472,163 @@ async fn x402_solana_drawdown_authenticates_with_siwx_and_uses_bearer() {
     assert!(!body["signature"].as_str().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn x402_solana_drawdown_reuses_cached_session() {
+    let server = MockServer::start().await;
+    mount_solana_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/solana-devnet"))
+        .and(header("authorization", "Bearer jwt-solana"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1, "result": 1234
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let generated = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "wallet",
+            "generate",
+            "--vm",
+            "svm",
+            "--name",
+            "sol-payer",
+        ],
+    )
+    .await;
+    assert_eq!(generated.exit_code, 0, "stderr={}", generated.stderr);
+
+    let args = [
+        "--config-file",
+        cfg.as_str(),
+        "rpc",
+        "call",
+        "getSlot",
+        "--network",
+        "solana-devnet",
+        "--x402-drawdown",
+        "--payment-wallet",
+        "sol-payer",
+        "--payment-network",
+        "solana-devnet",
+    ];
+    let first = run_qn(&server.uri(), &args).await;
+    assert_eq!(first.exit_code, 0, "first stderr={}", first.stderr);
+    let second = run_qn(&server.uri(), &args).await;
+    assert_eq!(second.exit_code, 0, "second stderr={}", second.stderr);
+}
+
+struct SolanaAuthThenRefresh {
+    calls: AtomicUsize,
+}
+
+impl Respond for SolanaAuthThenRefresh {
+    fn respond(&self, _req: &Request) -> ResponseTemplate {
+        let token = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            "jwt-solana-old"
+        } else {
+            "jwt-solana-new"
+        };
+        ResponseTemplate::new(200).set_body_json(json!({
+            "token": token,
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "accountId": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1:11111111111111111111111111111111"
+        }))
+    }
+}
+
+struct SolanaExpiredThenOk {
+    calls: AtomicUsize,
+}
+
+impl Respond for SolanaExpiredThenOk {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let expected = if n == 0 {
+            "Bearer jwt-solana-old"
+        } else {
+            "Bearer jwt-solana-new"
+        };
+        assert_eq!(req.headers.get("authorization").unwrap(), expected);
+        if n == 0 {
+            ResponseTemplate::new(401).set_body_json(json!({
+                "error": "token_expired", "message": "session token expired"
+            }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1, "result": 1234
+            }))
+        }
+    }
+}
+
+#[tokio::test]
+async fn x402_solana_drawdown_reauthenticates_on_expired_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(SolanaAuthThenRefresh {
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/solana-devnet"))
+        .respond_with(SolanaExpiredThenOk {
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_control_plane_expect_zero(&server).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let generated = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "wallet",
+            "generate",
+            "--vm",
+            "svm",
+            "--name",
+            "sol-payer",
+        ],
+    )
+    .await;
+    assert_eq!(generated.exit_code, 0, "stderr={}", generated.stderr);
+
+    let out = run_qn(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "rpc",
+            "call",
+            "getSlot",
+            "--network",
+            "solana-devnet",
+            "--x402-drawdown",
+            "--payment-wallet",
+            "sol-payer",
+            "--payment-network",
+            "solana-devnet",
+        ],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
 /// Return an expired-token response once, then success.
 struct ExpiredThenOk {
     status: u16,
