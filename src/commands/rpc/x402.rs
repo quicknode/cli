@@ -302,7 +302,7 @@ async fn run_buy_credits(args: PaymentArgs, global: GlobalArgs) -> Result<(), Cl
 // Build the next drawdown command. Credits are not network-scoped.
 fn drawdown_call_hint(args: &PaymentArgs, payment: &PaymentConfig, color: bool) -> String {
     let (method, query_network) = if payment.pay_network.starts_with("solana:") {
-        ("getSlot", "solana-devnet")
+        ("getSlot", "solana-mainnet")
     } else {
         ("eth_blockNumber", EXAMPLE_QUERY_NETWORK)
     };
