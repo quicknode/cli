@@ -65,7 +65,9 @@ jobs:
         with:
           repository: quicknode/sdk
           ref: feat/x402-solana-drawdown
-          path: ../sdk
+          path: sdk
+      - name: Link local SDK dependency
+        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -135,7 +137,9 @@ jobs:
         with:
           repository: quicknode/sdk
           ref: feat/x402-solana-drawdown
-          path: ../sdk
+          path: sdk
+      - name: Link local SDK dependency
+        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -204,7 +208,9 @@ jobs:
         with:
           repository: quicknode/sdk
           ref: feat/x402-solana-drawdown
-          path: ../sdk
+          path: sdk
+      - name: Link local SDK dependency
+        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"
       - name: Install cached dist
         uses: actions/download-artifact@v8
         with:
@@ -260,7 +266,9 @@ jobs:
         with:
           repository: quicknode/sdk
           ref: feat/x402-solana-drawdown
-          path: ../sdk
+          path: sdk
+      - name: Link local SDK dependency
+        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"
       - name: Install cached dist
         uses: actions/download-artifact@v8
         with:
@@ -389,4 +397,6 @@ jobs:
         with:
           repository: quicknode/sdk
           ref: feat/x402-solana-drawdown
-          path: ../sdk
+          path: sdk
+      - name: Link local SDK dependency
+        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"

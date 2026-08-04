@@ -20,7 +20,9 @@ jobs:
         with:
           repository: quicknode/sdk
           ref: feat/x402-solana-drawdown
-          path: ../sdk
+          path: sdk
+      - name: Link local SDK dependency
+        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
