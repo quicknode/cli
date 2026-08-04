@@ -15,15 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout local SDK dependency
-        uses: actions/checkout@v4
-        with:
-          repository: quicknode/sdk
-          ref: feat/x402-solana-drawdown
-          path: sdk
-      - name: Link local SDK dependency
-        run: ln -s "$GITHUB_WORKSPACE/sdk" "$GITHUB_WORKSPACE/../sdk"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

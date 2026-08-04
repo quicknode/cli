@@ -21,8 +21,7 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-# DEV ONLY: use the local SDK while testing unreleased payment behavior.
-quicknode-sdk = { path = "../sdk/crates/core", features = [
+quicknode-sdk = { version = "0.8.1", features = [
   "payments",       # x402/EVM
   "payments-svm",   # + x402/Solana
   "payments-tempo", # + MPP/Tempo
