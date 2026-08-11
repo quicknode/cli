@@ -1261,7 +1261,9 @@ async fn x402_drip_reports_funding_tx() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "accountId": "eip155:84532:0xabc",
             "walletAddress": "0xabc",
-            "transactionHash": "0xfeed"
+            "network": "eip155:84532",
+            "transferId": "transfer-1",
+            "amountUsdc": "10"
         })))
         .mount(&server)
         .await;
@@ -1272,6 +1274,39 @@ async fn x402_drip_reports_funding_tx() {
     let (_guard, key_path) = key_file();
 
     let out = run_qn(&server.uri(), &x402_session_args(&cfg, &key_path, "drip")).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn x402_drip_accepts_arc_transaction_hash() {
+    let server = MockServer::start().await;
+    mount_auth(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/drip"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": "eip155:5042002:0xabc",
+            "walletAddress": "0xabc",
+            "network": "eip155:5042002",
+            "transactionHash": "0xfeed"
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+    let args = [
+        "--config-file",
+        cfg.as_str(),
+        "rpc",
+        "x402",
+        "drip",
+        "--payment-key-file",
+        key_path.as_str(),
+        "--payment-network",
+        "arc-testnet",
+    ];
+    let out = run_qn(&server.uri(), &args).await;
     assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
 }
 

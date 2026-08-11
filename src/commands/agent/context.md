@@ -189,8 +189,8 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   **x402 drawdown** uses a cached gateway session. `qn rpc x402 buy-credits`
   signs the credit purchase and requires the full payment flags. `balance` and
   `drip` authenticate the wallet but do not sign a payment, so they need only
-  the wallet and payment network. `drip` works on Base Sepolia only. Fund
-  Solana wallets out of band. `buy-credits` is gated and needs `--yes` in a
+  the wallet and payment network. `drip` works on Base Sepolia and Arc Testnet.
+  Fund other wallets out of band. `buy-credits` is gated and needs `--yes` in a
   script. `qn rpc call --x402-drawdown` needs the query network and wallet; it
   uses one credit after a successful response and does not need an asset or
   spend ceiling. The pay network defaults to the query network. Credits can pay

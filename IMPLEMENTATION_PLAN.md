@@ -17,3 +17,10 @@
 **Goal**: Validate both repositories with formatting, tests, clippy, and builds.
 **Success criteria**: Required checks pass with no new warnings.
 **Status**: Complete
+
+## Stage 5: Faucet compatibility and Arc Testnet
+**Goal**: Support both asynchronous Circle transfer responses and direct Arc Testnet
+transaction responses from `qn rpc x402 drip`.
+**Success criteria**: Arc network and USDC resolution work, both response shapes
+render correctly, and the CLI passes all verification checks against the local SDK.
+**Status**: In Progress
