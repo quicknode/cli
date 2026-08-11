@@ -427,8 +427,8 @@ successful response). EVM and Solana payment wallets are supported:
 ```sh
 qn wallet generate --vm evm --name payer           # dedicated wallet
 
-# Testnet only: fund the wallet from the faucet (Base Sepolia, once per
-# account). Prints the funding tx; mainnet wallets are funded normally.
+# Testnet only: fund the wallet from the faucet (Base Sepolia or Arc Testnet).
+# Circle-backed networks return an asynchronous transfer ID; Arc returns a tx hash.
 qn rpc x402 drip --payment-wallet payer --payment-network base-sepolia
 
 # Buy prepaid credits with the funded wallet (moves real funds; gated — pass
@@ -514,7 +514,7 @@ channels. Exhausting the deposit points you at `qn rpc mpp top-up`; after
 
 The flag stack is the same across all four paths:
 
-- `--payment-network` takes a Quicknode network name (`base-sepolia`,
+- `--payment-network` takes a Quicknode network name (`base-sepolia`, `arc-testnet`,
   `solana-devnet`, `tempo-testnet`, ...) or a raw CAIP-2 id (`eip155:84532`,
   `solana:EtWTRA...`); anything with a `:` passes through verbatim.
 - `--payment-asset` takes a token address (EVM), a mint (Solana), or a symbol

@@ -332,14 +332,25 @@ async fn run_balance(args: SessionArgs, global: GlobalArgs) -> Result<(), CliErr
 }
 
 async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError> {
-    reject_non_base_drip(&args, &global)?;
+    reject_unsupported_drip(&args, &global)?;
     let ctx = session_setup(&args, global.clone())?;
     let session = ensure_gateway_session(&ctx, &global).await?;
     let receipt = ctx.sdk.rpc.gateway_drip(&session).await?;
 
+    let settlement = receipt
+        .transfer_id
+        .as_deref()
+        .map(|id| format!("transfer: {id}"))
+        .or_else(|| {
+            receipt
+                .transaction_hash
+                .as_deref()
+                .map(|hash| format!("tx: {hash}"))
+        })
+        .unwrap_or_else(|| "settlement pending".to_string());
     ctx.out.note(&format!(
-        "✓ Faucet funded {} (tx: {})",
-        receipt.account_id, receipt.transaction_hash
+        "✓ Faucet request accepted for {} ({settlement})",
+        receipt.account_id
     ));
     let wallet = args.payment_wallet.as_deref().unwrap_or("<NAME>");
     let pay_net = args.payment_network.as_deref().unwrap_or("<NET>");
@@ -406,17 +417,21 @@ async fn run_drip(args: SessionArgs, global: GlobalArgs) -> Result<(), CliError>
     if matches!(ctx.global.format, Some(f) if f.is_structured()) {
         let v = serde_json::json!({
             "account_id": receipt.account_id,
+            "wallet_address": receipt.wallet_address,
+            "network": receipt.network,
+            "transfer_id": receipt.transfer_id,
+            "amount_usdc": receipt.amount_usdc,
             "transaction_hash": receipt.transaction_hash,
         });
         return super::emit_result(&ctx, &v);
     }
     if !ctx.out.stdout_is_tty {
-        println!("{}", receipt.transaction_hash);
+        println!("{settlement}");
     }
     Ok(())
 }
 
-fn reject_non_base_drip(args: &SessionArgs, global: &GlobalArgs) -> Result<(), CliError> {
+fn reject_unsupported_drip(args: &SessionArgs, global: &GlobalArgs) -> Result<(), CliError> {
     let section = load_payment_section(global)?;
     let Some(network) = args
         .payment_network
@@ -426,9 +441,9 @@ fn reject_non_base_drip(args: &SessionArgs, global: &GlobalArgs) -> Result<(), C
         return Ok(());
     };
     let resolved = super::pay_network::resolve(&network)?;
-    if resolved != "eip155:84532" {
+    if !matches!(resolved.as_str(), "eip155:84532" | "eip155:5042002") {
         return Err(CliError::Arg(
-            "x402 drip is available only on Base Sepolia. Fund Solana wallets out of band."
+            "x402 drip is available on Base Sepolia and Arc Testnet. Fund other wallets out of band."
                 .to_string(),
         ));
     }

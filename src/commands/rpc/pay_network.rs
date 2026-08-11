@@ -10,6 +10,7 @@ const PAY_NETWORKS: &[(&str, &str)] = &[
     ("abstract-testnet", "eip155:11124"),
     ("arbitrum-mainnet", "eip155:42161"),
     ("arbitrum-sepolia", "eip155:421614"),
+    ("arc-testnet", "eip155:5042002"),
     ("ault-mainnet", "eip155:904"),
     ("ault-testnet", "eip155:10904"),
     ("avalanche-mainnet", "eip155:43114"),
@@ -143,6 +144,7 @@ mod tests {
         assert_eq!(resolve("base-sepolia").unwrap(), "eip155:84532");
         assert_eq!(resolve("xdai").unwrap(), "eip155:100");
         assert_eq!(resolve("tempo-testnet").unwrap(), "eip155:42431");
+        assert_eq!(resolve("arc-testnet").unwrap(), "eip155:5042002");
         assert_eq!(
             resolve("solana-devnet").unwrap(),
             "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
