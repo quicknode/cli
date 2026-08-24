@@ -6,7 +6,7 @@ use std::io::IsTerminal;
 
 use quicknode_sdk::{
     AdminConfig, CachedToken, HttpConfig, KvStoreConfig, QuicknodeSdk, RpcConfig, SdkFullConfig,
-    SqlConfig, StreamsConfig, WebhooksConfig,
+    SqlConfig, StreamsConfig, WebhooksConfig, X402_SQL_BASE_URL,
 };
 
 use crate::config;
@@ -199,15 +199,48 @@ impl Ctx {
         global: GlobalArgs,
         payment: quicknode_sdk::PaymentConfig,
     ) -> Result<Self, CliError> {
+        Self::from_keyless(global, Some(payment), None)
+    }
+
+    /// Build a keyless SDK for the public SQL catalog (`clusters` / `schema`).
+    /// Always points SQL at the x402 catalog host, remapped through `--base-url`.
+    pub fn from_global_keyless_sql_catalog(global: GlobalArgs) -> Result<Self, CliError> {
+        let sql_base = sql_catalog_base_url(&global)?;
+        Self::from_keyless(global, None, Some(sql_base))
+    }
+
+    /// Build a keyless SDK for a paid SQL query. Sets `[rpc].payment` and
+    /// points SQL at the public catalog host (x402 drawdown). MPP session
+    /// queries use the payment host override, not this SQL base.
+    pub fn from_global_keyless_sql_payment(
+        global: GlobalArgs,
+        payment: quicknode_sdk::PaymentConfig,
+    ) -> Result<Self, CliError> {
+        let sql_base = sql_catalog_base_url(&global)?;
+        Self::from_keyless(global, Some(payment), Some(sql_base))
+    }
+
+    fn from_keyless(
+        global: GlobalArgs,
+        payment: Option<quicknode_sdk::PaymentConfig>,
+        sql_base: Option<String>,
+    ) -> Result<Self, CliError> {
         let stdout_is_tty = std::io::stdout().is_terminal();
         let (format, wide) = global.resolve_output(stdout_is_tty);
 
         let mut full = SdkFullConfig::keyless();
         apply_user_agent(&mut full);
-        full.rpc = Some(RpcConfig {
-            payment: Some(payment),
-            ..Default::default()
-        });
+        if payment.is_some() {
+            full.rpc = Some(RpcConfig {
+                payment,
+                ..Default::default()
+            });
+        }
+        if let Some(base_url) = sql_base {
+            full.sql = Some(SqlConfig {
+                base_url: Some(base_url),
+            });
+        }
 
         let sdk = QuicknodeSdk::new(&full)?;
         let out = OutputCtx::detect_with(
@@ -307,6 +340,27 @@ impl Ctx {
         );
 
         Ok((Self { sdk, out, global }, api_key))
+    }
+}
+
+/// SQL catalog / x402-drawdown base: the public x402 prefix, or
+/// `{--base-url}{--base-prefix}/sql/rest/v1/` in tests.
+fn sql_catalog_base_url(global: &GlobalArgs) -> Result<String, CliError> {
+    if global.base_prefix.is_some() && global.base_url.is_none() {
+        return Err(CliError::Arg(
+            "--base-prefix requires --base-url".to_string(),
+        ));
+    }
+    match &global.base_url {
+        Some(base) => {
+            let host = validate_base_url(base)?;
+            let prefix = match &global.base_prefix {
+                Some(p) => validate_base_prefix(p)?,
+                None => String::new(),
+            };
+            Ok(format!("{host}{prefix}/sql/rest/v1/"))
+        }
+        None => Ok(X402_SQL_BASE_URL.to_string()),
     }
 }
 

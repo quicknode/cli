@@ -262,21 +262,58 @@ qn kv list get allowlist
 
 ### SQL
 
+Discovery is always public. `qn sql clusters` and `qn sql schema` need no API
+key, wallet, or flag.
+
 ```sh
-# Run a query inline, from a file, or from stdin (--file -)
+qn sql clusters
+qn sql schema hyperliquid-core-mainnet
+```
+
+`qn sql query` chooses who pays. An API key with no payment flag uses account
+credits. `--x402-drawdown` and `--mpp-session` ignore an API key if one is also
+present. Config never turns a payment path on.
+
+```sh
+# Account credits (API key required)
 qn sql query "SELECT action_type, user FROM hyperliquid_system_actions ORDER BY block_time DESC LIMIT 3" --cluster-id hyperliquid-core-mainnet
 qn sql query --file query.sql --cluster-id hyperliquid-core-mainnet
 cat query.sql | qn sql query --file - --cluster-id hyperliquid-core-mainnet
-
-# Pipe rows into jq (stats print to stderr, so stdout stays clean)
 qn sql query "SELECT 1" --cluster-id hyperliquid-core-mainnet -o json | jq '.data'
-
-# Inspect a cluster's tables, columns, and types
-qn sql schema hyperliquid-core-mainnet
 ```
 
 Queries are read-only (SELECT) and capped at 1000 rows per request; page through
 larger result sets with `LIMIT`/`OFFSET` in the SQL.
+
+Get started without an account (x402 drawdown):
+
+```sh
+qn wallet generate --vm evm --name payer
+qn micropayments x402 drip --payment-wallet payer --payment-network base-sepolia
+qn micropayments x402 buy-credits --network base-sepolia --yes \
+  --payment-wallet payer --payment-network base-sepolia \
+  --payment-asset USDC --max-amount 10000000
+qn sql query "SELECT * FROM hyperliquid_trades LIMIT 10" \
+  --cluster-id hyperliquid-core-mainnet \
+  --x402-drawdown --payment-wallet payer --payment-network base-sepolia
+```
+
+Get started without an account (MPP session). Fund pathUSD on Tempo testnet
+first.
+
+```sh
+qn wallet generate --vm evm --name payer
+qn micropayments mpp open --deposit 1000000 --yes \
+  --payment-wallet payer --payment-network tempo-testnet \
+  --payment-asset pathUSD --max-amount 1000000
+qn sql query "SELECT * FROM hyperliquid_trades LIMIT 10" \
+  --cluster-id hyperliquid-core-mainnet \
+  --mpp-session --payment-wallet payer \
+  --payment-network tempo-testnet --payment-asset pathUSD --max-amount 1000000
+```
+
+`qn pay` is an alias for `qn micropayments`. `qn rpc x402` and `qn rpc mpp`
+call the same funding runners.
 
 ### On-chain RPC
 

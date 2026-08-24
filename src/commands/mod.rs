@@ -10,6 +10,7 @@ pub mod chain;
 pub mod endpoint;
 pub mod kv;
 pub mod metrics;
+pub mod micropayments;
 pub mod rpc;
 pub mod sql;
 pub mod stream;

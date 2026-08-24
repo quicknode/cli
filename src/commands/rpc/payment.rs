@@ -145,7 +145,7 @@ pub(super) async fn run_drawdown_call(args: CallArgs, global: GlobalArgs) -> Res
 }
 
 /// Load a fresh cached gateway session or authenticate one.
-pub(super) async fn ensure_gateway_session(
+pub(crate) async fn ensure_gateway_session(
     ctx: &Ctx,
     global: &GlobalArgs,
 ) -> Result<GatewaySession, CliError> {
@@ -163,7 +163,10 @@ pub(super) async fn ensure_gateway_session(
 }
 
 /// Authenticate and replace the cached session.
-async fn reauthenticate(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession, CliError> {
+pub(crate) async fn reauthenticate(
+    ctx: &Ctx,
+    global: &GlobalArgs,
+) -> Result<GatewaySession, CliError> {
     let sessions_path = config::sessions_cache_path(global.resolve_config_path().as_deref());
     let address = ctx.sdk.rpc.payment_address()?;
     let session = ctx.sdk.rpc.gateway_authenticate().await?;
@@ -174,7 +177,7 @@ async fn reauthenticate(ctx: &Ctx, global: &GlobalArgs) -> Result<GatewaySession
 }
 
 /// Check for an expired gateway session.
-fn is_token_expired(e: &SdkError) -> bool {
+pub(crate) fn is_token_expired(e: &SdkError) -> bool {
     matches!(
         e,
         SdkError::Api { status, body }
@@ -328,7 +331,7 @@ fn load_payment_section(global: &GlobalArgs) -> Result<PaymentSection, CliError>
 }
 
 /// Payment parameters shared by paid call and lifecycle commands.
-pub(super) struct PaymentParams<'a> {
+pub(crate) struct PaymentParams<'a> {
     pub key_file: Option<&'a Path>,
     pub wallet: Option<&'a str>,
     pub max_amount: Option<&'a str>,
@@ -338,7 +341,7 @@ pub(super) struct PaymentParams<'a> {
 }
 
 /// Parameters needed by keyless session commands.
-pub(super) struct SessionParams<'a> {
+pub(crate) struct SessionParams<'a> {
     pub key_file: Option<&'a Path>,
     pub wallet: Option<&'a str>,
     pub payment_network: Option<&'a str>,
@@ -439,7 +442,7 @@ fn resolve_drawdown_config(
 }
 
 // Resolve the wallet and pay network for balance/drip.
-pub(super) fn resolve_session_params(
+pub(crate) fn resolve_session_params(
     params: &SessionParams<'_>,
     section: &PaymentSection,
     wallets_dir: Option<&Path>,
@@ -499,7 +502,7 @@ pub(super) fn resolve_session_params(
 }
 
 /// Resolve payment parameters before any network I/O.
-pub(super) fn resolve_payment_params(
+pub(crate) fn resolve_payment_params(
     scheme: &str,
     params: &PaymentParams<'_>,
     section: &PaymentSection,

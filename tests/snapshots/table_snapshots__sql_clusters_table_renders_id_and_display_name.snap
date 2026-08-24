@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ID                        DISPLAY_NAME             
+hyperliquid-core-mainnet  Hyperliquid (HyperCore)  
+solana-mainnet            Solana

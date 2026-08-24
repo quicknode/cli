@@ -16,7 +16,10 @@ Resolution order for the API key:
 1. `--api-key <KEY>` flag (highest precedence).
 2. Config file: `[api] key = "..."` in `~/.config/qn/config.toml` (or the path
    passed to `--config-file`).
-3. If neither resolves, the command exits **4** (`no API key found`).
+3. If neither resolves, the command exits **4** (`no API key found`). The one
+   exception is `sql query`, where a key is only one of three ways to pay: with
+   no key and no `--x402-drawdown`/`--mpp-session` it exits **1** and names every
+   option.
 
 There is **no environment-variable fallback** by design — a key left exported in
 a shell is invisible state that outlives the session.
@@ -69,7 +72,8 @@ gateway 5xx after the paid resend, a lost response, or an uninterpretable
 post-payment response). On exit 3, check the wallet before re-running; never
 blind-retry a paid call. A **drawdown** call (`--x402-drawdown`) spends prepaid
 credits, not per-call funds: running out surfaces an actionable exit-2 error
-pointing at `qn rpc x402 buy-credits`, and a credit is drawn only on success.
+pointing at `qn micropayments x402 buy-credits` (alias `qn rpc x402 buy-credits`),
+and a credit is drawn only on success. A paid SQL query uses the same 2/3 split.
 
 ## 4. Non-interactive & confirmation behavior
 
@@ -90,6 +94,8 @@ Gated command classes:
 - `endpoint rate-limit delete-override`
 - `stream delete`, `webhook delete`, `team delete`
 - `kv set delete`, `kv list delete`
+- `micropayments x402 buy-credits` and `rpc x402 buy-credits`
+- `micropayments mpp open`/`top-up`/`close` and `rpc mpp open`/`top-up`/`close`
 
 There is **no account-wide wipe command** — that is intentional; use the API directly
 if you need it.
@@ -105,14 +111,16 @@ if you need it.
 - `qn stream test-filter` evaluates a filter against historical data and changes
   nothing — it is read-only and safe to retry.
 - `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
-  so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
-- A **paid** `rpc call` (`--x402`/`--mpp`/`--x402-drawdown`/`--mpp-session`)
+  so a retried query re-bills. `qn sql clusters` and `qn sql schema` are cheap
+  public-catalog reads and retry normally.
+- A **paid** `rpc call` or `sql query` (`--x402`/`--mpp`/`--x402-drawdown`/`--mpp-session`)
   never auto-retries — `--retries` does not apply. A per-request attempt can
   move funds, and after a lost response the previous attempt may already have
-  settled (§3, exit 3). A drawdown call draws 1 credit per success and is
+  settled (§3, exit 3). A drawdown call draws prepaid credits on success and is
   single-attempt (the one exception is a transparent re-auth when the session
   token expired, which draws nothing). A session call signs one cumulative
-  voucher and is single-attempt.
+  voucher and is single-attempt. `sql query` has no per-request `--x402`/`--mpp`
+  flag; its paid lanes are `--x402-drawdown` and `--mpp-session`.
 
 ## 6. Command catalog
 
@@ -133,7 +141,16 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   enabled-count
 - `kv` — `set` (put, get, list, delete, bulk) and `list` (list, get, create, append,
   contains, remove-item, update, delete)
-- `sql` — query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
+- `sql` — `clusters` (alias `ls`) and `schema` always hit the public catalog
+  (no API key, wallet, or flag). `query` (inline SQL, `--file <path>`, or
+  `--file -` for stdin) chooses who pays: an API key with no payment flag uses
+  the account host; `--x402-drawdown` uses prepaid x402 credits; `--mpp-session`
+  uses an open MPP channel. Config never turns a payment path on. Neither a
+  key nor a payment flag is an error that names both next steps.
+- `micropayments` (alias `pay`) — shared funding noun. `x402` (buy-credits,
+  balance, drip, supported-networks, supported-payments) and `mpp` (open,
+  top-up, close, status, supported-networks, supported-payments). `qn rpc x402`
+  and `qn rpc mpp` stay first-class and call the same runners.
 - `tooling-access` — status, enable, disable (provisions the endpoint `rpc` uses)
 - `rpc` — make JSON-RPC calls. `qn rpc call <method> [json-params]` calls the
   account's Tooling Access endpoint (params is a JSON array or object inline, or
@@ -268,6 +285,34 @@ qn kv set put my-key my-value
 qn kv set get my-key
 qn kv set list
 ```
+
+**SQL without an account (x402 drawdown):**
+
+```sh
+qn wallet generate --vm evm --name payer
+qn micropayments x402 drip --payment-wallet payer --payment-network base-sepolia
+qn micropayments x402 buy-credits --network base-sepolia --yes \
+  --payment-wallet payer --payment-network base-sepolia \
+  --payment-asset USDC --max-amount 10000000
+qn sql query "SELECT * FROM hyperliquid_trades LIMIT 10" \
+  --cluster-id hyperliquid-core-mainnet \
+  --x402-drawdown --payment-wallet payer --payment-network base-sepolia
+```
+
+**SQL without an account (MPP session).** Fund pathUSD on Tempo testnet first.
+
+```sh
+qn wallet generate --vm evm --name payer
+qn micropayments mpp open --deposit 1000000 --yes \
+  --payment-wallet payer --payment-network tempo-testnet \
+  --payment-asset pathUSD --max-amount 1000000
+qn sql query "SELECT * FROM hyperliquid_trades LIMIT 10" \
+  --cluster-id hyperliquid-core-mainnet \
+  --mpp-session --payment-wallet payer \
+  --payment-network tempo-testnet --payment-asset pathUSD --max-amount 1000000
+```
+
+`qn sql clusters` and `qn sql schema hyperliquid-core-mainnet` need no key.
 
 **Make on-chain calls (no endpoint to provision):**
 
