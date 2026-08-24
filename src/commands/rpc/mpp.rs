@@ -215,20 +215,20 @@ fn setup(args: &PaymentArgs, global: GlobalArgs) -> Result<(Ctx, PayScope), CliE
 }
 
 // Pay scope carried to channel-cache keying; the payer address is added later.
-pub(super) struct PayScope {
+pub(crate) struct PayScope {
     pay_network: String,
     pay_asset: String,
 }
 
 impl PayScope {
-    pub(super) fn from_config(payment: &quicknode_sdk::PaymentConfig) -> Self {
+    pub(crate) fn from_config(payment: &quicknode_sdk::PaymentConfig) -> Self {
         PayScope {
             pay_network: payment.pay_network.clone(),
             pay_asset: payment.asset.clone(),
         }
     }
 
-    pub(super) fn with_address(&self, address: String) -> config::ChannelScope {
+    pub(crate) fn with_address(&self, address: String) -> config::ChannelScope {
         config::ChannelScope {
             address,
             pay_network: self.pay_network.clone(),
@@ -236,7 +236,7 @@ impl PayScope {
         }
     }
 
-    pub(super) fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         format!("{} on {}", self.pay_asset, self.pay_network)
     }
 }

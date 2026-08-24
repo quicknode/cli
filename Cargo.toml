@@ -21,7 +21,7 @@ name = "qn"
 path = "src/lib.rs"
 
 [dependencies]
-quicknode-sdk = { version = "0.8.2", features = [
+quicknode-sdk = { git = "https://github.com/quicknode/sdk", rev = "2ac2e697fc58a81fb64dd3e5074b2558775aac0e", features = [
   "payments",       # x402/EVM
   "payments-svm",   # + x402/Solana
   "payments-tempo", # + MPP/Tempo

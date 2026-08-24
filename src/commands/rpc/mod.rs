@@ -1,12 +1,12 @@
 //! RPC call and network-list commands. Default, custom-URL, and paid calls use
 //! separate lanes so their auth, cache, and retry behavior cannot mix.
 
-mod mpp;
+pub(crate) mod mpp;
 mod pay_asset;
 mod pay_network;
-mod payment;
+pub(crate) mod payment;
 mod supported_networks;
-mod x402;
+pub(crate) mod x402;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

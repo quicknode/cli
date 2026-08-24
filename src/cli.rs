@@ -155,6 +155,10 @@ pub enum Command {
     /// Run SQL queries and inspect cluster schemas.
     Sql(commands::sql::Args),
 
+    /// Manage crypto micropayments (x402 credits and MPP channels).
+    #[command(visible_alias = "pay")]
+    Micropayments(commands::micropayments::Args),
+
     /// Make RPC calls.
     Rpc(commands::rpc::Args),
 
@@ -255,7 +259,8 @@ impl Cli {
             Command::Stream(args) => commands::stream::run(args, Ctx::from_global(global)?).await,
             Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
             Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
-            Command::Sql(args) => commands::sql::run(args, Ctx::from_global(global)?).await,
+            Command::Sql(args) => commands::sql::run(args, global).await,
+            Command::Micropayments(args) => commands::micropayments::run(args, global).await,
             // RPC resolves its own context for token-cache seeding.
             Command::Rpc(args) => commands::rpc::run(args, global).await,
             // Wallet management is local and keyless.
