@@ -146,3 +146,27 @@ async fn micropayments_buy_credits_without_yes_exits_5_and_sends_nothing() {
     let out = run_qn(&server.uri(), &args).await;
     assert_eq!(out.exit_code, 5, "stderr={}", out.stderr);
 }
+
+#[tokio::test]
+async fn micropayments_buy_credits_with_yes_passes_the_gate_and_settles() {
+    let server = MockServer::start().await;
+    // Reaching auth at all is the proof: the ungated run sends nothing.
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let (_guard, key_path) = key_file();
+    let mut args = x402_args("micropayments", &cfg, &key_path, "buy-credits");
+    args.extend_from_slice(&["--network", "base-sepolia", "--yes"]);
+    let out = run_qn(&server.uri(), &args).await;
+    assert_ne!(
+        out.exit_code, 5,
+        "--yes must clear the gate: {}",
+        out.stderr
+    );
+}

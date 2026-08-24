@@ -267,6 +267,22 @@ async fn clusters_and_schema_work_without_an_api_key() {
 }
 
 #[tokio::test]
+async fn clusters_maps_a_catalog_error_to_exit_2() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sql/rest/v1/clusters"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": "not found"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    let out = run_qn_no_key(&server.uri(), &["--config-file", &cfg, "sql", "clusters"]).await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
 async fn query_without_key_or_payment_flag_names_both_next_steps() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -537,5 +553,69 @@ async fn mpp_session_query_uses_challenge_amount_and_advances_cache() {
     assert!(
         cache.contains("cumulative_spent = \"110\""),
         "cache must advance to acceptedCumulative, got: {cache}"
+    );
+}
+
+#[tokio::test]
+async fn mpp_session_query_persists_the_receipt_when_the_query_fails() {
+    struct ChallengeThenServerError {
+        calls: AtomicUsize,
+    }
+    impl Respond for ChallengeThenServerError {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 && !req.headers.contains_key("authorization") {
+                return ResponseTemplate::new(402)
+                    .insert_header("www-authenticate", sql_session_offer("100").as_str());
+            }
+            // Voucher banked, query body failed.
+            ResponseTemplate::new(500)
+                .insert_header("payment-receipt", receipt_header("110").as_str())
+                .set_body_string("query engine unavailable")
+        }
+    }
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/session/sql/rest/v1/query"))
+        .respond_with(ChallengeThenServerError {
+            calls: AtomicUsize::new(0),
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml").to_str().unwrap().to_string();
+    write_channel(dir.path());
+    let (_guard, key_path) = key_file();
+    let out = run_qn_no_key(
+        &server.uri(),
+        &[
+            "--config-file",
+            &cfg,
+            "sql",
+            "query",
+            "SELECT 1",
+            "--cluster-id",
+            "hyperliquid-core-mainnet",
+            "--mpp-session",
+            "--payment-key-file",
+            &key_path,
+            "--payment-network",
+            "tempo-testnet",
+            "--payment-asset",
+            "pathUSD",
+            "--max-amount",
+            "1000000",
+        ],
+    )
+    .await;
+    assert_ne!(out.exit_code, 0, "a failed query must not exit 0");
+
+    let cache = std::fs::read_to_string(dir.path().join("channels.toml")).unwrap();
+    assert!(
+        cache.contains("cumulative_spent = \"110\""),
+        "a banked voucher must be persisted even when the query fails, got: {cache}"
     );
 }

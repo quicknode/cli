@@ -3246,7 +3246,7 @@ dependencies = [
 [[package]]
 name = "quicknode-sdk"
 version = "0.8.2"
-source = "git+https://github.com/quicknode/sdk?rev=2ac2e697fc58a81fb64dd3e5074b2558775aac0e#2ac2e697fc58a81fb64dd3e5074b2558775aac0e"
+source = "git+https://github.com/quicknode/sdk?rev=0bd4f3cf13b32d75119ffe7b501929dcffa78bfd#0bd4f3cf13b32d75119ffe7b501929dcffa78bfd"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",

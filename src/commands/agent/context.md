@@ -16,7 +16,10 @@ Resolution order for the API key:
 1. `--api-key <KEY>` flag (highest precedence).
 2. Config file: `[api] key = "..."` in `~/.config/qn/config.toml` (or the path
    passed to `--config-file`).
-3. If neither resolves, the command exits **4** (`no API key found`).
+3. If neither resolves, the command exits **4** (`no API key found`). The one
+   exception is `sql query`, where a key is only one of three ways to pay: with
+   no key and no `--x402-drawdown`/`--mpp-session` it exits **1** and names every
+   option.
 
 There is **no environment-variable fallback** by design — a key left exported in
 a shell is invisible state that outlives the session.
@@ -116,8 +119,8 @@ if you need it.
   settled (§3, exit 3). A drawdown call draws prepaid credits on success and is
   single-attempt (the one exception is a transparent re-auth when the session
   token expired, which draws nothing). A session call signs one cumulative
-  voucher and is single-attempt. SQL rejects `--x402` (per-request); use
-  `--x402-drawdown`.
+  voucher and is single-attempt. `sql query` has no per-request `--x402`/`--mpp`
+  flag; its paid lanes are `--x402-drawdown` and `--mpp-session`.
 
 ## 6. Command catalog
 

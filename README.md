@@ -299,7 +299,7 @@ qn sql query "SELECT * FROM hyperliquid_trades LIMIT 10" \
 ```
 
 Get started without an account (MPP session). Fund pathUSD on Tempo testnet
-first; the CLI has no Tempo faucet.
+first.
 
 ```sh
 qn wallet generate --vm evm --name payer

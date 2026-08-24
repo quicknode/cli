@@ -23,4 +23,4 @@
 transaction responses from `qn rpc x402 drip`.
 **Success criteria**: Arc network and USDC resolution work, both response shapes
 render correctly, and the CLI passes all verification checks against the local SDK.
-**Status**: In Progress
+**Status**: Complete

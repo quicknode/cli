@@ -296,15 +296,9 @@ fn map_sql_drawdown_error(e: SdkError) -> CliError {
     e.into()
 }
 
+// Status only: body text on a 500 saying "insufficient" is not an empty balance.
 fn is_sql_requires_payment(e: &SdkError) -> bool {
-    matches!(
-        e,
-        SdkError::Api { status, body }
-            if status.as_u16() == 402
-                || body.contains("requires_payment")
-                || body.contains("insufficient_credits")
-                || body.contains("no_credits")
-    )
+    matches!(e, SdkError::Api { status, .. } if status.as_u16() == 402)
 }
 
 async fn query_mpp_session(
@@ -348,46 +342,34 @@ async fn query_mpp_session(
             ))
         })?;
 
-    let result = match ctx
+    // Persist before inspecting: a failed query can still have spent the voucher.
+    let result = ctx
         .sdk
         .sql
-        .query_with_mpp_session(&params, &payment, &channel)
-        .await
-    {
-        Ok(result) => result,
-        Err(e) => return Err(map_sql_mpp_error(e)),
-    };
-
-    channel.cumulative_spent = result.accepted_cumulative;
+        .query_with_mpp_session(&params, &payment, &mut channel)
+        .await;
     if let Some(path) = &channels_path {
         let _ = config::save_channel(path, &scope, &channel);
     }
+    let result = result.map_err(map_sql_mpp_error)?;
+
     emit_query(&ctx, result.query)
 }
 
+const MPP_CANNOT_COVER: &str = "the MPP channel can't cover this query. Top up with \
+                                'qn micropayments mpp top-up', or open a new channel with \
+                                'qn micropayments mpp open'.";
+
 fn map_sql_mpp_error(e: SdkError) -> CliError {
-    if let SdkError::Api { status, body } = &e {
-        if status.as_u16() == 402
-            || body.contains("amount-exceeds-deposit")
-            || body.contains("AmountExceedsDeposit")
-            || body.contains("insufficient")
-        {
-            return CliError::PaymentRefused(
-                "the MPP channel can't cover this query. Top up with \
-                 'qn micropayments mpp top-up', or open a new channel with \
-                 'qn micropayments mpp open'."
-                    .to_string(),
-            );
+    // Status only: body text on a 500 saying "insufficient" is not a spent channel.
+    if let SdkError::Api { status, .. } = &e {
+        if status.as_u16() == 402 {
+            return CliError::PaymentRefused(MPP_CANNOT_COVER.to_string());
         }
     }
     if let SdkError::PaymentUnsupported { offered } = &e {
         if offered.contains("exceeds channel deposit") || offered.contains("top up") {
-            return CliError::PaymentRefused(
-                "the MPP channel can't cover this query. Top up with \
-                 'qn micropayments mpp top-up', or open a new channel with \
-                 'qn micropayments mpp open'."
-                    .to_string(),
-            );
+            return CliError::PaymentRefused(MPP_CANNOT_COVER.to_string());
         }
     }
     e.into()
