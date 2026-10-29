@@ -1,6 +1,6 @@
 # qn — Quicknode CLI
 
-`qn` is a command-line interface for Quicknode, built around noun-verb commands that read naturally for both humans and agents. Manage endpoints, streams, webhooks, the KV store, teams, usage, and billing, with output in multiple formats for easy reading or scripting.
+`qn` is a command-line interface for Quicknode, built around noun-verb commands that read naturally for both humans and agents. Manage endpoints, streams, webhooks, the KV store, teams, usage, billing, the account activity log, and retained transactions, with output in multiple formats for easy reading or scripting.
 
 ```
 $ qn endpoint list
@@ -200,8 +200,19 @@ qn endpoint show ep-1234
 qn endpoint pause ep-1234
 qn endpoint logs ep-1234 --from 1h --to now --limit 50
 qn endpoint metrics ep-1234 --metric method_calls_over_time --period day
+qn endpoint metrics ep-1234 --metric response_time_over_time --period day --percentile 95
+qn endpoint errors ep-1234 --from 1h --kind rpc --group-by code
 qn endpoint security set-options ep-1234 --tokens enabled --jwts disabled
+qn endpoint security token create ep-1234            # prints the new token
+qn endpoint security request-filter create ep-1234 --method eth_call --method eth_blockNumber
+qn endpoint security request-filter create ep-1234 \
+  --pattern '{"method":[{"prefix":"eth_"}],"jsonrpc":["2.0"]}'
+qn endpoint security client-cert add ep-1234 --certificate-file client.pem
+qn endpoint security blocked-ip add ep-1234 192.0.2.0/24
+qn endpoint security method-blacklist set ep-1234 --method eth_sendRawTransaction
+qn endpoint security range-limit set ep-1234 --limit eth_getLogs=1000
 qn endpoint rate-limit set ep-1234 --rps 100 --rpm 5000
+qn endpoint rate-limit set ep-1234 --limit-by-ip true
 qn endpoint archive ep-1234 --yes
 ```
 
@@ -566,7 +577,16 @@ machine, and Quicknode does not hold, back up, or recover it.
 ```sh
 qn usage summary --from 7d
 qn usage by-endpoint --from 30d -o yaml
+qn usage by-endpoint --wide                          # adds RPC/data credits and bytes
+qn usage credits --from 7d
+qn usage rpc --from 24h --group-by method,endpoint --limit 20
+qn usage streams --from 7d --group-by stream
 qn metrics account --period day --metric credits_over_time
+qn metrics traffic --from 24h --group-by endpoint
+qn metrics errors --from 1h --kind rpc --group-by code
+qn activity-log list --type endpoint --from 7d
+qn transaction list --from 1h --state failed
+qn transaction show ethereum-mainnet 0xabc --payloads
 qn chain list
 qn chain credits ethereum
 qn billing invoices
@@ -574,6 +594,13 @@ qn endpoint bulk pause ep-1 ep-2 ep-3
 qn endpoint tag list
 qn team list
 ```
+
+The windowed summaries (`usage credits|rpc|streams|webhooks`, `metrics
+traffic|errors`, `endpoint errors`, `transaction list`) take `--from`
+(`--to` defaults to now) and page with a cursor: when a table ends with
+`next page: --cursor <c>`, re-run the command with only `--cursor <c>`. Totals
+cover the whole window on every page, and grouping columns appear only for the
+`--group-by` dimensions you selected.
 
 ## Shell completions
 
@@ -643,7 +670,8 @@ sub-clients at once (used for integration tests and on-prem mirrors).
 ## Confirmations
 
 Destructive commands (`delete`, `archive`, `bulk pause`, token revocation,
-removing a rate-limit override, …) prompt before acting, and the prompt states
+removing a rate-limit override, removing a client certificate or blocked IP,
+clearing a method blacklist or range limits, …) prompt before acting, and the prompt states
 what will happen ("Pause 3 endpoint(s)? They will stop serving requests").
 Pass `--yes`/`-y` to skip the prompt. In scripts and CI (no TTY), a gated
 command without `--yes` exits with code 5 **before** any request is sent.
