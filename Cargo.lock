@@ -3245,9 +3245,9 @@ dependencies = [
 
 [[package]]
 name = "quicknode-sdk"
-version = "0.8.2"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f55e09e33fa583b368558949ac98bdbb061c193cd717ee9d9621fedf8325ac8"
+checksum = "bb9696a8b44e88b30c8550836ad6d924e3b8ae8a88a453731a4dacc8fd1a5257"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",

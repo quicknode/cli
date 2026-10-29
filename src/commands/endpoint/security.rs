@@ -300,6 +300,7 @@ async fn set_options(a: SetOptionsArgs, ctx: Ctx) -> Result<(), CliError> {
         cors: a.cors.map(|t| t.as_str().to_string()),
         request_filters: a.request_filters.map(|t| t.as_str().to_string()),
         ip_custom_header: a.ip_custom_header.map(|t| t.as_str().to_string()),
+        response_logging: None,
     };
     let req = UpdateSecurityOptionsRequest { options };
     let resp = ctx.sdk.admin.update_security_options(&a.id, &req).await?;
@@ -686,9 +687,22 @@ pub(crate) fn security_item_sections(
         vec!["ID", "METHODS"],
         filters
             .iter()
-            .map(|f| vec![Cell::new(&f.id), Cell::new(f.method.join(", "))])
+            .map(|f| vec![Cell::new(&f.id), Cell::new(matchers_text(&f.method))])
             .collect(),
     )
+}
+
+/// Renders request-filter matchers for a table cell: string matchers as-is,
+/// structured matchers (e.g. `{"prefix":"eth_"}`) as compact JSON.
+fn matchers_text(matchers: &[serde_json::Value]) -> String {
+    matchers
+        .iter()
+        .map(|m| match m.as_str() {
+            Some(s) => s.to_string(),
+            None => m.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Serialize)]

@@ -161,11 +161,12 @@ async fn set(a: SetArgs, ctx: Ctx) -> Result<(), CliError> {
         ));
     }
     let req = UpdateRateLimitsRequest {
-        rate_limits: RateLimitSettings {
+        rate_limits: Some(RateLimitSettings {
             rps: a.rps,
             rpm: a.rpm,
             rpd: a.rpd,
-        },
+        }),
+        limit_by_ip: None,
     };
     ctx.sdk.admin.update_rate_limits(&a.id, &req).await?;
     ctx.out.note(&format!("✓ Updated rate limits on {}", a.id));
@@ -190,6 +191,7 @@ async fn method_create(a: MethodCreateArgs, ctx: Ctx) -> Result<(), CliError> {
         interval: a.interval,
         methods,
         rate: a.rate,
+        limit_by_ip: None,
     };
     let resp = ctx.sdk.admin.create_method_rate_limit(&a.id, &req).await?;
     let d = resp.data.as_ref().ok_or_else(|| {
@@ -218,6 +220,7 @@ async fn method_update(a: MethodUpdateArgs, ctx: Ctx) -> Result<(), CliError> {
         },
         status: a.status.map(|s| s.as_str().to_string()),
         rate: a.rate,
+        limit_by_ip: None,
     };
     ctx.sdk
         .admin

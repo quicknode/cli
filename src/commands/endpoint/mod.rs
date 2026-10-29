@@ -361,6 +361,7 @@ async fn metrics(a: MetricsArgs, ctx: Ctx) -> Result<(), CliError> {
     let req = GetEndpointMetricsRequest {
         period: a.period,
         metric: a.metric,
+        percentile: None,
     };
     let resp = retrying(ctx.global.retries, || {
         ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)
