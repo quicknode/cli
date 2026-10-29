@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ENDPOINT  CHAIN   NETWORK  CREDITS  RPC_CREDITS  DATA_CREDITS  BYTES  
+ep-1      eth     mainnet  1200     1000         200           4096   
+ep-2      solana  mainnet  300      —            —             —

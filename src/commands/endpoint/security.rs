@@ -94,6 +94,8 @@ pub struct SetOptionsArgs {
     pub request_filters: Option<Toggle>,
     #[arg(long, value_enum)]
     pub ip_custom_header: Option<Toggle>,
+    #[arg(long, value_enum)]
+    pub response_logging: Option<Toggle>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -282,11 +284,12 @@ async fn set_options(a: SetOptionsArgs, ctx: Ctx) -> Result<(), CliError> {
         && a.cors.is_none()
         && a.request_filters.is_none()
         && a.ip_custom_header.is_none()
+        && a.response_logging.is_none()
     {
         return Err(CliError::Arg(
             "'endpoint security set-options' requires at least one of: \
              --tokens, --referrers, --jwts, --ips, --domain-masks, --hsts, \
-             --cors, --request-filters, --ip-custom-header."
+             --cors, --request-filters, --ip-custom-header, --response-logging."
                 .into(),
         ));
     }
@@ -300,7 +303,7 @@ async fn set_options(a: SetOptionsArgs, ctx: Ctx) -> Result<(), CliError> {
         cors: a.cors.map(|t| t.as_str().to_string()),
         request_filters: a.request_filters.map(|t| t.as_str().to_string()),
         ip_custom_header: a.ip_custom_header.map(|t| t.as_str().to_string()),
-        response_logging: None,
+        response_logging: a.response_logging.map(|t| t.as_str().to_string()),
     };
     let req = UpdateSecurityOptionsRequest { options };
     let resp = ctx.sdk.admin.update_security_options(&a.id, &req).await?;
@@ -596,6 +599,18 @@ impl Render for SecurityShowView {
             Cell::new("request_filters"),
             bool_cell(opts.and_then(|o| o.request_filters)),
         ]);
+        t.add_row(vec![
+            Cell::new("hsts"),
+            bool_cell(opts.and_then(|o| o.hsts)),
+        ]);
+        t.add_row(vec![
+            Cell::new("cors"),
+            bool_cell(opts.and_then(|o| o.cors)),
+        ]);
+        t.add_row(vec![
+            Cell::new("response_logging"),
+            bool_cell(opts.and_then(|o| o.response_logging)),
+        ]);
         let ip_header = opts
             .and_then(|o| o.ip_custom_header.as_ref())
             .and_then(|h| h.value.clone());
@@ -680,14 +695,30 @@ pub(crate) fn security_item_sections(
             .map(|i| vec![Cell::new(&i.id), Cell::new(&i.ip)])
             .collect(),
     )?;
+    let blocked = data.blocked_ips.as_deref().unwrap_or(&[]);
+    section(
+        w,
+        "BLOCKED_IPS",
+        vec!["ID", "IP"],
+        blocked
+            .iter()
+            .map(|i| vec![Cell::new(&i.id), Cell::new(&i.ip)])
+            .collect(),
+    )?;
     let filters = data.request_filters.as_deref().unwrap_or(&[]);
     section(
         w,
         "REQUEST_FILTERS",
-        vec!["ID", "METHODS"],
+        vec!["ID", "METHODS", "PARAMS"],
         filters
             .iter()
-            .map(|f| vec![Cell::new(&f.id), Cell::new(matchers_text(&f.method))])
+            .map(|f| {
+                vec![
+                    Cell::new(&f.id),
+                    Cell::new(matchers_text(&f.method)),
+                    Cell::new(pattern_text(&f.params)),
+                ]
+            })
             .collect(),
     )
 }
@@ -695,6 +726,9 @@ pub(crate) fn security_item_sections(
 /// Renders request-filter matchers for a table cell: string matchers as-is,
 /// structured matchers (e.g. `{"prefix":"eth_"}`) as compact JSON.
 fn matchers_text(matchers: &[serde_json::Value]) -> String {
+    if matchers.is_empty() {
+        return "—".to_string();
+    }
     matchers
         .iter()
         .map(|m| match m.as_str() {
@@ -703,6 +737,23 @@ fn matchers_text(matchers: &[serde_json::Value]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Renders a JSON pattern map as compact JSON with sorted keys so table
+/// output is stable; `—` when empty.
+pub(crate) fn pattern_text(
+    pattern: &std::collections::HashMap<String, serde_json::Value>,
+) -> String {
+    if pattern.is_empty() {
+        return "—".to_string();
+    }
+    let mut keys: Vec<&String> = pattern.keys().collect();
+    keys.sort();
+    let map: serde_json::Map<String, serde_json::Value> = keys
+        .into_iter()
+        .map(|k| (k.clone(), pattern[k].clone()))
+        .collect();
+    serde_json::Value::Object(map).to_string()
 }
 
 #[derive(Serialize)]

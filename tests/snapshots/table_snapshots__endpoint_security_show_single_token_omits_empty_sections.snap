@@ -9,6 +9,9 @@ domain_masks      ✗
 ips               ✗        
 referrers         ✗        
 request_filters   ✗        
+hsts              —        
+cors              —        
+response_logging  —        
 ip_custom_header  —        
 
 TOKENS (1)

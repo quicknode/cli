@@ -16,7 +16,11 @@ security.jwts              ✗ (0)
 security.domain_masks      ✗ (0)                 
 security.ips               ✗ (0)                 
 security.referrers         ✗ (0)                 
-security.request_filters   ✓ (1)                 
+security.request_filters   ✓ (2)                 
+security.blocked_ips       1                     
+security.hsts              ✓                     
+security.cors              ✗                     
+security.response_logging  ✓                     
 security.ip_custom_header  x-real-ip             
 rate_limits.by_ip          ✗                     
 rate_limits.account        -1                    
@@ -28,6 +32,11 @@ TOKENS (1)
 ID     TOKEN  
 tok-1  0xabc  
 
-REQUEST_FILTERS (1)
-ID    METHODS                    
-rf-1  eth_blockNumber, eth_call
+BLOCKED_IPS (1)
+ID     IP               
+bip-1  198.51.100.0/24  
+
+REQUEST_FILTERS (2)
+ID    METHODS                    PARAMS               
+rf-1  eth_blockNumber, eth_call  —                    
+rf-2  {"prefix":"eth_"}          {"jsonrpc":["2.0"]}

@@ -49,6 +49,9 @@ pub struct EndpointArgs {
     /// `metered_endpoint_credits_over_time`, `credits_over_time`, `response_status_breakdown`).
     #[arg(long)]
     pub metric: String,
+    /// Percentile (1-100); required for response-time metrics.
+    #[arg(long, value_parser = clap::value_parser!(i32).range(1..=100))]
+    pub percentile: Option<i32>,
 }
 
 pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
@@ -75,7 +78,7 @@ async fn endpoint(a: EndpointArgs, ctx: Ctx) -> Result<(), CliError> {
     let req = GetEndpointMetricsRequest {
         period: a.period,
         metric: a.metric,
-        percentile: None,
+        percentile: a.percentile,
     };
     let resp = retrying(ctx.global.retries, || {
         ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)

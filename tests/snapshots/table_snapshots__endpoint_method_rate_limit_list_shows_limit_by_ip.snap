@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ID    INTERVAL  METHODS      RATE  STATUS    LIMIT_BY_IP  
+rl-1  second    eth_call     10    enabled   ✓            
+rl-2  minute    eth_getLogs  5     disabled  —

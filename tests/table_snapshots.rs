@@ -57,6 +57,9 @@ async fn endpoint_show_full_table() {
                     "ips": false,
                     "referrers": false,
                     "requestFilters": true,
+                    "hsts": true,
+                    "cors": false,
+                    "responseLogging": true,
                     "ipCustomHeader": { "value": "x-real-ip" }
                 },
                 "tokens": [
@@ -66,8 +69,12 @@ async fn endpoint_show_full_table() {
                 "referrers": null,
                 "domain_masks": null,
                 "ips": null,
+                "blocked_ips": [
+                    { "id": "bip-1", "ip": "198.51.100.0/24" }
+                ],
                 "request_filters": [
-                    { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] }
+                    { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] },
+                    { "id": "rf-2", "method": [{ "prefix": "eth_" }], "params": { "jsonrpc": ["2.0"] } }
                 ]
             },
             "rate_limits": {
@@ -96,6 +103,9 @@ async fn endpoint_security_show_all_sections() {
                 "ips": true,
                 "referrers": true,
                 "requestFilters": true,
+                "hsts": true,
+                "cors": true,
+                "responseLogging": false,
                 "ipCustomHeader": { "value": "x-real-ip" }
             },
             "tokens": [
@@ -114,8 +124,12 @@ async fn endpoint_security_show_all_sections() {
             "ips": [
                 { "id": "ip-1", "ip": "203.0.113.7" }
             ],
+            "blocked_ips": [
+                { "id": "bip-1", "ip": "198.51.100.0/24" }
+            ],
             "request_filters": [
-                { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] }
+                { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] },
+                { "id": "rf-2", "method": [{ "prefix": "eth_" }], "params": { "jsonrpc": ["2.0"], "id": [1] } }
             ]
         },
         "error": null
@@ -124,6 +138,28 @@ async fn endpoint_security_show_all_sections() {
         "/v0/endpoints/ep-1/security",
         body,
         &["endpoint", "security", "show", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_method_rate_limit_list_shows_limit_by_ip() {
+    let body = serde_json::json!({
+        "data": {
+            "rate_limiters": [
+                { "id": "rl-1", "interval": "second", "methods": ["eth_call"], "rate": 10,
+                  "status": "enabled", "created": "2026-01-01T00:00:00Z", "limit_by_ip": true },
+                { "id": "rl-2", "interval": "minute", "methods": ["eth_getLogs"], "rate": 5,
+                  "status": "disabled", "created": "2026-01-01T00:00:00Z", "limit_by_ip": null }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/method-rate-limits",
+        body,
+        &["endpoint", "rate-limit", "method-list", "ep-1"],
     )
     .await;
     insta::assert_snapshot!(out);
@@ -329,6 +365,28 @@ async fn usage_by_method_table_includes_chain_and_network() {
 }
 
 #[tokio::test]
+async fn usage_by_endpoint_wide_table_includes_credit_breakdown() {
+    let body = serde_json::json!({
+        "data": {
+            "endpoints": [
+                { "name": "ep-1", "chain": "eth", "network": "mainnet", "credits_used": 1200,
+                  "methods_breakdown": [], "requests": 40, "rpc_credits": 1000, "data_credits": 200, "bytes": 4096 },
+                { "name": "ep-2", "chain": "solana", "network": "mainnet", "credits_used": 300,
+                  "methods_breakdown": [], "requests": null, "rpc_credits": null, "data_credits": null, "bytes": null }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/usage/rpc/by-endpoint",
+        body,
+        &["usage", "by-endpoint", "--wide"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn usage_by_tag_table_includes_requests() {
     let body = serde_json::json!({
         "data": {
@@ -391,6 +449,27 @@ async fn table_stdout_post(url_path: &str, body: serde_json::Value, args: &[&str
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn bulk_pause_table_shows_per_item_error() {
+    let body = serde_json::json!({
+        "data": {
+            "total": 2, "updated_count": 1, "failed_count": 1,
+            "results": [
+                { "id": "ep-1", "success": true },
+                { "id": "ep-2", "success": false, "error": "endpoint not found" }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout_post(
+        "/v0/endpoints/bulk/status",
+        body,
+        &["endpoint", "bulk", "pause", "ep-1", "ep-2", "--yes"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
 }
 
 #[tokio::test]

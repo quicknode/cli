@@ -159,14 +159,24 @@ impl Render for UsageByEndpointView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["ENDPOINT", "CHAIN", "NETWORK", "CREDITS"]);
+        let mut headers = vec!["ENDPOINT", "CHAIN", "NETWORK", "CREDITS"];
+        if ctx.wide {
+            headers.extend(["RPC_CREDITS", "DATA_CREDITS", "BYTES"]);
+        }
+        set_header_bold(&mut t, ctx, headers);
         for e in &data.endpoints {
-            t.add_row(vec![
+            let mut row = vec![
                 Cell::new(&e.name),
                 opt_cell(&e.chain),
                 opt_cell(&e.network),
                 Cell::new(e.credits_used),
-            ]);
+            ];
+            if ctx.wide {
+                row.push(opt_cell(&e.rpc_credits));
+                row.push(opt_cell(&e.data_credits));
+                row.push(opt_cell(&e.bytes));
+            }
+            t.add_row(row);
         }
         write_table(w, &t)
     }
@@ -189,19 +199,23 @@ impl Render for UsageByMethodView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(
-            &mut t,
-            ctx,
-            vec!["METHOD", "CHAIN", "NETWORK", "CREDITS", "ARCHIVE"],
-        );
+        let mut headers = vec!["METHOD", "CHAIN", "NETWORK", "CREDITS", "ARCHIVE"];
+        if ctx.wide {
+            headers.push("BYTES");
+        }
+        set_header_bold(&mut t, ctx, headers);
         for m in &data.methods {
-            t.add_row(vec![
+            let mut row = vec![
                 Cell::new(&m.method_name),
                 opt_cell(&m.chain),
                 opt_cell(&m.network),
                 Cell::new(m.credits_used),
                 bool_cell(m.archive),
-            ]);
+            ];
+            if ctx.wide {
+                row.push(opt_cell(&m.bytes));
+            }
+            t.add_row(row);
         }
         write_table(w, &t)
     }
@@ -224,9 +238,19 @@ impl Render for UsageByChainView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["CHAIN", "CREDITS"]);
+        let mut headers = vec!["CHAIN", "CREDITS"];
+        if ctx.wide {
+            headers.extend(["RPC_CREDITS", "DATA_CREDITS", "BYTES"]);
+        }
+        set_header_bold(&mut t, ctx, headers);
         for c in &data.chains {
-            t.add_row(vec![Cell::new(&c.name), Cell::new(c.credits_used)]);
+            let mut row = vec![Cell::new(&c.name), Cell::new(c.credits_used)];
+            if ctx.wide {
+                row.push(opt_cell(&c.rpc_credits));
+                row.push(opt_cell(&c.data_credits));
+                row.push(opt_cell(&c.bytes));
+            }
+            t.add_row(row);
         }
         write_table(w, &t)
     }
@@ -249,14 +273,24 @@ impl Render for UsageByTagView {
             }
         };
         let mut t = new_table(ctx);
-        set_header_bold(&mut t, ctx, vec!["TAG_ID", "LABEL", "CREDITS", "REQUESTS"]);
+        let mut headers = vec!["TAG_ID", "LABEL", "CREDITS", "REQUESTS"];
+        if ctx.wide {
+            headers.extend(["RPC_CREDITS", "DATA_CREDITS", "BYTES"]);
+        }
+        set_header_bold(&mut t, ctx, headers);
         for tg in &data.tags {
-            t.add_row(vec![
+            let mut row = vec![
                 opt_cell(&tg.tag_id),
                 Cell::new(&tg.label),
                 Cell::new(tg.credits_used),
                 Cell::new(tg.requests),
-            ]);
+            ];
+            if ctx.wide {
+                row.push(opt_cell(&tg.rpc_credits));
+                row.push(opt_cell(&tg.data_credits));
+                row.push(opt_cell(&tg.bytes));
+            }
+            t.add_row(row);
         }
         write_table(w, &t)
     }

@@ -207,6 +207,9 @@ pub struct MetricsArgs {
     /// Period (`hour`, `day`, `week`, `month`).
     #[arg(long, value_parser = ["hour", "day", "week", "month"])]
     pub period: String,
+    /// Percentile (1-100); required for response-time metrics.
+    #[arg(long, value_parser = clap::value_parser!(i32).range(1..=100))]
+    pub percentile: Option<i32>,
 }
 
 pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
@@ -361,7 +364,7 @@ async fn metrics(a: MetricsArgs, ctx: Ctx) -> Result<(), CliError> {
     let req = GetEndpointMetricsRequest {
         period: a.period,
         metric: a.metric,
-        percentile: None,
+        percentile: a.percentile,
     };
     let resp = retrying(ctx.global.retries, || {
         ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)
