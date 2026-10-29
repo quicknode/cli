@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod rpc;
 pub mod sql;
 pub mod stream;
+pub mod summary;
 pub mod team;
 pub mod tooling_access;
 pub mod usage;

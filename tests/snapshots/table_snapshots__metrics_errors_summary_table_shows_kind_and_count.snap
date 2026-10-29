@@ -1,0 +1,12 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+window: 2026-01-01T00:00:00Z → 2026-01-02T00:00:00Z
+FIELD        VALUE  
+rpc_errors   5      
+http_errors  2      
+
+CODE    METHOD    KIND  COUNT  
+-32000  eth_call  rpc   4      
+-32602  —         rpc   1

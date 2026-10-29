@@ -387,6 +387,88 @@ async fn usage_by_endpoint_wide_table_includes_credit_breakdown() {
 }
 
 #[tokio::test]
+async fn usage_rpc_summary_table_groups_by_selected_dimensions() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "totals": { "requests": 10, "bytes": 2048, "rpc_credits": 8, "data_credits": 2.5, "credits": 10.5 },
+            "breakdown": [
+                { "method": "eth_call", "endpoint": 123, "requests": 7, "bytes": 1024, "rpc_credits": 6, "data_credits": 1, "credits": 7 },
+                { "method": null, "endpoint": 456, "requests": null, "bytes": 1024, "rpc_credits": 2, "data_credits": 1.5, "credits": 3.5 }
+            ],
+            "next_cursor": "eyJvZmZzZXQiOjEwMH0"
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/usage/rpc/summary",
+        body,
+        &[
+            "usage",
+            "rpc",
+            "--from",
+            "24h",
+            "--group-by",
+            "method,endpoint",
+        ],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn usage_credits_summary_table_without_breakdown() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "totals": { "credits": 1200 }
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/usage/credits/summary",
+        body,
+        &["usage", "credits", "--from", "24h"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn metrics_errors_summary_table_shows_kind_and_count() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "totals": { "rpc_errors": 5, "http_errors": 2 },
+            "breakdown": [
+                { "kind": "rpc", "count": 4, "code": "-32000", "method": "eth_call" },
+                { "kind": "rpc", "count": 1, "code": "-32602", "method": null }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/metrics/errors/summary",
+        body,
+        &[
+            "metrics",
+            "errors",
+            "--from",
+            "24h",
+            "--kind",
+            "rpc",
+            "--group-by",
+            "code,method",
+        ],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn usage_by_tag_table_includes_requests() {
     let body = serde_json::json!({
         "data": {

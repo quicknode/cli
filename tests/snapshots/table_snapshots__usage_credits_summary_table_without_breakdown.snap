@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+window: 2026-01-01T00:00:00Z → 2026-01-02T00:00:00Z
+FIELD    VALUE  
+credits  1200

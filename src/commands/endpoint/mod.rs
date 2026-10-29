@@ -78,6 +78,8 @@ pub enum EndpointCmd {
     },
     /// Fetch metric series for an endpoint.
     Metrics(MetricsArgs),
+    /// Error totals for an endpoint over a time window (account-wide: `qn metrics errors`).
+    Errors(super::metrics::EndpointErrorsArgs),
     /// Enable multichain on an endpoint.
     EnableMultichain {
         #[arg(value_name = "ENDPOINT_ID")]
@@ -225,6 +227,7 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         EndpointCmd::Logs(a) => logs(a, ctx).await,
         EndpointCmd::LogDetails { id, request_id } => log_details(&id, &request_id, ctx).await,
         EndpointCmd::Metrics(a) => metrics(a, ctx).await,
+        EndpointCmd::Errors(a) => super::metrics::endpoint_errors(a, ctx).await,
         EndpointCmd::EnableMultichain { id } => enable_multichain(&id, ctx).await,
         EndpointCmd::DisableMultichain { id } => disable_multichain(&id, ctx).await,
         EndpointCmd::Tag(c) => tag::run(c, ctx).await,
