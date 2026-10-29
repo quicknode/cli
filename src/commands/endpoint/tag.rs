@@ -95,15 +95,40 @@ async fn add(id: String, label: String, ctx: Ctx) -> Result<(), CliError> {
     let req = CreateTagRequest {
         label: Some(label.clone()),
     };
-    ctx.sdk.admin.create_tag(&id, &req).await?;
+    let resp = ctx.sdk.admin.create_tag_with_response(&id, &req).await?;
     ctx.out.note(&format!("✓ Tagged {id} with {label:?}"));
-    Ok(())
+    crate::output::emit(&ctx.out, &TagAddedView(resp))
 }
 
 async fn remove(id: String, tag_id: String, ctx: Ctx) -> Result<(), CliError> {
     ctx.sdk.admin.delete_tag(&id, &tag_id).await?;
     ctx.out.note(&format!("✓ Removed tag {tag_id} from {id}"));
     Ok(())
+}
+
+/// The endpoint's tag associations after `tag add`. `id` is the association,
+/// `tag_id` is the account-level tag `qn endpoint tag list` shows.
+#[derive(Serialize)]
+struct TagAddedView(quicknode_sdk::admin::CreateTagResponse);
+
+impl Render for TagAddedView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "TAG_ID", "LABEL", "ENDPOINT_ID"]);
+        for tg in &self.0.data.tags {
+            t.add_row(vec![
+                Cell::new(tg.id),
+                Cell::new(tg.tag_id),
+                Cell::new(&tg.label),
+                Cell::new(tg.endpoint_id),
+            ]);
+        }
+        write_table(w, &t)
+    }
 }
 
 #[derive(Serialize)]

@@ -452,6 +452,36 @@ async fn table_stdout_post(url_path: &str, body: serde_json::Value, args: &[&str
 }
 
 #[tokio::test]
+async fn endpoint_security_token_create_prints_the_token() {
+    let body = serde_json::json!({ "data": { "id": "tok-1", "token": "0xabc" }, "error": null });
+    let out = table_stdout_post(
+        "/v0/endpoints/ep-1/security/tokens",
+        body,
+        &["endpoint", "security", "token", "create", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_tag_add_prints_the_association() {
+    let body = serde_json::json!({
+        "data": { "tags": [
+            { "id": 10, "tag_id": 1, "account_id": 1, "endpoint_id": 5, "label": "prod",
+              "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z" }
+        ] },
+        "error": null
+    });
+    let out = table_stdout_post(
+        "/v0/endpoints/ep-1/tags",
+        body,
+        &["endpoint", "tag", "add", "ep-1", "prod"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn bulk_pause_table_shows_per_item_error() {
     let body = serde_json::json!({
         "data": {

@@ -178,9 +178,13 @@ async fn set(a: SetArgs, ctx: Ctx) -> Result<(), CliError> {
         }),
         limit_by_ip: a.limit_by_ip,
     };
-    ctx.sdk.admin.update_rate_limits(&a.id, &req).await?;
+    let resp = ctx
+        .sdk
+        .admin
+        .update_rate_limits_with_response(&a.id, &req)
+        .await?;
     ctx.out.note(&format!("✓ Updated rate limits on {}", a.id));
-    Ok(())
+    crate::output::emit(&ctx.out, &EffectiveRateLimitsView(resp))
 }
 
 async fn method_list(id: &str, ctx: Ctx) -> Result<(), CliError> {
@@ -275,6 +279,27 @@ impl Render for RateLimitsView {
                 opt_cell(&r.id),
             ]);
         }
+        write_table(w, &t)
+    }
+}
+
+/// Effective overrides after `rate-limit set`; `—` means no override for
+/// that bucket (the plan default applies).
+#[derive(Serialize)]
+struct EffectiveRateLimitsView(quicknode_sdk::admin::UpdateRateLimitsResponse);
+
+impl Render for EffectiveRateLimitsView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let l = &self.0.data.limits;
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["BUCKET", "VALUE"]);
+        t.add_row(vec![Cell::new("rps"), opt_cell(&l.rps)]);
+        t.add_row(vec![Cell::new("rpm"), opt_cell(&l.rpm)]);
+        t.add_row(vec![Cell::new("rpd"), opt_cell(&l.rpd)]);
         write_table(w, &t)
     }
 }

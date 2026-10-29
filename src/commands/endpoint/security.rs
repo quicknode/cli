@@ -14,7 +14,9 @@ use serde::Serialize;
 use crate::confirm::confirm_mild;
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{bool_cell, new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::output::{
+    bool_cell, new_table, opt_cell, set_header_bold, write_record, write_table, Render,
+};
 use crate::retry::retrying;
 
 #[derive(Debug, Subcommand)]
@@ -340,9 +342,11 @@ async fn warn_if_option_disabled(ctx: &Ctx, id: &str, option: &str, flag: &str, 
 async fn token(cmd: TokenCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         TokenCmd::Create { id } => {
-            ctx.sdk.admin.create_token(&id).await?;
-            ctx.out.note(&format!("✓ Created token on {id}"));
+            let resp = ctx.sdk.admin.create_token_with_response(&id).await?;
+            ctx.out
+                .note(&format!("✓ Created token {} on {id}", resp.data.id));
             warn_if_option_disabled(&ctx, &id, "tokens", "tokens", "this token").await;
+            crate::output::emit(&ctx.out, &TokenCreatedView(resp))?;
         }
         TokenCmd::Delete { id, token_id } => {
             confirm_mild(
@@ -364,10 +368,15 @@ async fn referrer(cmd: ReferrerCmd, ctx: Ctx) -> Result<(), CliError> {
             let req = CreateReferrerRequest {
                 referrer: referrer.clone(),
             };
-            ctx.sdk.admin.create_referrer(&id, &req).await?;
+            let resp = ctx
+                .sdk
+                .admin
+                .create_referrer_with_response(&id, &req)
+                .await?;
             ctx.out
                 .note(&format!("✓ Whitelisted referrer {referrer:?} on {id}"));
             warn_if_option_disabled(&ctx, &id, "referrers", "referrers", "this referrer").await;
+            crate::output::emit(&ctx.out, &ReferrerCreatedView(resp))?;
         }
         ReferrerCmd::Remove { id, referrer_id } => {
             confirm_mild(
@@ -386,9 +395,10 @@ async fn ip(cmd: IpCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
         IpCmd::Add { id, ip } => {
             let req = CreateIpRequest { ip: ip.clone() };
-            ctx.sdk.admin.create_ip(&id, &req).await?;
+            let resp = ctx.sdk.admin.create_ip_with_response(&id, &req).await?;
             ctx.out.note(&format!("✓ Whitelisted IP {ip} on {id}"));
             warn_if_option_disabled(&ctx, &id, "ips", "ips", "this IP").await;
+            crate::output::emit(&ctx.out, &IpCreatedView(resp))?;
         }
         IpCmd::Remove { id, ip_id } => {
             confirm_mild(
@@ -424,9 +434,11 @@ async fn jwt(cmd: JwtCmd, ctx: Ctx) -> Result<(), CliError> {
                 kid: a.kid,
                 name: a.name,
             };
-            ctx.sdk.admin.create_jwt(&a.id, &req).await?;
-            ctx.out.note(&format!("✓ Added JWT on {}", a.id));
+            let resp = ctx.sdk.admin.create_jwt_with_response(&a.id, &req).await?;
+            ctx.out
+                .note(&format!("✓ Added JWT {} on {}", resp.data.id, a.id));
             warn_if_option_disabled(&ctx, &a.id, "jwts", "jwts", "this JWT").await;
+            crate::output::emit(&ctx.out, &JwtCreatedView(resp))?;
         }
         JwtCmd::Remove { id, jwt_id } => {
             confirm_mild(&ctx, &format!("Remove JWT {jwt_id} from endpoint {id}?"))?;
@@ -443,11 +455,16 @@ async fn domain_mask(cmd: DomainMaskCmd, ctx: Ctx) -> Result<(), CliError> {
             let req = CreateDomainMaskRequest {
                 domain_mask: Some(domain.clone()),
             };
-            ctx.sdk.admin.create_domain_mask(&id, &req).await?;
+            let resp = ctx
+                .sdk
+                .admin
+                .create_domain_mask_with_response(&id, &req)
+                .await?;
             ctx.out
                 .note(&format!("✓ Added domain mask {domain:?} on {id}"));
             warn_if_option_disabled(&ctx, &id, "domainMasks", "domain-masks", "this domain mask")
                 .await;
+            crate::output::emit(&ctx.out, &DomainMaskCreatedView(resp))?;
         }
         DomainMaskCmd::Remove { id, domain_mask_id } => {
             confirm_mild(
@@ -754,6 +771,101 @@ pub(crate) fn pattern_text(
         .map(|k| (k.clone(), pattern[k].clone()))
         .collect();
     serde_json::Value::Object(map).to_string()
+}
+
+#[derive(Serialize)]
+struct TokenCreatedView(quicknode_sdk::admin::CreateTokenResponse);
+
+impl Render for TokenCreatedView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let d = &self.0.data;
+        write_record(
+            w,
+            ctx,
+            vec!["ID", "TOKEN"],
+            vec![Cell::new(&d.id), Cell::new(&d.token)],
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct ReferrerCreatedView(quicknode_sdk::admin::CreateReferrerResponse);
+
+impl Render for ReferrerCreatedView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let d = &self.0.data;
+        write_record(
+            w,
+            ctx,
+            vec!["ID", "REFERRER"],
+            vec![Cell::new(&d.id), Cell::new(&d.url)],
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct IpCreatedView(quicknode_sdk::admin::CreateIpResponse);
+
+impl Render for IpCreatedView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let d = &self.0.data;
+        write_record(
+            w,
+            ctx,
+            vec!["ID", "IP"],
+            vec![Cell::new(&d.id), Cell::new(&d.ip)],
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct DomainMaskCreatedView(quicknode_sdk::admin::CreateDomainMaskResponse);
+
+impl Render for DomainMaskCreatedView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let d = &self.0.data;
+        write_record(
+            w,
+            ctx,
+            vec!["ID", "DOMAIN"],
+            vec![Cell::new(&d.id), Cell::new(&d.domain_mask)],
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct JwtCreatedView(quicknode_sdk::admin::CreateJwtResponse);
+
+impl Render for JwtCreatedView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let d = &self.0.data;
+        write_record(
+            w,
+            ctx,
+            vec!["ID", "NAME", "KID"],
+            vec![Cell::new(&d.id), Cell::new(&d.name), Cell::new(&d.kid)],
+        )
+    }
 }
 
 #[derive(Serialize)]

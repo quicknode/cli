@@ -335,6 +335,20 @@ pub fn write_table(w: &mut dyn Write, table: &Table) -> std::io::Result<()> {
     writeln!(w, "{table}")
 }
 
+/// Writes a one-row table: the common shape for "here is the record you just
+/// created" output.
+pub fn write_record(
+    w: &mut dyn Write,
+    ctx: &OutputCtx,
+    headers: Vec<&str>,
+    row: Vec<Cell>,
+) -> std::io::Result<()> {
+    let mut t = new_table(ctx);
+    set_header_bold(&mut t, ctx, headers);
+    t.add_row(row);
+    write_table(w, &t)
+}
+
 /// Writes a `"showing X–Y of Z"` footer below a list-style table. Handles the
 /// empty-page case (`page_len == 0`) without underflowing to `"1-0 of N"`.
 pub fn write_pagination_footer(

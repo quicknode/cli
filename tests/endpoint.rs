@@ -398,7 +398,7 @@ async fn endpoint_tag_add() {
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/tags"))
         .and(body_json(json!({ "label": "prod" })))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "tags": [{ "id": 10, "tag_id": 1, "account_id": 1, "endpoint_id": 5, "label": "prod", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z" }] } })))
         .mount(&server)
         .await;
     let out = run_qn(&server.uri(), &["endpoint", "tag", "add", "ep-1", "prod"]).await;
@@ -410,7 +410,10 @@ async fn endpoint_security_token_create() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/tokens"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "data": { "id": "tok-1", "token": "0xabc" } })),
+        )
         .mount(&server)
         .await;
     let out = run_qn(
@@ -433,7 +436,11 @@ async fn endpoint_security_referrer_add_warns_when_option_disabled() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/referrers"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "data": { "id": "ref-1", "url": "https://app.example.com" } }),
+            ),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -459,7 +466,11 @@ async fn endpoint_security_referrer_add_skips_options_check_when_quiet() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/referrers"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "data": { "id": "ref-1", "url": "https://app.example.com" } }),
+            ),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -484,7 +495,11 @@ async fn endpoint_security_referrer_add_succeeds_when_options_check_fails() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/referrers"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "data": { "id": "ref-1", "url": "https://app.example.com" } }),
+            ),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -506,7 +521,11 @@ async fn endpoint_security_domain_mask_add_checks_options() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/domain_masks"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "data": { "id": "dm-1", "domain_mask": "rpc.example.com" } }),
+            ),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -542,7 +561,11 @@ async fn security_referrer_add_disabled_option_warning_on_stderr() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/referrers"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "data": { "id": "ref-1", "url": "https://app.example.com" } }),
+            ),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -592,7 +615,11 @@ async fn security_referrer_add_enabled_option_no_warning_on_stderr() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/referrers"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "data": { "id": "ref-1", "url": "https://app.example.com" } }),
+            ),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -751,7 +778,10 @@ async fn endpoint_security_ip_add() {
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/ips"))
         .and(body_json(json!({ "ip": "1.2.3.4" })))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "data": { "id": "ip-1", "ip": "1.2.3.4" } })),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -833,7 +863,7 @@ async fn endpoint_security_jwt_add_with_kid() {
         .and(body_partial_json(
             json!({ "public_key": "pk", "kid": "kid-1", "name": "my-jwt" }),
         ))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "id": "jwt-1", "public_key": "pk", "kid": "kid-1", "name": "my-jwt" } })))
         .expect(1)
         .mount(&server)
         .await;
@@ -863,7 +893,7 @@ async fn endpoint_security_jwt_add_requires_name() {
     // --name is required (quicknode-sdk 0.4); the request never fires.
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/jwts"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "id": "jwt-1", "public_key": "pk", "kid": "kid-1", "name": "my-jwt" } })))
         .expect(0)
         .mount(&server)
         .await;
@@ -892,7 +922,7 @@ async fn endpoint_security_jwt_add_requires_kid() {
     // --kid is required; the request never fires.
     Mock::given(method("POST"))
         .and(path("/v0/endpoints/ep-1/security/jwts"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": { "id": "jwt-1", "public_key": "pk", "kid": "kid-1", "name": "my-jwt" } })))
         .expect(0)
         .mount(&server)
         .await;
@@ -1168,7 +1198,9 @@ async fn endpoint_ratelimit_set_omits_unset_fields() {
     Mock::given(method("PATCH"))
         .and(path("/v0/endpoints/ep-1/rate-limits"))
         .and(body_json(json!({ "rate_limits": { "rps": 100 } })))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "data": { "limits": { "rps": 100, "rpm": null, "rpd": null } } }),
+        ))
         .mount(&server)
         .await;
     let out = run_qn(
@@ -1256,7 +1288,9 @@ async fn endpoint_ratelimit_set_limit_by_ip_alone_sends_only_the_flag() {
     Mock::given(method("PATCH"))
         .and(path("/v0/endpoints/ep-1/rate-limits"))
         .and(body_json(json!({ "limit_by_ip": false })))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "data": { "limits": { "rps": 100, "rpm": null, "rpd": null } } }),
+        ))
         .expect(1)
         .mount(&server)
         .await;
@@ -1280,7 +1314,9 @@ async fn endpoint_ratelimit_set_no_flags_fails_before_api_call() {
     let server = MockServer::start().await;
     Mock::given(method("PATCH"))
         .and(path("/v0/endpoints/ep-1/rate-limits"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "data": { "limits": { "rps": 100, "rpm": null, "rpd": null } } }),
+        ))
         .expect(0)
         .mount(&server)
         .await;

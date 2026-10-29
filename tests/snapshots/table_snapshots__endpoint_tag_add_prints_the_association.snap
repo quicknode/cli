@@ -1,0 +1,6 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ID  TAG_ID  LABEL  ENDPOINT_ID  
+10  1       prod   5
