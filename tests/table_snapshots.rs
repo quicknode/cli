@@ -469,6 +469,131 @@ async fn metrics_errors_summary_table_shows_kind_and_count() {
 }
 
 #[tokio::test]
+async fn activity_log_list_table_shows_target_actor_and_pagination() {
+    let body = serde_json::json!({
+        "data": [
+            {
+                "id": "a1", "occurred_at": "2026-01-01T12:00:00Z", "action": "created",
+                "description": "Created endpoint prod-1",
+                "target": { "id": "123", "kind": "endpoint", "label": "prod-1", "name": null },
+                "actor": { "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "type": "user", "name": "Alice", "email": "alice@example.com" }
+            },
+            {
+                "id": "a2", "occurred_at": "2026-01-01T11:00:00Z", "action": "deleted",
+                "description": null,
+                "target": { "id": "t-9", "kind": null, "label": "old-team", "name": null },
+                "actor": { "id": null, "type": "deleted_user", "name": null, "email": null }
+            }
+        ],
+        "pagination": { "total": 42, "limit": 2, "offset": 0 },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/activity_logs",
+        body,
+        &["activity-log", "list", "--limit", "2"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn activity_log_filters_table_lists_actors_and_types() {
+    let body = serde_json::json!({
+        "data": {
+            "actors": [
+                { "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "name": "Alice", "type": "user" },
+                { "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "name": null, "type": "api_key" }
+            ],
+            "types": [
+                { "value": "endpoint", "label": "Endpoint" },
+                { "value": "team", "label": "Team" }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/activity_logs/filters",
+        body,
+        &["activity-log", "filters"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn transaction_list_table_shows_endpoints_and_cursor() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "transactions": [{
+                "network": "ethereum-mainnet", "transaction_hash": "0xabc",
+                "first_submitted_at": "2026-01-01T10:00:00Z", "last_submitted_at": "2026-01-01T10:05:00Z",
+                "attempt_count": 2, "endpoint_ids": [123, null], "methods": ["eth_sendRawTransaction"],
+                "archive": false, "height": "9007199254740993", "state": "succeeded"
+            }],
+            "next_cursor": "eyJvZmZzZXQiOjEwMH0"
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/transactions",
+        body,
+        &["transaction", "list", "--from", "24h"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn transaction_show_table_with_payloads() {
+    let body = serde_json::json!({
+        "data": {
+            "exists": true,
+            "data": {
+                "network": "ethereum-mainnet", "transaction_hash": "0xabc",
+                "first_submitted_at": "2026-01-01T10:00:00Z", "last_submitted_at": "2026-01-01T10:05:00Z",
+                "state": "succeeded", "attempt_count": 2, "endpoint_ids": [123, null],
+                "methods": ["eth_sendRawTransaction"], "archive": false, "height": "9007199254740993",
+                "attempts": [
+                    { "submitted_at": "2026-01-01T10:00:00Z", "endpoint_id": 123, "method": "eth_sendRawTransaction", "request_id": "req-1",
+                      "payloads": { "request": "{\"method\":\"eth_sendRawTransaction\"}", "response": "not json" } },
+                    { "submitted_at": "2026-01-01T10:05:00Z", "endpoint_id": 123, "method": "eth_sendRawTransaction", "request_id": "req-2",
+                      "payloads": { "request": null, "response": null } }
+                ]
+            }
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/transactions/ethereum-mainnet/0xabc",
+        body,
+        &[
+            "transaction",
+            "show",
+            "ethereum-mainnet",
+            "0xabc",
+            "--payloads",
+        ],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn transaction_show_table_when_not_retained() {
+    let body = serde_json::json!({ "data": { "exists": false, "data": null }, "error": null });
+    let out = table_stdout(
+        "/v0/transactions/ethereum-mainnet/0xdead",
+        body,
+        &["transaction", "show", "ethereum-mainnet", "0xdead"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn usage_by_tag_table_includes_requests() {
     let body = serde_json::json!({
         "data": {

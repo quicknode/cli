@@ -1,0 +1,8 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+window: 2026-01-01T00:00:00Z → 2026-01-02T00:00:00Z
+NETWORK           HASH   STATE      ATTEMPTS  ENDPOINTS  METHODS                 HEIGHT            LAST_SUBMITTED        
+ethereum-mainnet  0xabc  succeeded  2         123, —     eth_sendRawTransaction  9007199254740993  2026-01-01T10:05:00Z  
+next page: --cursor eyJvZmZzZXQiOjEwMH0

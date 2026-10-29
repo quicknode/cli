@@ -1,0 +1,30 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+FIELD               VALUE                   
+network             ethereum-mainnet        
+hash                0xabc                   
+state               succeeded               
+first_submitted_at  2026-01-01T10:00:00Z    
+last_submitted_at   2026-01-01T10:05:00Z    
+attempt_count       2                       
+endpoint_ids        123, —                  
+methods             eth_sendRawTransaction  
+archive             ✗                       
+height              9007199254740993        
+
+ATTEMPTS (2)
+SUBMITTED_AT          ENDPOINT_ID  METHOD                  REQUEST_ID  
+2026-01-01T10:00:00Z  123          eth_sendRawTransaction  req-1       
+2026-01-01T10:05:00Z  123          eth_sendRawTransaction  req-2       
+
+== attempt 1 request ==
+{"method":"eth_sendRawTransaction"}
+== attempt 1 response ==
+not json
+
+== attempt 2 request ==
+(none)
+== attempt 2 response ==
+(none)

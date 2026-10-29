@@ -141,6 +141,14 @@ pub enum Command {
     /// View invoices and payments.
     Billing(commands::billing::Args),
 
+    /// View the account activity log (who changed what, when).
+    #[command(name = "activity-log", visible_aliases = ["activity-logs", "activity"])]
+    ActivityLog(commands::activity_log::Args),
+
+    /// View retained transactions submitted through your endpoints.
+    #[command(visible_aliases = ["transactions", "tx"])]
+    Transaction(commands::transaction::Args),
+
     /// Manage blockchain data streams.
     #[command(visible_alias = "streams")]
     Stream(commands::stream::Args),
@@ -252,6 +260,12 @@ impl Cli {
             Command::Metrics(args) => commands::metrics::run(args, Ctx::from_global(global)?).await,
             Command::Chain(args) => commands::chain::run(args, Ctx::from_global(global)?).await,
             Command::Billing(args) => commands::billing::run(args, Ctx::from_global(global)?).await,
+            Command::ActivityLog(args) => {
+                commands::activity_log::run(args, Ctx::from_global(global)?).await
+            }
+            Command::Transaction(args) => {
+                commands::transaction::run(args, Ctx::from_global(global)?).await
+            }
             Command::Stream(args) => commands::stream::run(args, Ctx::from_global(global)?).await,
             Command::Webhook(args) => commands::webhook::run(args, Ctx::from_global(global)?).await,
             Command::Kv(args) => commands::kv::run(args, Ctx::from_global(global)?).await,
