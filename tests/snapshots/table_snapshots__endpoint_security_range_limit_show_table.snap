@@ -1,0 +1,8 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+METHOD             MAX_BLOCKS  
+eth_getFilterLogs  500         
+eth_getLogs        1000        
+supported methods: eth_getLogs, eth_getFilterLogs, eth_newFilter

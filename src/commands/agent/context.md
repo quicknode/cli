@@ -85,8 +85,10 @@ Gated command classes:
 
 - `endpoint archive`, `endpoint bulk pause`
 - `endpoint tag delete`
-- `endpoint security` removals (token/jwt/ip/referrer/domain-mask remove, and
-  `set-options` toggles that disable a protection)
+- `endpoint security` removals (token/jwt/ip/referrer/domain-mask/request-filter
+  remove, `client-cert remove`, `client-cert disable`, `blocked-ip remove`,
+  `method-blacklist clear`, `range-limit clear`, and `set-options` toggles that
+  disable a protection)
 - `endpoint rate-limit delete-override`
 - `stream delete`, `webhook delete`, `team delete`
 - `kv set delete`, `kv list delete`
@@ -121,7 +123,13 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
 - `auth` — login, logout, whoami, status
 - `endpoint` — list, show, create, update, archive, pause, resume, urls, logs,
   log-details, metrics, enable-multichain, disable-multichain; nested:
-  `tag`, `security`, `rate-limit`, `bulk`
+  `tag`, `security`, `rate-limit`, `bulk`. `security` covers `show`,
+  `options`/`set-options`, and the sub-nouns `token`, `referrer`, `ip`, `jwt`,
+  `domain-mask`, `request-filter` (method whitelist via `--method`, or a custom
+  JSON pattern via `--pattern`/`--pattern-file`), `ip-header`, `client-cert`,
+  `method-blacklist`, `range-limit`, and `blocked-ip`. `set` verbs replace the
+  whole configuration; `clear` verbs empty it. Create-style verbs print the
+  created record on stdout (a new token's value is in that output).
 - `team` — list, create, show, delete, endpoints, set-endpoints; nested: `member`
 - `usage` — summary, by-endpoint, by-method, by-chain, by-tag
 - `metrics` — account, endpoint

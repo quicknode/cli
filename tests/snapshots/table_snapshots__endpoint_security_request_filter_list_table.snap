@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ID    WHITELIST  PATTERN                                           
+rf-1  ✓          {"method":["eth_call","eth_blockNumber"]}         
+rf-2  ✗          {"jsonrpc":["2.0"],"method":[{"prefix":"eth_"}]}

@@ -1,15 +1,23 @@
 //! `qn endpoint security …` — manage per-endpoint security settings.
+//!
+//! Client certificates, the method blacklist, range limits, and blocked IPs
+//! live in [`controls`]; everything else is here.
 
+use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use comfy_table::Cell;
 use quicknode_sdk::admin::{
     CreateDomainMaskRequest, CreateIpRequest, CreateJwtRequest,
-    CreateOrUpdateIpCustomHeaderRequest, CreateReferrerRequest, CreateRequestFilterRequest,
-    SecurityOptionsUpdate, UpdateRequestFilterRequest, UpdateSecurityOptionsRequest,
+    CreateOrUpdateIpCustomHeaderRequest, CreateReferrerRequest, CreateRequestFilterPatternRequest,
+    CreateRequestFilterRequest, SecurityOptionsUpdate, UpdateRequestFilterPatternRequest,
+    UpdateRequestFilterRequest, UpdateSecurityOptionsRequest,
 };
 use serde::Serialize;
+
+mod controls;
 
 use crate::confirm::confirm_mild;
 use crate::context::Ctx;
@@ -57,6 +65,18 @@ pub enum SecurityCmd {
     /// Manage the custom IP-identifying header.
     #[command(subcommand)]
     IpHeader(IpHeaderCmd),
+    /// Manage client certificates (mTLS).
+    #[command(subcommand)]
+    ClientCert(controls::ClientCertCmd),
+    /// Manage the blocked RPC method list.
+    #[command(subcommand)]
+    MethodBlacklist(controls::MethodBlacklistCmd),
+    /// Manage per-method block-range limits.
+    #[command(subcommand)]
+    RangeLimit(controls::RangeLimitCmd),
+    /// Manage blocked IP addresses and CIDR ranges.
+    #[command(subcommand)]
+    BlockedIp(controls::BlockedIpCmd),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -195,9 +215,20 @@ pub enum DomainMaskCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum RequestFilterCmd {
-    /// Whitelist specific RPC methods. Pass --method repeatedly or a comma list.
+    /// List request filters with their complete patterns.
+    #[command(visible_alias = "ls")]
+    List {
+        #[arg(value_name = "ENDPOINT_ID")]
+        id: String,
+    },
+    /// Create a filter: whitelist RPC methods (--method) or match a custom JSON pattern (--pattern).
+    #[command(after_help = "Examples:\n  \
+        qn endpoint security request-filter create ep-1 --method eth_call --method eth_blockNumber\n  \
+        qn endpoint security request-filter create ep-1 \\\n    \
+          --pattern '{\"method\":[{\"prefix\":\"eth_\"}],\"jsonrpc\":[\"2.0\"]}'\n  \
+        qn endpoint security request-filter create ep-1 --pattern-file filter.json")]
     Create(RequestFilterCreateArgs),
-    /// Replace the whitelisted RPC methods of an existing filter.
+    /// Replace an existing filter's whitelisted methods (--method) or custom pattern (--pattern).
     Update(RequestFilterUpdateArgs),
     /// Remove a request filter.
     Remove {
@@ -217,6 +248,12 @@ pub struct RequestFilterCreateArgs {
     /// Comma-separated list of methods (alternative to repeated --method).
     #[arg(long = "methods", value_delimiter = ',')]
     pub methods_csv: Vec<String>,
+    /// Custom filter pattern as a JSON object. Mutually exclusive with --method.
+    #[arg(long, value_name = "JSON")]
+    pub pattern: Option<String>,
+    /// Read the JSON pattern from a file, or from stdin when the path is `-`.
+    #[arg(long, value_name = "PATH")]
+    pub pattern_file: Option<PathBuf>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -228,6 +265,81 @@ pub struct RequestFilterUpdateArgs {
     pub methods: Vec<String>,
     #[arg(long = "methods", value_delimiter = ',')]
     pub methods_csv: Vec<String>,
+    /// Custom filter pattern as a JSON object. Mutually exclusive with --method.
+    #[arg(long, value_name = "JSON")]
+    pub pattern: Option<String>,
+    /// Read the JSON pattern from a file, or from stdin when the path is `-`.
+    #[arg(long, value_name = "PATH")]
+    pub pattern_file: Option<PathBuf>,
+}
+
+/// What a request-filter create/update sends: a method whitelist or a custom
+/// pattern, never both.
+enum FilterInput {
+    Methods(Vec<String>),
+    Pattern(HashMap<String, serde_json::Value>),
+}
+
+fn filter_input(
+    methods: Vec<String>,
+    methods_csv: Vec<String>,
+    pattern: Option<String>,
+    pattern_file: Option<PathBuf>,
+) -> Result<FilterInput, CliError> {
+    let mut methods = methods;
+    methods.extend(methods_csv);
+    let has_pattern = pattern.is_some() || pattern_file.is_some();
+    if has_pattern && !methods.is_empty() {
+        return Err(CliError::Arg(
+            "supply either --method/--methods or --pattern/--pattern-file, not both".into(),
+        ));
+    }
+    if !has_pattern {
+        if methods.is_empty() {
+            return Err(CliError::Arg(
+                "supply at least one --method, or a --pattern/--pattern-file".into(),
+            ));
+        }
+        return Ok(FilterInput::Methods(methods));
+    }
+    let text = read_inline_or_file(pattern, pattern_file, "pattern")?;
+    let pattern: HashMap<String, serde_json::Value> = serde_json::from_str(&text)
+        .map_err(|e| CliError::Arg(format!("--pattern must be a JSON object: {e}")))?;
+    if pattern.is_empty() {
+        return Err(CliError::Arg(
+            "--pattern must not be an empty object".into(),
+        ));
+    }
+    Ok(FilterInput::Pattern(pattern))
+}
+
+/// Resolves a value given inline or via a file path (`-` reads stdin). Errors
+/// if both or neither are given.
+pub(crate) fn read_inline_or_file(
+    inline: Option<String>,
+    file: Option<PathBuf>,
+    what: &str,
+) -> Result<String, CliError> {
+    match (inline, file) {
+        (Some(s), None) => Ok(s),
+        (None, Some(path)) if path.as_os_str() == "-" => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| CliError::Arg(format!("could not read {what} from stdin: {e}")))?;
+            Ok(buf)
+        }
+        (None, Some(path)) => std::fs::read_to_string(&path).map_err(|e| {
+            CliError::Arg(format!(
+                "could not read {what} file '{}': {e}",
+                path.display()
+            ))
+        }),
+        (None, None) => Err(CliError::Arg(format!("supply --{what} or --{what}-file"))),
+        (Some(_), Some(_)) => Err(CliError::Arg(format!(
+            "supply only one of --{what} or --{what}-file"
+        ))),
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -257,6 +369,10 @@ pub async fn run(cmd: SecurityCmd, ctx: Ctx) -> Result<(), CliError> {
         SecurityCmd::DomainMask(c) => domain_mask(c, ctx).await,
         SecurityCmd::RequestFilter(c) => request_filter(c, ctx).await,
         SecurityCmd::IpHeader(c) => ip_header(c, ctx).await,
+        SecurityCmd::ClientCert(c) => controls::client_cert(c, ctx).await,
+        SecurityCmd::MethodBlacklist(c) => controls::method_blacklist(c, ctx).await,
+        SecurityCmd::RangeLimit(c) => controls::range_limit(c, ctx).await,
+        SecurityCmd::BlockedIp(c) => controls::blocked_ip(c, ctx).await,
     }
 }
 
@@ -484,14 +600,28 @@ async fn domain_mask(cmd: DomainMaskCmd, ctx: Ctx) -> Result<(), CliError> {
 
 async fn request_filter(cmd: RequestFilterCmd, ctx: Ctx) -> Result<(), CliError> {
     match cmd {
+        RequestFilterCmd::List { id } => {
+            let resp = retrying(ctx.global.retries, || {
+                ctx.sdk.admin.get_request_filters(&id)
+            })
+            .await?;
+            crate::output::emit(&ctx.out, &RequestFiltersView(resp))?;
+        }
         RequestFilterCmd::Create(a) => {
-            let mut methods = a.methods;
-            methods.extend(a.methods_csv);
-            if methods.is_empty() {
-                return Err(CliError::Arg("supply at least one --method".to_string()));
-            }
-            let req = CreateRequestFilterRequest { method: methods };
-            let resp = ctx.sdk.admin.create_request_filter(&a.id, &req).await?;
+            let input = filter_input(a.methods, a.methods_csv, a.pattern, a.pattern_file)?;
+            let resp = match input {
+                FilterInput::Methods(method) => {
+                    let req = CreateRequestFilterRequest { method };
+                    ctx.sdk.admin.create_request_filter(&a.id, &req).await?
+                }
+                FilterInput::Pattern(pattern) => {
+                    let req = CreateRequestFilterPatternRequest { pattern };
+                    ctx.sdk
+                        .admin
+                        .create_request_filter_pattern(&a.id, &req)
+                        .await?
+                }
+            };
             let d = resp.data.as_ref().ok_or_else(|| {
                 CliError::Format("API returned success but no data; nothing was created".into())
             })?;
@@ -507,15 +637,25 @@ async fn request_filter(cmd: RequestFilterCmd, ctx: Ctx) -> Result<(), CliError>
             .await;
         }
         RequestFilterCmd::Update(a) => {
-            let mut methods = a.methods;
-            methods.extend(a.methods_csv);
-            let req = UpdateRequestFilterRequest {
-                method: Some(methods),
-            };
-            ctx.sdk
-                .admin
-                .update_request_filter(&a.id, &a.request_filter_id, &req)
-                .await?;
+            let input = filter_input(a.methods, a.methods_csv, a.pattern, a.pattern_file)?;
+            match input {
+                FilterInput::Methods(method) => {
+                    let req = UpdateRequestFilterRequest {
+                        method: Some(method),
+                    };
+                    ctx.sdk
+                        .admin
+                        .update_request_filter(&a.id, &a.request_filter_id, &req)
+                        .await?;
+                }
+                FilterInput::Pattern(pattern) => {
+                    let req = UpdateRequestFilterPatternRequest { pattern };
+                    ctx.sdk
+                        .admin
+                        .update_request_filter_pattern(&a.id, &a.request_filter_id, &req)
+                        .await?;
+                }
+            }
             ctx.out.note(&format!(
                 "✓ Updated request filter {} on {}",
                 a.request_filter_id, a.id
@@ -771,6 +911,28 @@ pub(crate) fn pattern_text(
         .map(|k| (k.clone(), pattern[k].clone()))
         .collect();
     serde_json::Value::Object(map).to_string()
+}
+
+#[derive(Serialize)]
+struct RequestFiltersView(quicknode_sdk::admin::GetRequestFiltersResponse);
+
+impl Render for RequestFiltersView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "WHITELIST", "PATTERN"]);
+        for f in &self.0.data {
+            t.add_row(vec![
+                Cell::new(&f.id),
+                bool_cell(Some(f.method_whitelist)),
+                Cell::new(pattern_text(&f.pattern)),
+            ]);
+        }
+        write_table(w, &t)
+    }
 }
 
 #[derive(Serialize)]

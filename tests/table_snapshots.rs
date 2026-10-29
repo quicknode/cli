@@ -452,6 +452,80 @@ async fn table_stdout_post(url_path: &str, body: serde_json::Value, args: &[&str
 }
 
 #[tokio::test]
+async fn endpoint_security_request_filter_list_table() {
+    let body = serde_json::json!({
+        "data": [
+            { "id": "rf-1", "pattern": { "method": ["eth_call", "eth_blockNumber"] }, "method_whitelist": true },
+            { "id": "rf-2", "pattern": { "method": [{ "prefix": "eth_" }], "jsonrpc": ["2.0"] }, "method_whitelist": false }
+        ],
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/request_filters",
+        body,
+        &["endpoint", "security", "request-filter", "list", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_client_cert_list_table() {
+    let body = serde_json::json!({
+        "data": {
+            "enabled": true,
+            "certs": [
+                { "fingerprint": "ab:cd:ef", "subject": "CN=client", "issuer": "CN=ca", "expires_at": "2027-01-01T00:00:00Z" }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/client_certs",
+        body,
+        &["endpoint", "security", "client-cert", "list", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_range_limit_show_table() {
+    let body = serde_json::json!({
+        "data": {
+            "limits": { "eth_getLogs": 1000, "eth_getFilterLogs": 500 },
+            "supported_methods": ["eth_getLogs", "eth_getFilterLogs", "eth_newFilter"]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/range_limits",
+        body,
+        &["endpoint", "security", "range-limit", "show", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_blocked_ip_list_table() {
+    let body = serde_json::json!({
+        "data": [
+            { "id": "bip-1", "ip": "192.0.2.0/24" },
+            { "id": "bip-2", "ip": "198.51.100.7" }
+        ],
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/blocked_ips",
+        body,
+        &["endpoint", "security", "blocked-ip", "list", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn endpoint_security_token_create_prints_the_token() {
     let body = serde_json::json!({ "data": { "id": "tok-1", "token": "0xabc" }, "error": null });
     let out = table_stdout_post(
