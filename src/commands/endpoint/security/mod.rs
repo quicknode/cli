@@ -315,7 +315,7 @@ fn filter_input(
 
 /// Resolves a value given inline or via a file path (`-` reads stdin). Errors
 /// if both or neither are given.
-pub(crate) fn read_inline_or_file(
+pub(super) fn read_inline_or_file(
     inline: Option<String>,
     file: Option<PathBuf>,
     what: &str,
@@ -898,9 +898,7 @@ fn matchers_text(matchers: &[serde_json::Value]) -> String {
 
 /// Renders a JSON pattern map as compact JSON with sorted keys so table
 /// output is stable; `—` when empty.
-pub(crate) fn pattern_text(
-    pattern: &std::collections::HashMap<String, serde_json::Value>,
-) -> String {
+fn pattern_text(pattern: &std::collections::HashMap<String, serde_json::Value>) -> String {
     if pattern.is_empty() {
         return "—".to_string();
     }

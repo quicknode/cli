@@ -341,8 +341,8 @@ pub async fn blocked_ip(cmd: BlockedIpCmd, ctx: Ctx) -> Result<(), CliError> {
 
 // ----- renderers ----- //
 
-/// The SDK returns the full certificate state from every client-cert call,
-/// under four response types. Each view renders the shared payload.
+/// Lets one view render the several SDK response types that carry the same
+/// payload (the four client-cert responses, the two blacklist responses, …).
 trait Carries<D> {
     fn data(&self) -> &D;
 }

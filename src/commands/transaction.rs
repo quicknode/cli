@@ -177,7 +177,7 @@ impl Render for TransactionView {
     fn render_table(&self, w: &mut dyn std::io::Write, ctx: &OutputCtx) -> std::io::Result<()> {
         let lookup = &self.0.data;
         let Some(d) = lookup.data.as_ref().filter(|_| lookup.exists) else {
-            writeln!(w, "exists: false")?;
+            writeln!(w, "exists: {}", lookup.exists)?;
             return writeln!(w, "(no retained details for this transaction)");
         };
         let mut t = new_table(ctx);
