@@ -19,7 +19,7 @@ When in doubt, ask before committing. The cost of pausing is low; the cost of a 
 
 ## What this crate is
 
-A Rust CLI that wraps the `quicknode-sdk` crate (v0.1). The SDK has four sub-clients (`admin`, `streams`, `webhooks`, `kvstore`); `qn` exposes every public method on each as a noun-verb subcommand. CLI behavior follows the [Command Line Interface Guidelines](https://clig.dev).
+A Rust CLI that wraps the `quicknode-sdk` crate (v0.9). The SDK has four sub-clients (`admin`, `streams`, `webhooks`, `kvstore`); `qn` exposes every public method on each as a noun-verb subcommand. CLI behavior follows the [Command Line Interface Guidelines](https://clig.dev).
 
 ## Architecture
 
@@ -64,7 +64,13 @@ Things to verify for each new endpoint:
 - **Response wrapper shape**: most admin responses are `{ data: Option<T>, error: Option<String> }`, but `UpdateEndpointStatusResponse::data` is `Option<String>`, and KV responses are wrapped via an internal `ApiResponse<T>` so the mock needs `{"data":{"value":"v"}}`, not `{"value":"v"}`.
 - **Serde rename rules**: `ActivateWebhookParams` is `rename_all = "camelCase"` — the wire body is `{"startFrom":"latest"}`, not `start_from`. `SecurityOptionsUpdate.domain_masks` serializes as `domainMasks`. `BulkSetsParams` is camelCase too.
 - **Required vs optional fields**: `UsageData.start_time/end_time` are required `i64`, so mocks must include them or decoding fails.
-- **Field names** the docs got wrong: SDK uses `MethodRateLimiter.created` (not `created_at`); `EndpointDomainMask.domain` (not `domain_mask`); `EndpointReferrer.referrer: Option<String>`; `BulkTag.tag_id` (not `id`).
+- **Field names** the docs got wrong: SDK uses `MethodRateLimiter.created` (not `created_at`); `EndpointDomainMask.domain` (not `domain_mask`); `EndpointReferrer.referrer: Option<String>`; `BulkTag.tag_id` (not `id`). Created records differ from snapshots: `CreatedReferrer.url` vs `EndpointReferrer.referrer`, `CreatedDomainMask.domain_mask` vs `EndpointDomainMask.domain`.
+- **Summary dimensions are double-`Option`**: `UsageRpcSummaryRow.method: Option<Option<String>>` and friends. Outer `None` = dimension not selected (no column); `Some(None)` = explicit null (render `—`). Use `commands::summary::dim` / `breakdown_table` rather than hand-rolling it.
+- **Integer endpoint ids** in the summary and transaction routes: `GetErrorsSummaryRequest.endpoints: Option<Vec<i64>>`, `TransactionSummary.endpoint_ids: Vec<Option<i64>>`, `TransactionAttempt.endpoint_id: i64`. Everywhere else endpoint ids are strings.
+- **Window field renames**: the summary, activity-log, and transaction requests use `from_time`/`to_time` in Rust but `from`/`to` on the wire (and in responses). Mocks must use `from`/`to`.
+- **`data` is not optional** on the 0.9.0 wrappers (`CreateTokenResponse`, `GetClientCertsResponse`, the summary responses, …), unlike most older admin responses. A mock that returns an empty 200 body makes the SDK fail to decode; give every `_with_response` and summary mock a body.
+- **Values that start with `-`** (PEM text, negative RPC error codes) need `allow_hyphen_values = true` on the flag or clap reads them as another flag.
+- **Arrays in summary queries** go out as repeated bracketed keys (`group_by[]=method&group_by[]=endpoint`); wiremock's `query_param("group_by[]", "method")` matches one of the repeats.
 
 ### 2. Map SDK signatures to the CLI
 

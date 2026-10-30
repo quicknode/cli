@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+enabled: ✓
+FINGERPRINT  SUBJECT    ISSUER  EXPIRES_AT            
+ab:cd:ef     CN=client  CN=ca   2027-01-01T00:00:00Z

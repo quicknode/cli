@@ -78,6 +78,8 @@ pub enum EndpointCmd {
     },
     /// Fetch metric series for an endpoint.
     Metrics(MetricsArgs),
+    /// Error totals for an endpoint over a time window (account-wide: `qn metrics errors`).
+    Errors(super::metrics::EndpointErrorsArgs),
     /// Enable multichain on an endpoint.
     EnableMultichain {
         #[arg(value_name = "ENDPOINT_ID")]
@@ -207,6 +209,9 @@ pub struct MetricsArgs {
     /// Period (`hour`, `day`, `week`, `month`).
     #[arg(long, value_parser = ["hour", "day", "week", "month"])]
     pub period: String,
+    /// Percentile (1-100); required for response-time metrics.
+    #[arg(long, value_parser = clap::value_parser!(i32).range(1..=100))]
+    pub percentile: Option<i32>,
 }
 
 pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
@@ -222,6 +227,7 @@ pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
         EndpointCmd::Logs(a) => logs(a, ctx).await,
         EndpointCmd::LogDetails { id, request_id } => log_details(&id, &request_id, ctx).await,
         EndpointCmd::Metrics(a) => metrics(a, ctx).await,
+        EndpointCmd::Errors(a) => super::metrics::endpoint_errors(a, ctx).await,
         EndpointCmd::EnableMultichain { id } => enable_multichain(&id, ctx).await,
         EndpointCmd::DisableMultichain { id } => disable_multichain(&id, ctx).await,
         EndpointCmd::Tag(c) => tag::run(c, ctx).await,
@@ -361,6 +367,7 @@ async fn metrics(a: MetricsArgs, ctx: Ctx) -> Result<(), CliError> {
     let req = GetEndpointMetricsRequest {
         period: a.period,
         metric: a.metric,
+        percentile: a.percentile,
     };
     let resp = retrying(ctx.global.retries, || {
         ctx.sdk.admin.get_endpoint_metrics(&a.id, &req)

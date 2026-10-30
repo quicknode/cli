@@ -9,14 +9,14 @@
 use clap::{Args as ClapArgs, Subcommand};
 use comfy_table::Cell;
 use quicknode_sdk::admin::{
-    BulkAddTagRequest, BulkRemoveTagRequest, BulkUpdateEndpointStatusRequest,
+    BulkAddTagRequest, BulkOperationResult, BulkRemoveTagRequest, BulkUpdateEndpointStatusRequest,
 };
 use serde::Serialize;
 
 use crate::confirm::{decide_without_prompt, prompt_yes_no, ConfirmCfg, Severity};
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, set_header_bold, write_table, OutputCtx, Render};
+use crate::output::{new_table, opt_cell, set_header_bold, write_table, OutputCtx, Render};
 
 #[derive(Debug, Subcommand)]
 pub enum BulkCmd {
@@ -127,28 +127,26 @@ async fn tag_remove(a: RemoveTagArgs, ctx: Ctx) -> Result<(), CliError> {
 
 // ----- renderers ----- //
 
-/// Shared body for all three bulk views: a summary line + an ID/OK table.
-fn render_bulk_summary<'a, I>(
+/// Shared body for all three bulk views: a summary line + an ID/OK/ERROR table.
+fn render_bulk_summary(
     w: &mut dyn std::io::Write,
     ctx: &OutputCtx,
     total: i32,
     updated_count: i32,
     failed_count: i32,
-    results: I,
-) -> std::io::Result<()>
-where
-    I: IntoIterator<Item = (&'a str, bool)>,
-{
+    results: &[BulkOperationResult],
+) -> std::io::Result<()> {
     writeln!(
         w,
         "total={total} updated={updated_count} failed={failed_count}"
     )?;
     let mut t = new_table(ctx);
-    set_header_bold(&mut t, ctx, vec!["ID", "OK"]);
-    for (id, success) in results {
+    set_header_bold(&mut t, ctx, vec!["ID", "OK", "ERROR"]);
+    for r in results {
         t.add_row(vec![
-            Cell::new(id),
-            Cell::new(if success { "✓" } else { "✗" }),
+            Cell::new(&r.id),
+            Cell::new(if r.success { "✓" } else { "✗" }),
+            opt_cell(&r.error),
         ]);
     }
     write_table(w, &t)
@@ -168,7 +166,7 @@ impl Render for BulkStatusView {
             data.total,
             data.updated_count,
             data.failed_count,
-            data.results.iter().map(|r| (r.id.as_str(), r.success)),
+            &data.results,
         )
     }
 }
@@ -187,7 +185,7 @@ impl Render for BulkAddTagView {
             data.total,
             data.updated_count,
             data.failed_count,
-            data.results.iter().map(|r| (r.id.as_str(), r.success)),
+            &data.results,
         )
     }
 }
@@ -206,7 +204,7 @@ impl Render for BulkRemoveTagView {
             data.total,
             data.updated_count,
             data.failed_count,
-            data.results.iter().map(|r| (r.id.as_str(), r.success)),
+            &data.results,
         )
     }
 }

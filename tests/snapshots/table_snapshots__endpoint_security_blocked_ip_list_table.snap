@@ -1,0 +1,7 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ID     IP            
+bip-1  192.0.2.0/24  
+bip-2  198.51.100.7

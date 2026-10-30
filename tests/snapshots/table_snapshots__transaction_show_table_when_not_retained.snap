@@ -1,0 +1,6 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+exists: false
+(no retained details for this transaction)

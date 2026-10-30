@@ -169,6 +169,22 @@ impl Render for SingleEndpointView {
                     sec.request_filters.as_deref().unwrap_or(&[]).len(),
                 ),
             ]);
+            t.add_row(vec![
+                Cell::new("security.blocked_ips"),
+                Cell::new(sec.blocked_ips.as_deref().unwrap_or(&[]).len()),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.hsts"),
+                bool_cell(opts.and_then(|o| o.hsts)),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.cors"),
+                bool_cell(opts.and_then(|o| o.cors)),
+            ]);
+            t.add_row(vec![
+                Cell::new("security.response_logging"),
+                bool_cell(opts.and_then(|o| o.response_logging)),
+            ]);
             let ip_header = opts
                 .and_then(|o| o.ip_custom_header.as_ref())
                 .and_then(|h| h.value.clone());

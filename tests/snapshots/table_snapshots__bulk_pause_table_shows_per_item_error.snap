@@ -1,0 +1,8 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+total=2 updated=1 failed=1
+ID    OK  ERROR               
+ep-1  ✓   —                   
+ep-2  ✗   endpoint not found

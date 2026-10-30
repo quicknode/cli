@@ -9,6 +9,9 @@ domain_masks      ✓
 ips               ✓          
 referrers         ✓          
 request_filters   ✓          
+hsts              ✓          
+cors              ✓          
+response_logging  ✗          
 ip_custom_header  x-real-ip  
 
 TOKENS (2)
@@ -32,6 +35,11 @@ IPS (1)
 ID    IP           
 ip-1  203.0.113.7  
 
-REQUEST_FILTERS (1)
-ID    METHODS                    
-rf-1  eth_blockNumber, eth_call
+BLOCKED_IPS (1)
+ID     IP               
+bip-1  198.51.100.0/24  
+
+REQUEST_FILTERS (2)
+ID    METHODS                    PARAMS                        
+rf-1  eth_blockNumber, eth_call  —                             
+rf-2  {"prefix":"eth_"}          {"id":[1],"jsonrpc":["2.0"]}

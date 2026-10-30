@@ -1,0 +1,8 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+ID  TIME                  ACTION   TARGET           ACTOR         DESCRIPTION              
+a1  2026-01-01T12:00:00Z  created  endpoint:prod-1  Alice         Created endpoint prod-1  
+a2  2026-01-01T11:00:00Z  deleted  old-team         deleted_user  —                        
+showing 1–2 of 42

@@ -57,6 +57,9 @@ async fn endpoint_show_full_table() {
                     "ips": false,
                     "referrers": false,
                     "requestFilters": true,
+                    "hsts": true,
+                    "cors": false,
+                    "responseLogging": true,
                     "ipCustomHeader": { "value": "x-real-ip" }
                 },
                 "tokens": [
@@ -66,8 +69,12 @@ async fn endpoint_show_full_table() {
                 "referrers": null,
                 "domain_masks": null,
                 "ips": null,
+                "blocked_ips": [
+                    { "id": "bip-1", "ip": "198.51.100.0/24" }
+                ],
                 "request_filters": [
-                    { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] }
+                    { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] },
+                    { "id": "rf-2", "method": [{ "prefix": "eth_" }], "params": { "jsonrpc": ["2.0"] } }
                 ]
             },
             "rate_limits": {
@@ -96,6 +103,9 @@ async fn endpoint_security_show_all_sections() {
                 "ips": true,
                 "referrers": true,
                 "requestFilters": true,
+                "hsts": true,
+                "cors": true,
+                "responseLogging": false,
                 "ipCustomHeader": { "value": "x-real-ip" }
             },
             "tokens": [
@@ -114,8 +124,12 @@ async fn endpoint_security_show_all_sections() {
             "ips": [
                 { "id": "ip-1", "ip": "203.0.113.7" }
             ],
+            "blocked_ips": [
+                { "id": "bip-1", "ip": "198.51.100.0/24" }
+            ],
             "request_filters": [
-                { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] }
+                { "id": "rf-1", "method": ["eth_blockNumber", "eth_call"] },
+                { "id": "rf-2", "method": [{ "prefix": "eth_" }], "params": { "jsonrpc": ["2.0"], "id": [1] } }
             ]
         },
         "error": null
@@ -124,6 +138,28 @@ async fn endpoint_security_show_all_sections() {
         "/v0/endpoints/ep-1/security",
         body,
         &["endpoint", "security", "show", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_method_rate_limit_list_shows_limit_by_ip() {
+    let body = serde_json::json!({
+        "data": {
+            "rate_limiters": [
+                { "id": "rl-1", "interval": "second", "methods": ["eth_call"], "rate": 10,
+                  "status": "enabled", "created": "2026-01-01T00:00:00Z", "limit_by_ip": true },
+                { "id": "rl-2", "interval": "minute", "methods": ["eth_getLogs"], "rate": 5,
+                  "status": "disabled", "created": "2026-01-01T00:00:00Z", "limit_by_ip": null }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/method-rate-limits",
+        body,
+        &["endpoint", "rate-limit", "method-list", "ep-1"],
     )
     .await;
     insta::assert_snapshot!(out);
@@ -329,6 +365,235 @@ async fn usage_by_method_table_includes_chain_and_network() {
 }
 
 #[tokio::test]
+async fn usage_by_endpoint_wide_table_includes_credit_breakdown() {
+    let body = serde_json::json!({
+        "data": {
+            "endpoints": [
+                { "name": "ep-1", "chain": "eth", "network": "mainnet", "credits_used": 1200,
+                  "methods_breakdown": [], "requests": 40, "rpc_credits": 1000, "data_credits": 200, "bytes": 4096 },
+                { "name": "ep-2", "chain": "solana", "network": "mainnet", "credits_used": 300,
+                  "methods_breakdown": [], "requests": null, "rpc_credits": null, "data_credits": null, "bytes": null }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/usage/rpc/by-endpoint",
+        body,
+        &["usage", "by-endpoint", "--wide"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn usage_rpc_summary_table_groups_by_selected_dimensions() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "totals": { "requests": 10, "bytes": 2048, "rpc_credits": 8, "data_credits": 2.5, "credits": 10.5 },
+            "breakdown": [
+                { "method": "eth_call", "endpoint": 123, "requests": 7, "bytes": 1024, "rpc_credits": 6, "data_credits": 1, "credits": 7 },
+                { "method": null, "endpoint": 456, "requests": null, "bytes": 1024, "rpc_credits": 2, "data_credits": 1.5, "credits": 3.5 }
+            ],
+            "next_cursor": "eyJvZmZzZXQiOjEwMH0"
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/usage/rpc/summary",
+        body,
+        &[
+            "usage",
+            "rpc",
+            "--from",
+            "24h",
+            "--group-by",
+            "method,endpoint",
+        ],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn usage_credits_summary_table_without_breakdown() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "totals": { "credits": 1200 }
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/usage/credits/summary",
+        body,
+        &["usage", "credits", "--from", "24h"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn metrics_errors_summary_table_shows_kind_and_count() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "totals": { "rpc_errors": 5, "http_errors": 2 },
+            "breakdown": [
+                { "kind": "rpc", "count": 4, "code": "-32000", "method": "eth_call" },
+                { "kind": "rpc", "count": 1, "code": "-32602", "method": null }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/metrics/errors/summary",
+        body,
+        &[
+            "metrics",
+            "errors",
+            "--from",
+            "24h",
+            "--kind",
+            "rpc",
+            "--group-by",
+            "code,method",
+        ],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn activity_log_list_table_shows_target_actor_and_pagination() {
+    let body = serde_json::json!({
+        "data": [
+            {
+                "id": "a1", "occurred_at": "2026-01-01T12:00:00Z", "action": "created",
+                "description": "Created endpoint prod-1",
+                "target": { "id": "123", "kind": "endpoint", "label": "prod-1", "name": null },
+                "actor": { "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "type": "user", "name": "Alice", "email": "alice@example.com" }
+            },
+            {
+                "id": "a2", "occurred_at": "2026-01-01T11:00:00Z", "action": "deleted",
+                "description": null,
+                "target": { "id": "t-9", "kind": null, "label": "old-team", "name": null },
+                "actor": { "id": null, "type": "deleted_user", "name": null, "email": null }
+            }
+        ],
+        "pagination": { "total": 42, "limit": 2, "offset": 0 },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/activity_logs",
+        body,
+        &["activity-log", "list", "--limit", "2"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn activity_log_filters_table_lists_actors_and_types() {
+    let body = serde_json::json!({
+        "data": {
+            "actors": [
+                { "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "name": "Alice", "type": "user" },
+                { "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "name": null, "type": "api_key" }
+            ],
+            "types": [
+                { "value": "endpoint", "label": "Endpoint" },
+                { "value": "team", "label": "Team" }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/activity_logs/filters",
+        body,
+        &["activity-log", "filters"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn transaction_list_table_shows_endpoints_and_cursor() {
+    let body = serde_json::json!({
+        "data": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": "2026-01-02T00:00:00Z",
+            "transactions": [{
+                "network": "ethereum-mainnet", "transaction_hash": "0xabc",
+                "first_submitted_at": "2026-01-01T10:00:00Z", "last_submitted_at": "2026-01-01T10:05:00Z",
+                "attempt_count": 2, "endpoint_ids": [123, null], "methods": ["eth_sendRawTransaction"],
+                "archive": false, "height": "9007199254740993", "state": "succeeded"
+            }],
+            "next_cursor": "eyJvZmZzZXQiOjEwMH0"
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/transactions",
+        body,
+        &["transaction", "list", "--from", "24h"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn transaction_show_table_with_payloads() {
+    let body = serde_json::json!({
+        "data": {
+            "exists": true,
+            "data": {
+                "network": "ethereum-mainnet", "transaction_hash": "0xabc",
+                "first_submitted_at": "2026-01-01T10:00:00Z", "last_submitted_at": "2026-01-01T10:05:00Z",
+                "state": "succeeded", "attempt_count": 2, "endpoint_ids": [123, null],
+                "methods": ["eth_sendRawTransaction"], "archive": false, "height": "9007199254740993",
+                "attempts": [
+                    { "submitted_at": "2026-01-01T10:00:00Z", "endpoint_id": 123, "method": "eth_sendRawTransaction", "request_id": "req-1",
+                      "payloads": { "request": "{\"method\":\"eth_sendRawTransaction\"}", "response": "not json" } },
+                    { "submitted_at": "2026-01-01T10:05:00Z", "endpoint_id": 123, "method": "eth_sendRawTransaction", "request_id": "req-2",
+                      "payloads": { "request": null, "response": null } }
+                ]
+            }
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/transactions/ethereum-mainnet/0xabc",
+        body,
+        &[
+            "transaction",
+            "show",
+            "ethereum-mainnet",
+            "0xabc",
+            "--payloads",
+        ],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn transaction_show_table_when_not_retained() {
+    let body = serde_json::json!({ "data": { "exists": false, "data": null }, "error": null });
+    let out = table_stdout(
+        "/v0/transactions/ethereum-mainnet/0xdead",
+        body,
+        &["transaction", "show", "ethereum-mainnet", "0xdead"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn usage_by_tag_table_includes_requests() {
     let body = serde_json::json!({
         "data": {
@@ -391,6 +656,131 @@ async fn table_stdout_post(url_path: &str, body: serde_json::Value, args: &[&str
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn endpoint_security_request_filter_list_table() {
+    let body = serde_json::json!({
+        "data": [
+            { "id": "rf-1", "pattern": { "method": ["eth_call", "eth_blockNumber"] }, "method_whitelist": true },
+            { "id": "rf-2", "pattern": { "method": [{ "prefix": "eth_" }], "jsonrpc": ["2.0"] }, "method_whitelist": false }
+        ],
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/request_filters",
+        body,
+        &["endpoint", "security", "request-filter", "list", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_client_cert_list_table() {
+    let body = serde_json::json!({
+        "data": {
+            "enabled": true,
+            "certs": [
+                { "fingerprint": "ab:cd:ef", "subject": "CN=client", "issuer": "CN=ca", "expires_at": "2027-01-01T00:00:00Z" }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/client_certs",
+        body,
+        &["endpoint", "security", "client-cert", "list", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_range_limit_show_table() {
+    let body = serde_json::json!({
+        "data": {
+            "limits": { "eth_getLogs": 1000, "eth_getFilterLogs": 500 },
+            "supported_methods": ["eth_getLogs", "eth_getFilterLogs", "eth_newFilter"]
+        },
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/range_limits",
+        body,
+        &["endpoint", "security", "range-limit", "show", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_blocked_ip_list_table() {
+    let body = serde_json::json!({
+        "data": [
+            { "id": "bip-1", "ip": "192.0.2.0/24" },
+            { "id": "bip-2", "ip": "198.51.100.7" }
+        ],
+        "error": null
+    });
+    let out = table_stdout(
+        "/v0/endpoints/ep-1/security/blocked_ips",
+        body,
+        &["endpoint", "security", "blocked-ip", "list", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_security_token_create_prints_the_token() {
+    let body = serde_json::json!({ "data": { "id": "tok-1", "token": "0xabc" }, "error": null });
+    let out = table_stdout_post(
+        "/v0/endpoints/ep-1/security/tokens",
+        body,
+        &["endpoint", "security", "token", "create", "ep-1"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn endpoint_tag_add_prints_the_association() {
+    let body = serde_json::json!({
+        "data": { "tags": [
+            { "id": 10, "tag_id": 1, "account_id": 1, "endpoint_id": 5, "label": "prod",
+              "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z" }
+        ] },
+        "error": null
+    });
+    let out = table_stdout_post(
+        "/v0/endpoints/ep-1/tags",
+        body,
+        &["endpoint", "tag", "add", "ep-1", "prod"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
+async fn bulk_pause_table_shows_per_item_error() {
+    let body = serde_json::json!({
+        "data": {
+            "total": 2, "updated_count": 1, "failed_count": 1,
+            "results": [
+                { "id": "ep-1", "success": true },
+                { "id": "ep-2", "success": false, "error": "endpoint not found" }
+            ]
+        },
+        "error": null
+    });
+    let out = table_stdout_post(
+        "/v0/endpoints/bulk/status",
+        body,
+        &["endpoint", "bulk", "pause", "ep-1", "ep-2", "--yes"],
+    )
+    .await;
+    insta::assert_snapshot!(out);
 }
 
 #[tokio::test]

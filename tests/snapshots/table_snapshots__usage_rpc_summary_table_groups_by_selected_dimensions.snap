@@ -1,0 +1,16 @@
+---
+source: tests/table_snapshots.rs
+expression: out
+---
+window: 2026-01-01T00:00:00Z → 2026-01-02T00:00:00Z
+FIELD         VALUE  
+requests      10     
+bytes         2048   
+rpc_credits   8      
+data_credits  2.5    
+credits       10.5   
+
+METHOD    ENDPOINT  REQUESTS  BYTES  RPC_CREDITS  DATA_CREDITS  CREDITS  
+eth_call  123       7         1024   6            1             7        
+—         456       —         1024   2            1.5           3.5      
+next page: --cursor eyJvZmZzZXQiOjEwMH0

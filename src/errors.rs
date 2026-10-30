@@ -241,7 +241,10 @@ fn render_api_error(code: u16, body: &str, verbose: bool, argv: &[String]) -> St
 
     let headline = match code {
         400 | 422 => "invalid request.".to_string(),
-        401 | 403 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
+        401 => "unauthorized. Check your API key with 'qn auth whoami'.".to_string(),
+        403 => "forbidden. Your API key works, but this account or role cannot access \
+                this resource (feature or plan access)."
+            .to_string(),
         404 => "not found.".to_string(),
         429 => "rate limited by the Quicknode API. Try again shortly.".to_string(),
         500..=599 => format!(
@@ -717,6 +720,13 @@ mod tests {
     fn renders_401_as_unauthorized() {
         let msg = render(&api_err(401), false);
         assert!(msg.contains("unauthorized"), "got: {msg}");
+    }
+
+    #[test]
+    fn renders_403_as_forbidden_not_unauthorized() {
+        let msg = render(&api_err(403), false);
+        assert!(msg.contains("forbidden"), "got: {msg}");
+        assert!(!msg.contains("unauthorized"), "got: {msg}");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::context::Ctx;
 use crate::errors::CliError;
-use crate::output::{new_table, opt_cell, set_header_bold, write_table, Render};
+use crate::output::{bool_cell, new_table, opt_cell, set_header_bold, write_table, Render};
 use crate::retry::retrying;
 
 #[derive(Debug, Subcommand)]
@@ -20,7 +20,7 @@ pub enum RateLimitCmd {
         #[arg(value_name = "ENDPOINT_ID")]
         id: String,
     },
-    /// Set endpoint-level rate limits (any of rps/rpm/rpd; omitted are untouched).
+    /// Set endpoint-level rate limits (any of rps/rpm/rpd/limit-by-ip; omitted are untouched).
     Set(SetArgs),
     /// Delete a user-set rate-limit override (plan defaults can't be deleted).
     DeleteOverride {
@@ -59,6 +59,9 @@ pub struct SetArgs {
     /// Requests-per-day cap.
     #[arg(long)]
     pub rpd: Option<i32>,
+    /// Apply the caps per client IP (`true`) or to the whole endpoint (`false`).
+    #[arg(long, value_name = "true|false")]
+    pub limit_by_ip: Option<bool>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -77,6 +80,9 @@ pub struct MethodCreateArgs {
     /// Rate (max calls per interval).
     #[arg(long)]
     pub rate: i32,
+    /// Apply the limit per client IP (`true`) or to the whole endpoint (`false`).
+    #[arg(long, value_name = "true|false")]
+    pub limit_by_ip: Option<bool>,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -92,6 +98,9 @@ pub struct MethodUpdateArgs {
     pub status: Option<StatusToggle>,
     #[arg(long)]
     pub rate: Option<i32>,
+    /// Apply the limit per client IP (`true`) or to the whole endpoint (`false`).
+    #[arg(long, value_name = "true|false")]
+    pub limit_by_ip: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -155,21 +164,27 @@ async fn get(id: &str, ctx: Ctx) -> Result<(), CliError> {
 }
 
 async fn set(a: SetArgs, ctx: Ctx) -> Result<(), CliError> {
-    if a.rps.is_none() && a.rpm.is_none() && a.rpd.is_none() {
+    let caps_given = a.rps.is_some() || a.rpm.is_some() || a.rpd.is_some();
+    if !caps_given && a.limit_by_ip.is_none() {
         return Err(CliError::Arg(
-            "supply at least one of --rps, --rpm, --rpd".to_string(),
+            "supply at least one of --rps, --rpm, --rpd, --limit-by-ip".to_string(),
         ));
     }
     let req = UpdateRateLimitsRequest {
-        rate_limits: RateLimitSettings {
+        rate_limits: caps_given.then_some(RateLimitSettings {
             rps: a.rps,
             rpm: a.rpm,
             rpd: a.rpd,
-        },
+        }),
+        limit_by_ip: a.limit_by_ip,
     };
-    ctx.sdk.admin.update_rate_limits(&a.id, &req).await?;
+    let resp = ctx
+        .sdk
+        .admin
+        .update_rate_limits_with_response(&a.id, &req)
+        .await?;
     ctx.out.note(&format!("✓ Updated rate limits on {}", a.id));
-    Ok(())
+    crate::output::emit(&ctx.out, &EffectiveRateLimitsView(resp))
 }
 
 async fn method_list(id: &str, ctx: Ctx) -> Result<(), CliError> {
@@ -190,6 +205,7 @@ async fn method_create(a: MethodCreateArgs, ctx: Ctx) -> Result<(), CliError> {
         interval: a.interval,
         methods,
         rate: a.rate,
+        limit_by_ip: a.limit_by_ip,
     };
     let resp = ctx.sdk.admin.create_method_rate_limit(&a.id, &req).await?;
     let d = resp.data.as_ref().ok_or_else(|| {
@@ -205,9 +221,9 @@ async fn method_create(a: MethodCreateArgs, ctx: Ctx) -> Result<(), CliError> {
 async fn method_update(a: MethodUpdateArgs, ctx: Ctx) -> Result<(), CliError> {
     let mut methods = a.methods;
     methods.extend(a.methods_csv);
-    if methods.is_empty() && a.status.is_none() && a.rate.is_none() {
+    if methods.is_empty() && a.status.is_none() && a.rate.is_none() && a.limit_by_ip.is_none() {
         return Err(CliError::Arg(
-            "supply at least one of --method, --status, --rate".into(),
+            "supply at least one of --method, --status, --rate, --limit-by-ip".into(),
         ));
     }
     let req = UpdateMethodRateLimitRequest {
@@ -218,6 +234,7 @@ async fn method_update(a: MethodUpdateArgs, ctx: Ctx) -> Result<(), CliError> {
         },
         status: a.status.map(|s| s.as_str().to_string()),
         rate: a.rate,
+        limit_by_ip: a.limit_by_ip,
     };
     ctx.sdk
         .admin
@@ -266,6 +283,27 @@ impl Render for RateLimitsView {
     }
 }
 
+/// Effective overrides after `rate-limit set`; `—` means no override for
+/// that bucket (the plan default applies).
+#[derive(Serialize)]
+struct EffectiveRateLimitsView(quicknode_sdk::admin::UpdateRateLimitsResponse);
+
+impl Render for EffectiveRateLimitsView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let l = &self.0.data.limits;
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["BUCKET", "VALUE"]);
+        t.add_row(vec![Cell::new("rps"), opt_cell(&l.rps)]);
+        t.add_row(vec![Cell::new("rpm"), opt_cell(&l.rpm)]);
+        t.add_row(vec![Cell::new("rpd"), opt_cell(&l.rpd)]);
+        write_table(w, &t)
+    }
+}
+
 #[derive(Serialize)]
 struct MethodRateLimitsView(quicknode_sdk::admin::GetMethodRateLimitsResponse);
 
@@ -286,7 +324,7 @@ impl Render for MethodRateLimitsView {
         set_header_bold(
             &mut t,
             ctx,
-            vec!["ID", "INTERVAL", "METHODS", "RATE", "STATUS"],
+            vec!["ID", "INTERVAL", "METHODS", "RATE", "STATUS", "LIMIT_BY_IP"],
         );
         for r in &data.rate_limiters {
             t.add_row(vec![
@@ -295,6 +333,7 @@ impl Render for MethodRateLimitsView {
                 Cell::new(r.methods.join(", ")),
                 Cell::new(r.rate),
                 Cell::new(&r.status),
+                bool_cell(r.limit_by_ip),
             ]);
         }
         write_table(w, &t)

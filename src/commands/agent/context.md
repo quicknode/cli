@@ -1,7 +1,8 @@
 # qn — usage guide for agents
 
 `qn` is the Quicknode command-line interface. It manages endpoints, streams,
-webhooks, the KV store, usage, metrics, billing, and teams.
+webhooks, the KV store, usage, metrics, billing, teams, the account activity
+log, and retained transactions.
 
 This guide describes qn v{{VERSION}}. It prints as Markdown by default — no flag
 needed to read it. For a structured envelope (`{version, guide}`), pass `-o json`.
@@ -85,8 +86,10 @@ Gated command classes:
 
 - `endpoint archive`, `endpoint bulk pause`
 - `endpoint tag delete`
-- `endpoint security` removals (token/jwt/ip/referrer/domain-mask remove, and
-  `set-options` toggles that disable a protection)
+- `endpoint security` removals (token/jwt/ip/referrer/domain-mask/request-filter
+  remove, `client-cert remove`, `client-cert disable`, `blocked-ip remove`,
+  `method-blacklist clear`, `range-limit clear`, and `set-options` toggles that
+  disable a protection)
 - `endpoint rate-limit delete-override`
 - `stream delete`, `webhook delete`, `team delete`
 - `kv set delete`, `kv list delete`
@@ -120,13 +123,28 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
 
 - `auth` — login, logout, whoami, status
 - `endpoint` — list, show, create, update, archive, pause, resume, urls, logs,
-  log-details, metrics, enable-multichain, disable-multichain; nested:
-  `tag`, `security`, `rate-limit`, `bulk`
+  log-details, metrics, errors, enable-multichain, disable-multichain; nested:
+  `tag`, `security`, `rate-limit`, `bulk`. `security` covers `show`,
+  `options`/`set-options`, and the sub-nouns `token`, `referrer`, `ip`, `jwt`,
+  `domain-mask`, `request-filter` (method whitelist via `--method`, or a custom
+  JSON pattern via `--pattern`/`--pattern-file`), `ip-header`, `client-cert`,
+  `method-blacklist`, `range-limit`, and `blocked-ip`. `set` verbs replace the
+  whole configuration; `clear` verbs empty it. Create-style verbs print the
+  created record on stdout (a new token's value is in that output).
 - `team` — list, create, show, delete, endpoints, set-endpoints; nested: `member`
-- `usage` — summary, by-endpoint, by-method, by-chain, by-tag
-- `metrics` — account, endpoint
+- `usage` — summary, by-endpoint, by-method, by-chain, by-tag (billing-period
+  breakdowns; `--wide` adds credit and byte columns); windowed summaries:
+  `credits`, `rpc`, `streams`, `webhooks`
+- `metrics` — account, endpoint (`--percentile` for response-time metrics);
+  windowed summaries: `traffic`, `errors`
 - `chain` — list, credits
 - `billing` — invoices, payments
+- `activity-log` — list, filters, show (account change history: who changed
+  what, when; `list` pages with `--limit`/`--offset`, newest first)
+- `transaction` — list, show (transactions submitted through your endpoints;
+  `list` is a windowed summary paged with `--cursor`; `show <NETWORK> <HASH>
+  --payloads` adds each attempt's retained request/response text, printed
+  verbatim)
 - `stream` — list, show, create, update, delete, activate, pause, test-filter,
   enabled-count
 - `webhook` — list, show, create, update, update-template, delete, activate, pause,
@@ -215,6 +233,16 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   Reference a wallet on a paid call with `--payment-wallet <NAME>`. These
   wallets live only on this machine — Quicknode does not hold, back up, or
   recover them; backing up the key file is the user's job.
+
+**Windowed summaries** (`usage credits|rpc|streams|webhooks`, `metrics
+traffic|errors`, `endpoint errors <ID>`, `transaction list`) take `--from` (required; RFC-3339,
+`1h`, or `now`) and `--to` (defaults to now), optional `--group-by` dimensions
+and filters, and `--limit` (1-1000). Totals cover the full window on every
+page. When table output ends with `next page: --cursor <c>`, re-run the same
+command with `--cursor <c>` and no other flags; under `-o json` the cursor is
+`data.next_cursor`. A `--cursor` combined with any other flag is an argument
+error (exit 1). Grouping dimensions appear as columns only when selected; an
+explicit null renders as `—`.
 
 Drill into any level with `--help`: `qn endpoint --help`, `qn endpoint security --help`,
 `qn endpoint rate-limit --help`. Shell completions: `qn completions <bash|zsh|fish|...>`.
