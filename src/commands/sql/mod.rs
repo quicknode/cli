@@ -1,4 +1,4 @@
-//! `qn sql …` — run SQL queries and inspect cluster schemas.
+//! `qn sql …` — list clusters, run SQL queries, and inspect cluster schemas.
 
 mod render;
 
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args as ClapArgs, Subcommand};
 use comfy_table::Cell;
-use quicknode_sdk::{ChainSchema, QueryParams, QueryResponse};
+use quicknode_sdk::{ChainSchema, QueryParams, QueryResponse, SqlCluster};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -18,6 +18,10 @@ use crate::retry::retrying;
 use render::json_cell;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn sql clusters\n  \
+    qn sql schema hyperliquid-core-mainnet\n  \
+    qn sql query \"SELECT 1\" --cluster-id hyperliquid-core-mainnet")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: SqlCmd,
@@ -25,6 +29,10 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SqlCmd {
+    /// List the clusters you can query.
+    #[command(visible_alias = "ls")]
+    Clusters,
+
     /// Run a read-only SQL query against a cluster.
     ///
     /// The query may be passed inline, read from a file with --file, or read
@@ -65,9 +73,15 @@ pub struct SchemaArgs {
 
 pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
     match args.cmd {
+        SqlCmd::Clusters => clusters(ctx).await,
         SqlCmd::Query(a) => query(a, ctx).await,
         SqlCmd::Schema(a) => schema(a, ctx).await,
     }
+}
+
+async fn clusters(ctx: Ctx) -> Result<(), CliError> {
+    let resp = retrying(ctx.global.retries, || ctx.sdk.sql.list_clusters()).await?;
+    crate::output::emit(&ctx.out, &ClustersView(resp))
 }
 
 async fn query(a: QueryArgs, ctx: Ctx) -> Result<(), CliError> {
@@ -118,12 +132,14 @@ fn resolve_query(query: Option<String>, file: Option<PathBuf>) -> Result<String,
 
 /// Builds the human-facing stats note, e.g.
 /// `✓ 2 rows · 135 credits · 0.007s` plus a truncation hint when the result set
-/// was capped below the total matched.
+/// was capped below the total matched. The credits segment is left out when
+/// the response has no credits value.
 fn stats_line(resp: &QueryResponse) -> String {
-    let mut line = format!(
-        "✓ {} rows · {} credits · {:.3}s",
-        resp.rows, resp.credits, resp.statistics.elapsed
-    );
+    let mut line = format!("✓ {} rows", resp.rows);
+    if let Some(credits) = resp.credits {
+        line.push_str(&format!(" · {credits} credits"));
+    }
+    line.push_str(&format!(" · {:.3}s", resp.statistics.elapsed));
     if resp.rows_before_limit_at_least > resp.rows {
         line.push_str(&format!(
             " · {} matched (use LIMIT/OFFSET to page)",
@@ -131,6 +147,27 @@ fn stats_line(resp: &QueryResponse) -> String {
         ));
     }
     line
+}
+
+#[derive(Serialize)]
+struct ClustersView(Vec<SqlCluster>);
+
+impl Render for ClustersView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "DISPLAY_NAME"]);
+        for cluster in &self.0 {
+            t.add_row(vec![
+                Cell::new(&cluster.id),
+                Cell::new(&cluster.display_name),
+            ]);
+        }
+        write_table(w, &t)
+    }
 }
 
 #[derive(Serialize)]
@@ -207,5 +244,38 @@ impl Render for SchemaView {
             write_table(w, &t)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn response(credits: Option<i64>) -> QueryResponse {
+        let mut body = json!({
+            "meta": [],
+            "data": [],
+            "rows": 2,
+            "rows_before_limit_at_least": 2,
+            "statistics": {"elapsed": 0.0067, "rows_read": 10, "bytes_read": 100}
+        });
+        if let Some(c) = credits {
+            body["credits"] = json!(c);
+        }
+        serde_json::from_value(body).unwrap()
+    }
+
+    #[test]
+    fn stats_line_includes_credits_when_present() {
+        assert_eq!(
+            stats_line(&response(Some(135))),
+            "✓ 2 rows · 135 credits · 0.007s"
+        );
+    }
+
+    #[test]
+    fn stats_line_omits_credits_when_absent() {
+        assert_eq!(stats_line(&response(None)), "✓ 2 rows · 0.007s");
     }
 }

@@ -5,7 +5,7 @@ mod common;
 use common::run_qn;
 use serde_json::json;
 use std::io::Write;
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn query_body() -> serde_json::Value {
@@ -205,5 +205,54 @@ async fn schema_not_found_maps_to_exit_2() {
         .mount(&server)
         .await;
     let out = run_qn(&server.uri(), &["sql", "schema", "bad-cluster"]).await;
+    assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn query_response_without_credits_succeeds() {
+    let server = MockServer::start().await;
+    let mut body = query_body();
+    body.as_object_mut().unwrap().remove("credits");
+    Mock::given(method("POST"))
+        .and(path("/sql/rest/v1/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["sql", "query", "SELECT 1", "--cluster-id", "c1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn clusters_and_ls_alias_send_the_api_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sql/rest/v1/clusters"))
+        .and(header("x-api-key", "test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "hyperliquid-core-mainnet", "display_name": "Hyperliquid (HyperCore)"},
+            {"id": "solana-mainnet", "display_name": "Solana"}
+        ])))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["sql", "clusters"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+    let out = run_qn(&server.uri(), &["sql", "ls"]).await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}
+
+#[tokio::test]
+async fn clusters_unauthorized_maps_to_exit_2() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sql/rest/v1/clusters"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
+        .mount(&server)
+        .await;
+    let out = run_qn(&server.uri(), &["sql", "clusters"]).await;
     assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
 }

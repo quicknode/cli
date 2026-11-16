@@ -274,6 +274,9 @@ qn kv list get allowlist
 ### SQL
 
 ```sh
+# List the clusters you can query
+qn sql clusters
+
 # Run a query inline, from a file, or from stdin (--file -)
 qn sql query "SELECT action_type, user FROM hyperliquid_system_actions ORDER BY block_time DESC LIMIT 3" --cluster-id hyperliquid-core-mainnet
 qn sql query --file query.sql --cluster-id hyperliquid-core-mainnet

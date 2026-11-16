@@ -160,7 +160,7 @@ pub enum Command {
     /// Manage the Quicknode KV store (sets and lists).
     Kv(commands::kv::Args),
 
-    /// Run SQL queries and inspect cluster schemas.
+    /// List clusters, run SQL queries, and inspect cluster schemas.
     Sql(commands::sql::Args),
 
     /// Make RPC calls.
