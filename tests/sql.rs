@@ -207,3 +207,21 @@ async fn schema_not_found_maps_to_exit_2() {
     let out = run_qn(&server.uri(), &["sql", "schema", "bad-cluster"]).await;
     assert_eq!(out.exit_code, 2, "stderr={}", out.stderr);
 }
+
+#[tokio::test]
+async fn query_response_without_credits_succeeds() {
+    let server = MockServer::start().await;
+    let mut body = query_body();
+    body.as_object_mut().unwrap().remove("credits");
+    Mock::given(method("POST"))
+        .and(path("/sql/rest/v1/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+    let out = run_qn(
+        &server.uri(),
+        &["sql", "query", "SELECT 1", "--cluster-id", "c1"],
+    )
+    .await;
+    assert_eq!(out.exit_code, 0, "stderr={}", out.stderr);
+}

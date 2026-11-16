@@ -118,12 +118,14 @@ fn resolve_query(query: Option<String>, file: Option<PathBuf>) -> Result<String,
 
 /// Builds the human-facing stats note, e.g.
 /// `✓ 2 rows · 135 credits · 0.007s` plus a truncation hint when the result set
-/// was capped below the total matched.
+/// was capped below the total matched. The credits segment is left out when
+/// the response has no credits value.
 fn stats_line(resp: &QueryResponse) -> String {
-    let mut line = format!(
-        "✓ {} rows · {} credits · {:.3}s",
-        resp.rows, resp.credits, resp.statistics.elapsed
-    );
+    let mut line = format!("✓ {} rows", resp.rows);
+    if let Some(credits) = resp.credits {
+        line.push_str(&format!(" · {credits} credits"));
+    }
+    line.push_str(&format!(" · {:.3}s", resp.statistics.elapsed));
     if resp.rows_before_limit_at_least > resp.rows {
         line.push_str(&format!(
             " · {} matched (use LIMIT/OFFSET to page)",
@@ -207,5 +209,38 @@ impl Render for SchemaView {
             write_table(w, &t)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn response(credits: Option<i64>) -> QueryResponse {
+        let mut body = json!({
+            "meta": [],
+            "data": [],
+            "rows": 2,
+            "rows_before_limit_at_least": 2,
+            "statistics": {"elapsed": 0.0067, "rows_read": 10, "bytes_read": 100}
+        });
+        if let Some(c) = credits {
+            body["credits"] = json!(c);
+        }
+        serde_json::from_value(body).unwrap()
+    }
+
+    #[test]
+    fn stats_line_includes_credits_when_present() {
+        assert_eq!(
+            stats_line(&response(Some(135))),
+            "✓ 2 rows · 135 credits · 0.007s"
+        );
+    }
+
+    #[test]
+    fn stats_line_omits_credits_when_absent() {
+        assert_eq!(stats_line(&response(None)), "✓ 2 rows · 0.007s");
     }
 }
