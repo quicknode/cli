@@ -19,7 +19,7 @@ When in doubt, ask before committing. The cost of pausing is low; the cost of a 
 
 ## What this crate is
 
-A Rust CLI that wraps the `quicknode-sdk` crate (v0.9). The SDK has four sub-clients (`admin`, `streams`, `webhooks`, `kvstore`); `qn` exposes every public method on each as a noun-verb subcommand. CLI behavior follows the [Command Line Interface Guidelines](https://clig.dev).
+A Rust CLI that wraps the `quicknode-sdk` crate (v0.10). The SDK has four sub-clients (`admin`, `streams`, `webhooks`, `kvstore`); `qn` exposes every public method on each as a noun-verb subcommand. CLI behavior follows the [Command Line Interface Guidelines](https://clig.dev).
 
 ## Architecture
 
