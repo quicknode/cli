@@ -42,3 +42,8 @@ github-attestations = true
 # declare contents:read without exceeding the caller. publish-deb
 # needs contents: write so it can `gh release upload` the .deb files.
 github-custom-job-permissions = { "publish-crates" = { contents = "read" }, "publish-docker" = { contents = "read", packages = "write", "id-token" = "write" }, "publish-deb" = { contents = "write" }, "publish-copr" = { contents = "read" } }
+
+# GitHub retired the macos-14 image that dist picks by default for
+# aarch64-apple-darwin, so pin a supported arm64 runner.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
