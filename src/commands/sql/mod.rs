@@ -1,4 +1,4 @@
-//! `qn sql …` — run SQL queries and inspect cluster schemas.
+//! `qn sql …` — list clusters, run SQL queries, and inspect cluster schemas.
 
 mod render;
 
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args as ClapArgs, Subcommand};
 use comfy_table::Cell;
-use quicknode_sdk::{ChainSchema, QueryParams, QueryResponse};
+use quicknode_sdk::{ChainSchema, QueryParams, QueryResponse, SqlCluster};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -18,6 +18,10 @@ use crate::retry::retrying;
 use render::json_cell;
 
 #[derive(Debug, ClapArgs)]
+#[command(after_help = "Examples:\n  \
+    qn sql clusters\n  \
+    qn sql schema hyperliquid-core-mainnet\n  \
+    qn sql query \"SELECT 1\" --cluster-id hyperliquid-core-mainnet")]
 pub struct Args {
     #[command(subcommand)]
     pub cmd: SqlCmd,
@@ -25,6 +29,10 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SqlCmd {
+    /// List the clusters you can query.
+    #[command(visible_alias = "ls")]
+    Clusters,
+
     /// Run a read-only SQL query against a cluster.
     ///
     /// The query may be passed inline, read from a file with --file, or read
@@ -65,9 +73,15 @@ pub struct SchemaArgs {
 
 pub async fn run(args: Args, ctx: Ctx) -> Result<(), CliError> {
     match args.cmd {
+        SqlCmd::Clusters => clusters(ctx).await,
         SqlCmd::Query(a) => query(a, ctx).await,
         SqlCmd::Schema(a) => schema(a, ctx).await,
     }
+}
+
+async fn clusters(ctx: Ctx) -> Result<(), CliError> {
+    let resp = retrying(ctx.global.retries, || ctx.sdk.sql.list_clusters()).await?;
+    crate::output::emit(&ctx.out, &ClustersView(resp))
 }
 
 async fn query(a: QueryArgs, ctx: Ctx) -> Result<(), CliError> {
@@ -133,6 +147,27 @@ fn stats_line(resp: &QueryResponse) -> String {
         ));
     }
     line
+}
+
+#[derive(Serialize)]
+struct ClustersView(Vec<SqlCluster>);
+
+impl Render for ClustersView {
+    fn render_table(
+        &self,
+        w: &mut dyn std::io::Write,
+        ctx: &crate::output::OutputCtx,
+    ) -> std::io::Result<()> {
+        let mut t = new_table(ctx);
+        set_header_bold(&mut t, ctx, vec!["ID", "DISPLAY_NAME"]);
+        for cluster in &self.0 {
+            t.add_row(vec![
+                Cell::new(&cluster.id),
+                Cell::new(&cluster.display_name),
+            ]);
+        }
+        write_table(w, &t)
+    }
 }
 
 #[derive(Serialize)]

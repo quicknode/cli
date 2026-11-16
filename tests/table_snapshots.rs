@@ -810,6 +810,16 @@ async fn sql_query_table_renders_unquoted_scalars_and_null_dash() {
 }
 
 #[tokio::test]
+async fn sql_clusters_table_renders_id_and_display_name() {
+    let body = serde_json::json!([
+        {"id": "hyperliquid-core-mainnet", "display_name": "Hyperliquid (HyperCore)"},
+        {"id": "solana-mainnet", "display_name": "Solana"}
+    ]);
+    let out = table_stdout("/sql/rest/v1/clusters", body, &["sql", "clusters"]).await;
+    insta::assert_snapshot!(out);
+}
+
+#[tokio::test]
 async fn sql_schema_table_renders_nested_table_blocks() {
     let body = serde_json::json!({
         "chain": "Hyperliquid (HyperCore)",

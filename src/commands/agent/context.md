@@ -108,7 +108,8 @@ if you need it.
 - `qn stream test-filter` evaluates a filter against historical data and changes
   nothing — it is read-only and safe to retry.
 - `qn sql query` is read-only but **does not auto-retry**: a query consumes credits,
-  so a retried query re-bills. `qn sql schema` is a cheap read and retries normally.
+  so a retried query re-bills. `qn sql clusters` and `qn sql schema` are cheap
+  reads and retry normally.
 - A **paid** `rpc call` (`--x402`/`--mpp`/`--x402-drawdown`/`--mpp-session`)
   never auto-retries — `--retries` does not apply. A per-request attempt can
   move funds, and after a lost response the previous attempt may already have
@@ -151,7 +152,8 @@ Top-level nouns (plurals like `endpoints`/`streams` and `ls` are accepted aliase
   enabled-count
 - `kv` — `set` (put, get, list, delete, bulk) and `list` (list, get, create, append,
   contains, remove-item, update, delete)
-- `sql` — query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
+- `sql` — clusters (alias `ls`; lists the cluster ids `query` and `schema` take),
+  query (inline SQL, `--file <path>`, or `--file -` for stdin), schema
 - `tooling-access` — status, enable, disable (provisions the endpoint `rpc` uses)
 - `rpc` — make JSON-RPC calls. `qn rpc call <method> [json-params]` calls the
   account's Tooling Access endpoint (params is a JSON array or object inline, or
